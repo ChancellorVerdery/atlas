@@ -68,11 +68,34 @@ sync.onUpdate((key, value) => {
 
 window.atlasLogout = async () => {
   try { await sync.request('auth.logout', {}) } catch {}
+  // Drop the copy held by the local host too — the token is revoked server-side
+  // now, but leaving it in that process is a stale credential for no reason.
+  try { await fetch('/local/session', { method: 'DELETE' }) } catch {}
   localStorage.removeItem(AUTH_KEY)
   location.reload()
 }
 
+// Hand the session token to the local host process. Canvas and Plaid no longer
+// run here — the host reverse-proxies those prefixes to the Atlas server, and it
+// needs a token to authenticate with. The token is in localStorage, which that
+// Node process cannot read, so the page has to push it.
+//
+// Must complete BEFORE bootApp: the first render fires Canvas requests, and a
+// token that arrives afterwards means those all 503 on every cold start.
+async function shareSessionToken() {
+  const token = readAuth()?.token
+  if (!token) return
+  try {
+    await fetch('/local/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+  } catch { /* dev server without the route, or offline — remote() will 503 */ }
+}
+
 async function bootApp() {
+  await shareSessionToken()
   document.getElementById('auth-gate')?.remove()
   await import('./renderer.js')
 }

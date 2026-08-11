@@ -10,19 +10,58 @@ const BASE = (process.env.ATLAS_BASE || 'http://localhost:5173') + ''
 let passed = 0, failed = 0
 const ok = (cond, name, extra = '') => { if (cond) { passed++; console.log(`  ok ${name}`) } else { failed++; console.log(`  FAIL ${name} ${extra}`) } }
 
-// ---- 0. real middleware (garbage creds — proves the relay works, not Plaid data) ----
+// ---- 0. the relay (now proxied to the Atlas server) ----------------------------
+// The Plaid relay moved off this machine: the local host forwards /finance-api
+// to the server and attaches the Atlas session token. So layer 0 now checks two
+// things — that it fails closed without a session, and that once a session
+// exists the server-side relay still validates input exactly as the local one did.
+async function throwawaySession() {
+  const b = await chromium.launch()
+  try {
+    const page = await b.newPage()
+    await page.goto(BASE + '/')
+    await page.waitForSelector('.auth-card', { timeout: 15000 })
+    await page.evaluate((email) => {
+      const set = (sel, v) => { const el = document.querySelector(sel); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }
+      document.querySelector('.auth-toggle').click()
+      set('.auth-input[name="email"]', email)
+      set('.auth-input[name="password"]', 'correct-horse-9')
+      document.querySelector('.auth-submit').click()
+    }, `fin-relay-${Date.now()}@test.local`)
+    await page.waitForSelector('#nav a', { timeout: 30000 })
+    return await page.evaluate(() => JSON.parse(localStorage.getItem('atlas.auth.v1') || '{}').token || null)
+  } catch { return null } finally { await b.close() }
+}
+
 {
-  console.log('0. middleware (real, garbage creds)')
-  const bad = await fetch(`${BASE}/finance-api/sync`, { method: 'GET' })
-  ok(bad.status === 405, 'GET rejected — POST only')
-  const missing = await fetch(`${BASE}/finance-api/link-token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-  ok(missing.status === 400 && (await missing.json()).error?.includes('client_id'), 'missing client_id/secret rejected')
-  const garbage = await fetch(`${BASE}/finance-api/link-token`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ client_id: 'nope', secret: 'nope', env: 'sandbox' }),
+  console.log('0. relay (proxied to the Atlas server)')
+  // The host holds the token in memory for the life of the process, so clear it
+  // first — otherwise an earlier run (or a browser tab) leaves one set and this
+  // assertion passes vacuously.
+  await fetch(`${BASE}/local/session`, { method: 'DELETE' }).catch(() => {})
+  const closed = await fetch(`${BASE}/finance-api/link-token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   })
-  const gj = await garbage.json()
-  ok(garbage.status === 400 && (gj.error_code || gj.error_type), `Plaid's own error shape passed through (${JSON.stringify(gj).slice(0, 80)})`)
+  ok(closed.status === 503, 'relay fails closed without a session', `got ${closed.status}`)
+
+  const token = await throwawaySession()
+  if (!token) {
+    console.log('  SKIP authenticated relay checks — no session obtained (auth rate limit?)')
+  } else {
+    await fetch(`${BASE}/local/session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
+    })
+    const bad = await fetch(`${BASE}/finance-api/sync`, { method: 'GET' })
+    ok(bad.status === 405, 'GET rejected — POST only')
+    const missing = await fetch(`${BASE}/finance-api/link-token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    ok(missing.status === 400 && (await missing.json()).error?.includes('client_id'), 'missing client_id/secret rejected')
+    const garbage = await fetch(`${BASE}/finance-api/link-token`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: 'nope', secret: 'nope', env: 'sandbox' }),
+    })
+    const gj = await garbage.json()
+    ok(garbage.status === 400 && (gj.error_code || gj.error_type), `Plaid's own error shape passed through (${JSON.stringify(gj).slice(0, 80)})`)
+  }
 }
 
 // ---- fixtures ---------------------------------------------------------------

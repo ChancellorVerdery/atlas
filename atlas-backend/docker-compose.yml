@@ -32,6 +32,24 @@ services:
     <<: *svc
     command: node services/outbox.js
     ports: ["127.0.0.1:8101:80"] # tunnel fallback
+  # The handlers that used to run only inside the Mac's Vite/Electron process.
+  # Reached as sync.myatlasapp.net/uiapi/* and, unlike every other service here,
+  # it faces arbitrary internet callers — so it authenticates every request
+  # itself against auth.sessions before reading the body.
+  #
+  # Deliberately NOT the *svc anchor's superuser role: this is the only service
+  # exposed that way, so it connects as atlas_api, which can SELECT from
+  # auth.sessions/auth.users and nothing else.
+  atlas-uiapi:
+    <<: *svc
+    command: node services/uiapi.js
+    environment:
+      PGHOST: postgres
+      PGUSER: atlas_api
+      PGDATABASE: atlas
+    volumes:
+      - ./.pgpass.uiapi:/run/pgpass:ro
+    ports: ["127.0.0.1:8102:80"]
   atlas-auth:
     <<: *svc
     command: node services/auth.js

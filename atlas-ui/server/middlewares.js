@@ -3,52 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { remote } from './remote.js'
 
-// Canvas's REST API sends no CORS headers, so the browser can't call it
-// directly. This tiny middleware forwards /canvas-proxy/<host>/<path> to
-// https://<host>/<path> from the dev server process — the token stays on
-// this machine and no third-party service is involved. GET only.
-function canvasProxy() {
-  // The host comes from the URL, so it must be allowlisted rather than merely
-  // pattern-matched. Unrestricted, this is an open HTTPS forwarder that carries
-  // a caller-chosen Authorization header — harmless on loopback, but on a
-  // networked host it reaches sibling containers (postgres, adminer, portainer)
-  // and the whole home LAN. Anchored at both ends so
-  // `uncc.instructure.com.attacker.net` cannot pass, and a trailing dot is out.
-  // Two real shapes: Canvas SaaS (<school>.instructure.com) and self-hosted under
-  // the school's own domain. The live setting here is instructure.charlotte.edu,
-  // which a bare *.instructure.com rule rejects outright — checked against the
-  // stored host before writing this, rather than assuming the SaaS form.
-  const HOST_OK = [
-    /^[a-z0-9][a-z0-9-]*\.instructure\.com$/,
-    /^instructure\.[a-z0-9][a-z0-9-]*\.edu$/,
-  ]
-  const EXTRA_HOSTS = new Set((process.env.CANVAS_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
-  const allowedHost = (h) => {
-    const host = String(h).toLowerCase()
-    return HOST_OK.some((re) => re.test(host)) || EXTRA_HOSTS.has(host)
-  }
-  const handler = async (req, res) => {
-    const m = req.url.match(/^\/([a-zA-Z0-9.-]+)(\/.*)$/)
-    if (!m || req.method !== 'GET') { res.statusCode = 400; res.end('bad canvas-proxy request'); return }
-    if (!allowedHost(m[1])) { res.statusCode = 403; res.end('canvas-proxy: host not allowed'); return }
-    try {
-      const r = await fetch(`https://${m[1]}${m[2]}`, {
-        headers: req.headers.authorization ? { Authorization: req.headers.authorization } : {},
-        redirect: 'follow',
-      })
-      res.statusCode = r.status
-      res.setHeader('Content-Type', r.headers.get('content-type') || 'application/json')
-      const link = r.headers.get('link')
-      if (link) res.setHeader('X-Canvas-Link', link) // pagination survives the hop
-      res.end(Buffer.from(await r.arrayBuffer()))
-    } catch (err) {
-      res.statusCode = 502
-      res.end(JSON.stringify({ errors: [{ message: `proxy: ${err.message}` }] }))
-    }
-  }
-  return handler
-}
 
 // Graph plugin backend: the browser can't touch the filesystem, open Finder,
 // or run graphify — this middleware does all three from the dev-server
@@ -174,83 +130,6 @@ function graphApi() {
   return handler
 }
 
-// Plaid backend: the browser can't hold a client secret, so every call to
-// Plaid's REST API is relayed from here. The client sends its own
-// client_id/secret/env (entered in Finance → Settings) in each request body —
-// there's no separate server config, this dev process is just a dumb relay
-// that keeps the secret off the wire to plaid.com's CORS-less API.
-function plaidApi() {
-  const BASE = { sandbox: 'https://sandbox.plaid.com', production: 'https://production.plaid.com' }
-  // Uses the shared, size-capped readBody below rather than a private copy.
-  // There were two functions of this name in this file and the local one — which
-  // won here — accumulated the body with no limit at all: an unbounded-memory
-  // POST sink the moment this handler is reachable from anywhere but loopback.
-  // 1MB is generous; the largest legitimate Plaid body is a token and a cursor.
-  const PLAID_BODY_CAP = 1e6
-  async function plaid(env, path, body) {
-    const r = await fetch(`${BASE[env] || BASE.sandbox}${path}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    })
-    const j = await r.json()
-    if (!r.ok) throw Object.assign(new Error(j.error_message || `Plaid error ${r.status}`), { plaid: j })
-    return j
-  }
-  const handler = async (req, res) => {
-    const u = new URL(req.url, 'http://x')
-    const json = (code, obj) => { res.statusCode = code; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(obj)) }
-    if (req.method !== 'POST') return json(405, { error: 'POST only' })
-    let body
-    try { body = await readBody(req, PLAID_BODY_CAP) } catch { return json(400, { error: 'bad request body' }) }
-    const { client_id, secret, env } = body
-    if (!client_id || !secret) return json(400, { error: 'missing client_id/secret' })
-    const base = { client_id, secret }
-    try {
-      if (u.pathname === '/link-token') {
-        const j = await plaid(env, '/link/token/create', {
-          ...base,
-          client_name: 'Atlas',
-          language: 'en',
-          country_codes: ['US'],
-          user: { client_user_id: 'atlas-local' },
-          products: ['transactions'],
-        })
-        return json(200, { link_token: j.link_token })
-      }
-      if (u.pathname === '/exchange') {
-        const j = await plaid(env, '/item/public_token/exchange', { ...base, public_token: body.public_token })
-        return json(200, { access_token: j.access_token, item_id: j.item_id })
-      }
-      if (u.pathname === '/accounts') {
-        const j = await plaid(env, '/accounts/balance/get', { ...base, access_token: body.access_token })
-        return json(200, { accounts: j.accounts })
-      }
-      if (u.pathname === '/sync') {
-        // Plaid paginates via has_more/next_cursor — loop here so the client
-        // gets one complete batch per manual "Sync now" click.
-        let cursor = body.cursor || undefined
-        let added = [], modified = [], removed = [], accounts = []
-        for (let i = 0; i < 50; i++) { // backstop against a runaway loop
-          const j = await plaid(env, '/transactions/sync', {
-            ...base, access_token: body.access_token, cursor, count: 500,
-            // first sync of an item: ask for Plaid's maximum history (2 years)
-            ...(cursor ? {} : { options: { days_requested: 730 } }),
-          })
-          added.push(...j.added)
-          modified.push(...j.modified)
-          removed.push(...j.removed)
-          if (j.accounts?.length) accounts = j.accounts
-          cursor = j.next_cursor
-          if (!j.has_more) break
-        }
-        return json(200, { added, modified, removed, next_cursor: cursor, accounts })
-      }
-      json(404, { error: 'unknown finance-api endpoint' })
-    } catch (err) {
-      json(err.plaid ? 400 : 500, err.plaid || { error: err.message })
-    }
-  }
-  return handler
-}
 
 // ---- shared by the Claude-backed middlewares (Notes, Study) ----------------
 
@@ -1088,9 +967,19 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
 // prefix ALREADY STRIPPED ('/chat', not '/study-api/chat'), because that is what
 // connect's mounting does. Any host must strip it the same way.
 export const MIDDLEWARES = [
-  { prefix: '/canvas-proxy', handler: canvasProxy() },
+  // MOVED TO THE SERVER. Pure network proxies with no local state, so they run
+  // on the home server now; remote() forwards the identical prefix there. The client
+  // still fetches the same root-relative paths, which is the whole point.
+  { prefix: '/canvas-proxy', handler: remote('/canvas-proxy') },
+  { prefix: '/finance-api', handler: remote('/finance-api') },
+  // STILL LOCAL, and not because of missing Linux tooling — the DATA is here.
+  // graph reads a graphify corpus and opens a native folder dialog; notes reads
+  // the Apple Notes store and a vault path that came from a Finder dialog.
   { prefix: '/graph-api', handler: graphApi() },
-  { prefix: '/finance-api', handler: plaidApi() },
   { prefix: '/notes-api', handler: notesApi() },
+  // Blocked, not undecided: the server's `claude` CLI is installed but not
+  // logged in, and that login is an interactive browser flow. Moving this is
+  // the only one that buys real compute relief (4 concurrent agents + headless
+  // Chromium), so it is worth finishing once that login happens.
   { prefix: '/study-api', handler: studyApi() },
 ]

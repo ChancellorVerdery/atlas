@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MIDDLEWARES } from '../server/middlewares.js'
+import { setSessionToken } from '../server/remote.js'
 
 const DIST = fileURLToPath(new URL('../dist/', import.meta.url))
 
@@ -84,6 +85,20 @@ function serveStatic(req, res) {
 // they must never be reachable from the network.
 export function startHost() {
   const server = http.createServer((req, res) => {
+    // The page hands its Atlas session token down so proxied prefixes can
+    // authenticate to the server. It lives in localStorage, which this Node
+    // process cannot read; kept in memory only, never written to disk.
+    // Same-origin and loopback-bound, so only this app's own page can post here.
+    if (req.url === '/local/session' && (req.method === 'POST' || req.method === 'DELETE')) {
+      if (req.method === 'DELETE') { setSessionToken(null); res.writeHead(204).end(); return }
+      let body = ''
+      req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy() })
+      req.on('end', () => {
+        try { setSessionToken(JSON.parse(body).token) } catch { /* ignore malformed */ }
+        res.writeHead(204).end()
+      })
+      return
+    }
     const handler = mount(req)
     if (handler) {
       handler(req, res, () => {
