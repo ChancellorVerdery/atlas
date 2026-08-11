@@ -9,6 +9,7 @@ import {
   courseScore, courseLetter, letterPoints, courseCredits, semesterGPA, overallGPA, semesterValue,
   dueDate, isSubmitted, isOverdue, overdueKey, dismissOverdue, clearDismissed,
 } from './canvas.js'
+import { cachedValue, cacheAge, writeCache } from './datacache.js'
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -23,17 +24,33 @@ const HEADS = {
 
 // ---- shared data ------------------------------------------------------------
 
-let data = null
+const CACHE_KEY = 'canvas.data'
+// Last launch's copy, so widgets have something real to draw before any request
+// is made. Fetching one course's assignment groups per course makes a cold
+// Canvas load slow enough that the wait is the whole problem.
+let data = cachedValue(CACHE_KEY)
 let dataPromise = null
 let dataAt = 0
 function canvasData(force = false) {
   if (!force && dataPromise && Date.now() - dataAt < 120e3) return dataPromise
   dataAt = Date.now()
-  dataPromise = fetchCanvasData().then((d) => (data = d))
+  dataPromise = fetchCanvasData().then((d) => {
+    data = d
+    writeCache(CACHE_KEY, d)
+    return d
+  })
   dataPromise.catch(() => { dataPromise = null })
   return dataPromise
 }
 export const invalidateCanvasData = () => { dataPromise = null; data = null }
+
+// Pull Canvas in the background at boot so the page is already populated by the
+// time it is opened. Quiet on failure: the cached copy stays on screen.
+export async function warmCanvas() {
+  if (!canvasConnected()) return
+  if (cacheAge(CACHE_KEY) < 120e3) return // still fresh from this session
+  try { await canvasData() } catch { /* prefetch is best-effort */ }
+}
 
 const ui = new Map() // widget id → {course, filter} (session-only view state)
 const uiFor = (wid) => { if (!ui.has(wid)) ui.set(wid, {}); return ui.get(wid) }
@@ -60,9 +77,18 @@ export function hydrateCanvasWidgets(contentEl) {
     for (const m of mounts) m.innerHTML = note('Connect Canvas in <a href="#/canvas/settings">Canvas → Settings</a>.')
     return
   }
+  // Paint the cached copy first — the page is then never a wall of "Loading…",
+  // and the refresh below swaps in fresh data when it lands.
+  const hadCache = !!data
+  if (hadCache) for (const m of mounts) fillMount(m)
   canvasData()
     .then(() => { for (const m of contentEl.querySelectorAll('[data-cv-widget]')) fillMount(m) })
-    .catch((err) => { for (const m of contentEl.querySelectorAll('[data-cv-widget]')) m.innerHTML = note(esc(err.message)) })
+    .catch((err) => {
+      // With a cached copy on screen, a failed refresh is not worth replacing
+      // real (if stale) grades with an error message.
+      if (hadCache) return
+      for (const m of contentEl.querySelectorAll('[data-cv-widget]')) m.innerHTML = note(esc(err.message))
+    })
 }
 
 const BUILDERS = {

@@ -4,6 +4,7 @@
 // Google Calendar API; recurring instances arrive expanded from the server.
 
 import { loadEmail, saveEmail, isConnected, connectGmail, AuthError } from './email.js'
+import { cachedValue, writeCache } from './datacache.js'
 import {
   loadCal, saveCal, listCalendars, listEvents, getEvent, createEvent, patchEvent,
   deleteEvent, respondToEvent, tz, dateStr, parseDateLocal, addDays, startOfDay,
@@ -169,22 +170,63 @@ function rangeFor(view, cursor) {
   return { min: startOfDay(cursor), max: addDays(startOfDay(cursor), 1) }
 }
 
+const CAL_CACHE = 'calendar.cals'
+// Keyed by the exact range, so a cached month can never be painted as another.
+const evCacheKey = (min, max) => `calendar.events.${+min}.${+max}`
+// The calendar list is still fetched once per session; this only tracks whether
+// that has happened, so seeding st.cals from cache does not suppress it.
+let calsFetched = false
+
+// Fetch + decorate one range across the visible calendars. Shared by the page
+// loader and the boot prefetch so both cache the identical shape.
+async function fetchRange(cals, min, max) {
+  const hidden = hiddenCals()
+  const lists = await Promise.all(cals.filter((c) => !hidden.includes(c.id)).map((c) =>
+    listEvents(c.id, min, max).then((evs) => evs.map((e) => ({ ...e, _color: c.backgroundColor || '#e0b15c', _calName: c.summaryOverride || c.summary })))))
+  const events = lists.flat().sort((a, b) => evStart(a) - evStart(b))
+  events.forEach((e, i) => { e._k = i })
+  return events
+}
+
 function loadAll() {
   const seq = ++st.seq
   st.loading = true
+  const { min, max } = rangeFor(st.view, st.cursor)
+  // Draw last launch's copy for this range immediately; the fetch below
+  // replaces it once it lands.
+  if (!st.cals.length) {
+    const cals = cachedValue(CAL_CACHE)
+    if (cals) st.cals = cals
+  }
+  const cached = cachedValue(evCacheKey(min, max))
+  if (cached) { st.events = cached; st.loading = false }
+  renderSidebar(); renderGrid()
   guard(async () => {
-    if (!st.cals.length) st.cals = await listCalendars()
+    if (!calsFetched) {
+      st.cals = await listCalendars()
+      calsFetched = true
+      writeCache(CAL_CACHE, st.cals)
+    }
     if (seq !== st.seq) return
     renderSidebar()
-    const { min, max } = rangeFor(st.view, st.cursor)
-    const lists = await Promise.all(visibleCals().map((c) =>
-      listEvents(c.id, min, max).then((evs) => evs.map((e) => ({ ...e, _color: c.backgroundColor || '#e0b15c', _calName: c.summaryOverride || c.summary })))))
+    const events = await fetchRange(st.cals, min, max)
     if (seq !== st.seq) return
-    st.events = lists.flat().sort((a, b) => evStart(a) - evStart(b))
-    st.events.forEach((e, i) => { e._k = i })
+    st.events = events
+    writeCache(evCacheKey(min, max), events)
     st.loading = false
     renderGrid()
   })
+}
+
+// Boot prefetch: this month, on the calendars the user actually shows.
+export async function warmCalendar() {
+  if (!isConnected()) return
+  try {
+    const cals = await listCalendars()
+    writeCache(CAL_CACHE, cals)
+    const { min, max } = rangeFor('month', startOfDay(new Date()))
+    writeCache(evCacheKey(min, max), await fetchRange(cals, min, max))
+  } catch { /* prefetch is best-effort */ }
 }
 
 // ---- toolbar / sidebar -----------------------------------------------------------

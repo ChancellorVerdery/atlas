@@ -7,6 +7,7 @@ import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenA
 import { enterCustomize, exitCustomize } from './page/customize.js'
 import { PAGES, pageById, activePages } from './page/pages.js'
 import { isPluginEnabled } from './page/plugins.js'
+import { startPrefetch } from './page/prefetch.js'
 import { pluginsSettingsHTML, bindPlugins } from './page/pluginsui.js'
 import { bindGym, renderGymSettings } from './page/gymui.js'
 import { renderEmailPage } from './page/emailui.js'
@@ -570,7 +571,12 @@ window.addEventListener('atlas:sync-update', (e) => {
 // moment later — re-render once so anything changed on another device appears
 // without a manual reload.
 window.addEventListener('atlas:hydrated', render)
+// Cached remote data landed for a plugin the user is already looking at.
+window.addEventListener('atlas:prefetched', render)
 if (!location.hash) location.replace('#/dashboard')
 render()
 // Let first-load entrance animations finish, then disable replays on re-render.
 setTimeout(() => document.documentElement.classList.add('ready'), 750)
+// Pull each enabled plugin's remote data in the background, a couple at a time,
+// so Canvas and Mail are already populated when they are opened.
+startPrefetch(isPluginEnabled)

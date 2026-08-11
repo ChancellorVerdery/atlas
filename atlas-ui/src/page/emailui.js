@@ -13,6 +13,7 @@ import {
   getDraft, saveDraft, deleteDraft, sendDraft, sendMessage, buildMime,
   togglePin, pinnedIds, isPinned,
 } from './email.js'
+import { cachedValue, writeCache } from './datacache.js'
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -337,6 +338,11 @@ async function fetchFolder(fid, pageToken) {
   return listThreads({ labelIds: f.labelIds, q: f.q, pageToken, account: st.account })
 }
 
+// Thread lists are cached per account+folder, so reopening Mail shows the last
+// known inbox immediately instead of an empty list. Only the first page is kept
+// — that is what is on screen before the user scrolls.
+const threadCacheKey = (account, fid) => `email.threads.${account}.${fid}`
+
 function loadFolder(fid) {
   st.folder = fid
   st.threads = []
@@ -345,6 +351,13 @@ function loadFolder(fid) {
   st.open = null
   st.loadingList = true
   const seq = ++st.seq
+  // Last launch's copy of this exact mailbox, painted while the fetch runs.
+  const cached = cachedValue(threadCacheKey(st.account, fid))
+  if (cached?.threads?.length) {
+    st.threads = cached.threads
+    st.nextPageToken = cached.nextPageToken ?? null
+    st.loadingList = false
+  }
   renderNav(); renderList(); renderView()
   guard(async () => {
     const res = await fetchFolder(fid)
@@ -352,8 +365,18 @@ function loadFolder(fid) {
     st.threads = res.threads
     st.nextPageToken = res.nextPageToken
     st.loadingList = false
+    writeCache(threadCacheKey(st.account, fid), { threads: res.threads, nextPageToken: res.nextPageToken })
     renderList()
   })
+}
+
+// Boot prefetch: the inbox, which is what Mail opens on.
+export async function warmEmail() {
+  if (!isConnected()) return
+  try {
+    const res = await listThreads({ labelIds: ['INBOX'], account: 'all' })
+    writeCache(threadCacheKey('all', 'INBOX'), { threads: res.threads, nextPageToken: res.nextPageToken })
+  } catch { /* prefetch is best-effort */ }
 }
 
 function loadMore() {

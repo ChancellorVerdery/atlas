@@ -110,6 +110,18 @@ export async function syncAll(s) {
   saveFinance(s)
 }
 
+// Boot prefetch. Finance already renders from its stored accounts/transactions,
+// so this only refreshes them — and it is throttled, because every syncAll()
+// appends a net-worth point and Plaid is rate-limited. Without the gap, opening
+// the app five times would write five history entries and burn five calls.
+const WARM_MIN_GAP_MS = 30 * 60e3
+export async function warmFinance() {
+  const s = loadFinance()
+  if (!s.items.length || !s.clientId || !s.secret) return // not linked yet
+  if (Date.now() - s.lastSync < WARM_MIN_GAP_MS) return
+  try { await syncAll(s) } catch { /* prefetch is best-effort */ }
+}
+
 // Credit/loan balances.current is the amount OWED (positive) — subtract it;
 // depository/investment current is real cash — add it.
 export function computeNetWorth(s) {

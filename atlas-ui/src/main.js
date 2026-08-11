@@ -4,6 +4,7 @@
 // before the app shell loads.
 import { sync } from './sync.js'
 import { seedFreshPluginState } from './page/plugins.js'
+import { clearCache } from './page/datacache.js'
 import './auth.css'
 import logoUrl from './assets/atlas-logo.svg'
 
@@ -97,7 +98,13 @@ const isForeignAccount = (userId) => {
   return !!(prev && userId && prev !== userId)
 }
 const rememberAccount = (userId) => { if (userId) localStorage.setItem(LAST_USER_KEY, userId) }
-const clearLocalAtlas = () => { for (const k of localAtlasKeys()) localStorage.removeItem(k) }
+// Drops the cached remote data too (Canvas grades, Gmail threads, calendar
+// events). Those are just as account-specific as the atlas.* keys, and leaving
+// them would surface one profile's mail under another's login.
+const clearLocalAtlas = () => {
+  for (const k of localAtlasKeys()) localStorage.removeItem(k)
+  clearCache()
+}
 
 // Enough of this account's layout cached to paint the whole shell without the
 // network: the plugin registry (which drives the nav and every gate) plus at
