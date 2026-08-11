@@ -3,9 +3,11 @@
 // Customize mode (src/page/customize.js) live-edits the page in place.
 
 import { loadPage, findWidget, uid } from './page/model.js'
-import { renderPageInto, observeCharts, renderMath, fitEquations } from './page/view.js'
+import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenAll } from './page/view.js'
 import { enterCustomize, exitCustomize } from './page/customize.js'
-import { PAGES, pageById } from './page/pages.js'
+import { PAGES, pageById, activePages } from './page/pages.js'
+import { isPluginEnabled } from './page/plugins.js'
+import { pluginsSettingsHTML, bindPlugins } from './page/pluginsui.js'
 import { bindGym, renderGymSettings } from './page/gymui.js'
 import { renderEmailPage } from './page/emailui.js'
 import { renderCalendarPage } from './page/calendarui.js'
@@ -55,7 +57,16 @@ function route() {
   const h = location.hash.replace(/^#\/?/, '')
   if (h === 'settings') return { name: 'settings' }
   const [id, sub] = h.split('/')
-  const def = pageById(id) || PAGES[0]
+  let def = pageById(id) || PAGES[0]
+  // A disabled plugin's page routes to the dashboard (stale link, synced
+  // hash, or the plugin was just toggled off while open). Rewrite the hash
+  // too: plugin modules (e.g. study's document-level keydown) sniff
+  // location.hash to decide they're active, so a stale hash would let a
+  // disabled plugin's handlers repaint the page over the dashboard.
+  if (def.id !== 'dashboard' && !isPluginEnabled(def.id)) {
+    def = PAGES[0]
+    location.replace('#/dashboard') // triggers one extra, idempotent render
+  }
   const subName = (def.settings && sub === 'settings') ? 'settings' : (def.explore && sub === 'explore') ? 'explore' : null
   return { name: 'page', def, sub: subName }
 }
@@ -117,7 +128,7 @@ const navItem = (hash, label, icon, active) =>
 function renderNav(r) {
   document.getElementById('nav').innerHTML = `
     <p class="nav__head">Navigate</p>
-    ${PAGES.map((p) => navItem(p.id, p.label, ICONS[p.id] || ICONS.dashboard, r.def?.id === p.id)).join('')}
+    ${activePages().map((p) => navItem(p.id, p.label, ICONS[p.id] || ICONS.dashboard, r.def?.id === p.id)).join('')}
     <div class="nav__spacer"></div>
     ${navItem('settings', 'Settings', ICONS.settings, r.name === 'settings')}`
 }
@@ -163,6 +174,7 @@ const settingsHTML = () => {
       </div>
       <div class="set-gmail">${gmail}</div>
     </div>
+    ${pluginsSettingsHTML()}
     <div class="set-row">
       <div class="set-row__meta">
         <span class="set-row__name">Backup &amp; restore</span>
@@ -274,7 +286,9 @@ function render() {
     currentPageId = r.def.id
     setHead(r.def.label, r.def.crumb)
     const page = loadPage(r.def.storageKey)
-    if (!page.rows.length && !customizing) content.innerHTML = emptyDash(r.def)
+    // Empty state also when every widget on the board belongs to a disabled
+    // plugin — otherwise the page renders as unexplained blank space.
+    if ((!page.rows.length || pageHasHiddenAll(page)) && !customizing) content.innerHTML = emptyDash(r.def)
     else renderPageInto(content, page, customizing, r.def.storageKey)
   }
   const cbtn = document.getElementById('customize')
@@ -350,7 +364,6 @@ const CANVAS_STARTER = { v: 1, rows: [
       { id: 's-cv6', lines: [{ id: 'l-cv6', widgets: [{ id: 'w-cvsem', kind: 'cvsemesters' }] }] },
       { id: 's-cv7', lines: [{ id: 'l-cv7', widgets: [{ id: 'w-cvcrs', kind: 'cvcourses' }] }] }] } ] },
 ] }
-if (!localStorage.getItem('atlas.page.canvas.v1')) localStorage.setItem('atlas.page.canvas.v1', JSON.stringify(CANVAS_STARTER))
 const WORK_STARTER = { v: 1, rows: [
   { id: 'r-wk1', cols: [
     { id: 'c-wk1', width: 1.5, sections: [
@@ -361,31 +374,6 @@ const WORK_STARTER = { v: 1, rows: [
       { id: 's-wk3', lines: [{ id: 'l-wk3', widgets: [{ id: 'w-wkts', kind: 'wktipshare' }] }] },
       { id: 's-wk4', lines: [{ id: 'l-wk4', widgets: [{ id: 'w-wkup', kind: 'wkupcoming' }] }] }] } ] },
 ] }
-if (!localStorage.getItem('atlas.page.work.v1')) localStorage.setItem('atlas.page.work.v1', JSON.stringify(WORK_STARTER))
-// One-time: work boards seeded before the Upcoming-shifts widget existed never
-// got it — append it once. Flag-guarded so deleting it later sticks.
-if (!localStorage.getItem('atlas.work.upseeded')) {
-  try {
-    const p = JSON.parse(localStorage.getItem('atlas.page.work.v1'))
-    if (p?.rows?.length && !JSON.stringify(p).includes('"wkupcoming"')) {
-      p.rows.push({ id: 'r-wkup', cols: [{ id: 'c-wkup', sections: [{ id: 's-wkup', lines: [{ id: 'l-wkup', widgets: [{ id: 'w-wkup2', kind: 'wkupcoming' }] }] }] }] })
-      localStorage.setItem('atlas.page.work.v1', JSON.stringify(p))
-    }
-  } catch { /* corrupted board — leave it to loadPage's normalizer */ }
-  localStorage.setItem('atlas.work.upseeded', '1')
-}
-// Same one-time append for Shift history — the shift log now shows only the
-// last 3, so an existing board needs the paged history widget to see the rest.
-if (!localStorage.getItem('atlas.work.histseeded')) {
-  try {
-    const p = JSON.parse(localStorage.getItem('atlas.page.work.v1'))
-    if (p?.rows?.length && !JSON.stringify(p).includes('"wkhistory"')) {
-      p.rows.push({ id: 'r-wkhist', cols: [{ id: 'c-wkhist', sections: [{ id: 's-wkhist', lines: [{ id: 'l-wkhist', widgets: [{ id: 'w-wkhist2', kind: 'wkhistory' }] }] }] }] })
-      localStorage.setItem('atlas.page.work.v1', JSON.stringify(p))
-    }
-  } catch { /* corrupted board — leave it to loadPage's normalizer */ }
-  localStorage.setItem('atlas.work.histseeded', '1')
-}
 const FINANCE_STARTER = { v: 1, rows: [
   { id: 'r-fin1', title: 'Overview', cols: [
     { id: 'c-fin1', width: 1.3, sections: [{ id: 's-fin1', lines: [{ id: 'l-fin1', widgets: [{ id: 'w-finacc', kind: 'finaccounts' }] }, { id: 'l-fin2', widgets: [{ id: 'w-finrec', kind: 'finrecent' }] }] }] },
@@ -400,7 +388,6 @@ const FINANCE_STARTER = { v: 1, rows: [
       { id: 's-fin7', lines: [{ id: 'l-fin8', widgets: [{ id: 'w-finnw', kind: 'finnetworth' }] }] },
       { id: 's-fin8', lines: [{ id: 'l-fin9', widgets: [{ id: 'w-finan', kind: 'finanomaly' }] }] }] } ] },
 ] }
-if (!localStorage.getItem('atlas.page.finance.v1')) localStorage.setItem('atlas.page.finance.v1', JSON.stringify(FINANCE_STARTER))
 const SLEEP_STARTER = { v: 1, rows: [
   { id: 'r-sl1', cols: [
     { id: 'c-sl1', width: 1.4, sections: [{ id: 's-sl1', lines: [{ id: 'l-sl1', widgets: [{ id: 'w-sllog', kind: 'sllog' }] }] }] },
@@ -409,12 +396,46 @@ const SLEEP_STARTER = { v: 1, rows: [
     { id: 'c-sl3', sections: [{ id: 's-sl3', lines: [{ id: 'l-sl3', widgets: [{ id: 'w-slhrs', kind: 'slhours' }] }] }] },
     { id: 'c-sl4', sections: [{ id: 's-sl4', lines: [{ id: 'l-sl4', widgets: [{ id: 'w-sldbt', kind: 'sldebt' }] }] }] } ] },
 ] }
-if (!localStorage.getItem('atlas.page.sleep.v1')) localStorage.setItem('atlas.page.sleep.v1', JSON.stringify(SLEEP_STARTER))
 const FORMAL_STARTER = { v: 1, rows: [
   { id: 'r-fm1', cols: [
     { id: 'c-fm1', sections: [{ id: 's-fm1', lines: [{ id: 'l-fm1', widgets: [{ id: 'w-fmh', kind: 'fmhouses', house: { name: '', link: '', price: 0, couches: 0, rooms: [{ id: 'fr-fm1', beds: { king: 0, queen: 0, full: 0, twin: 0, futon: 0 } }] } }] }] }] } ] },
 ] }
-if (!localStorage.getItem('atlas.page.formal.v1')) localStorage.setItem('atlas.page.formal.v1', JSON.stringify(FORMAL_STARTER))
+// First visit to an ENABLED plugin's board page gets its ready-made starter
+// (key absent = never seeded; an intentionally emptied board stays empty).
+// Runs at boot and again whenever a plugin is enabled in Settings, so a
+// freshly-enabled plugin lands with a usable board instead of a blank page.
+// The work one-time appends live here too: gated on work being on, so their
+// flags can't burn before the board exists.
+function seedStarters() {
+  const seed = (id, key, starter) => {
+    if (isPluginEnabled(id) && !localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(starter))
+  }
+  seed('canvas', 'atlas.page.canvas.v1', CANVAS_STARTER)
+  seed('work', 'atlas.page.work.v1', WORK_STARTER)
+  seed('finance', 'atlas.page.finance.v1', FINANCE_STARTER)
+  seed('sleep', 'atlas.page.sleep.v1', SLEEP_STARTER)
+  seed('formal', 'atlas.page.formal.v1', FORMAL_STARTER)
+  // One-time appends for work boards seeded before these widgets existed.
+  // Flag-guarded so deleting the widget later sticks.
+  if (isPluginEnabled('work')) {
+    for (const [flag, kind, row] of [
+      ['atlas.work.upseeded', 'wkupcoming', { id: 'r-wkup', cols: [{ id: 'c-wkup', sections: [{ id: 's-wkup', lines: [{ id: 'l-wkup', widgets: [{ id: 'w-wkup2', kind: 'wkupcoming' }] }] }] }] }],
+      ['atlas.work.histseeded', 'wkhistory', { id: 'r-wkhist', cols: [{ id: 'c-wkhist', sections: [{ id: 's-wkhist', lines: [{ id: 'l-wkhist', widgets: [{ id: 'w-wkhist2', kind: 'wkhistory' }] }] }] }] }],
+    ]) {
+      if (localStorage.getItem(flag)) continue
+      try {
+        const p = JSON.parse(localStorage.getItem('atlas.page.work.v1'))
+        if (p?.rows?.length && !JSON.stringify(p).includes(`"${kind}"`)) {
+          p.rows.push(row)
+          localStorage.setItem('atlas.page.work.v1', JSON.stringify(p))
+        }
+      } catch { /* corrupted board — leave it to loadPage's normalizer */ }
+      localStorage.setItem(flag, '1')
+    }
+  }
+}
+seedStarters()
+bindPlugins(render, seedStarters) // Settings → Plugins toggles + zip install
 // One-time: houses entered under the original shared-store design move onto
 // the widgets themselves (one house per widget). Data-less House widgets on
 // the formal board adopt the legacy houses in order; leftovers get their own
@@ -467,15 +488,20 @@ const seedGymLayout = () => {
     render()
   }
 }
-if (gymStoreEmpty()) {
-  fetch('/gym-import.json').then((r) => (r.ok ? r.json() : null)).then((g) => {
-    if (g && gymStoreEmpty()) {
-      localStorage.setItem('atlas.gym.v1', JSON.stringify(g))
-      seedGymLayout()
-      render()
-    }
-  }).catch(() => {})
-} else seedGymLayout()
+// ponytail: import seeds only run while their plugin is on at boot — enabling
+// one later picks the import up on the next reload, which is fine for a
+// one-time convenience path.
+if (isPluginEnabled('gym')) {
+  if (gymStoreEmpty()) {
+    fetch('/gym-import.json').then((r) => (r.ok ? r.json() : null)).then((g) => {
+      if (g && gymStoreEmpty()) {
+        localStorage.setItem('atlas.gym.v1', JSON.stringify(g))
+        seedGymLayout()
+        render()
+      }
+    }).catch(() => {})
+  } else seedGymLayout()
+}
 
 // Same one-time seed for the Course Planner: with no classes yet, adopt a
 // served course list (e.g. a degree checksheet import). Non-destructive —
@@ -484,7 +510,7 @@ if (gymStoreEmpty()) {
 const courseStoreEmpty = () => {
   try { const c = JSON.parse(localStorage.getItem('atlas.course.v1')); return !c || !c.courses?.length } catch { return true }
 }
-if (courseStoreEmpty()) {
+if (isPluginEnabled('course') && courseStoreEmpty()) {
   fetch('/course-import.json').then((r) => (r.ok ? r.json() : null)).then((incoming) => {
     if (!Array.isArray(incoming) || !incoming.length || !courseStoreEmpty()) return
     let s; try { s = JSON.parse(localStorage.getItem('atlas.course.v1')) || {} } catch { s = {} }
@@ -501,7 +527,7 @@ if (courseStoreEmpty()) {
 // and a second device that pulled the flag won't import a dup.
 // ponytail: one sheet at a time; a multi-sheet queue is the upgrade path.
 const EQ_IMPORT_FLAG = 'atlas.eqimport.v3'
-if (localStorage.getItem(EQ_IMPORT_FLAG) === null) {
+if (isPluginEnabled('equations') && localStorage.getItem(EQ_IMPORT_FLAG) === null) {
   fetch('/equations-import.json').then((r) => (r.ok ? r.json() : null)).then((imp) => {
     if (!imp?.title || !Array.isArray(imp.sections) || !imp.sections.length) return
     if (localStorage.getItem(EQ_IMPORT_FLAG) !== null) return // a pull landed it while we fetched
@@ -532,6 +558,12 @@ if (localStorage.getItem(EQ_IMPORT_FLAG) === null) {
   }).catch(() => {})
 }
 window.addEventListener('hashchange', render)
+// A plugin toggled on another device syncs in live — re-render so the nav and
+// gates follow immediately. Scoped to the plugins key only: a blanket
+// re-render on every synced write would drop input focus mid-typing.
+window.addEventListener('atlas:sync-update', (e) => {
+  if (e.detail?.key === 'atlas.plugins.v1') render()
+})
 if (!location.hash) location.replace('#/dashboard')
 setDevMode(isDevMode()) // sync html.dev-mode class on boot
 render()

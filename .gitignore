@@ -21,4 +21,7 @@ atlas-ui/tmp-e2e/**/*.png
 *.key
 .app-password
 
+# Built plugin zips — regenerate with tools/build-plugin-zips.mjs
+plugins-dist/
+
 .DS_Store

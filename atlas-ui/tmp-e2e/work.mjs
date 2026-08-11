@@ -1,7 +1,7 @@
 // Work plugin suite — all data is local, so no network faking. Headless.
 import { chromium } from 'playwright'
 
-const BASE = 'http://localhost:5173'
+const BASE = process.env.ATLAS_BASE || 'http://localhost:5173'
 let passed = 0, failed = 0
 const ok = (cond, name, extra = '') => { if (cond) { passed++; console.log(`  ok ${name}`) } else { failed++; console.log(`  FAIL ${name} ${extra}`) } }
 
@@ -20,11 +20,16 @@ const periodStart = (period) => {
 
 const browser = await chromium.launch({ headless: true })
 // This suite predates the login overlay — seed offline auth into every context
-// it opens, otherwise the gate hides the whole app.
+// it opens, otherwise the gate hides the whole app. The dashboard-board seed
+// marks the profile as a legacy install so the plugin registry migration
+// enables every plugin (this suite also predates the plugin system).
 const _newContext = browser.newContext.bind(browser)
 browser.newContext = async (o) => {
   const c = await _newContext(o)
-  await c.addInitScript(() => localStorage.setItem('atlas.auth.v1', '{"offline":true}'))
+  await c.addInitScript(() => {
+    localStorage.setItem('atlas.auth.v1', '{"offline":true}')
+    localStorage.setItem('atlas.page.v1', '{"v":1,"rows":[]}')
+  })
   return c
 }
 

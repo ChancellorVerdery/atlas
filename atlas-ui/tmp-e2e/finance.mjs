@@ -6,7 +6,7 @@
 // Headless always. Plaid Link's real hosted UI is never actually opened.
 import { chromium } from 'playwright'
 
-const BASE = 'http://localhost:5173'
+const BASE = (process.env.ATLAS_BASE || 'http://localhost:5173') + ''
 let passed = 0, failed = 0
 const ok = (cond, name, extra = '') => { if (cond) { passed++; console.log(`  ok ${name}`) } else { failed++; console.log(`  FAIL ${name} ${extra}`) } }
 
@@ -93,7 +93,7 @@ function installPlaidStub(page) {
 const browser = await chromium.launch({ headless: true })
 const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } })
 // Offline auth bypasses the login gate the suite predates (see memory: atlas-e2e-auth-gate).
-await ctx.addInitScript(() => localStorage.setItem('atlas.auth.v1', JSON.stringify({ offline: true })))
+await ctx.addInitScript(() => { localStorage.setItem('atlas.auth.v1', JSON.stringify({ offline: true })); localStorage.setItem('atlas.page.v1', '{"v":1,"rows":[]}') })
 const page = await ctx.newPage()
 const errs = []
 page.on('pageerror', (e) => errs.push(e.message))
@@ -286,7 +286,7 @@ await ctx.close()
 // ---- B. not connected: friendly empty states ----------------------------------
 {
   const ctx2 = await browser.newContext({ viewport: { width: 1500, height: 950 } })
-  await ctx2.addInitScript(() => localStorage.setItem('atlas.auth.v1', JSON.stringify({ offline: true })))
+  await ctx2.addInitScript(() => { localStorage.setItem('atlas.auth.v1', JSON.stringify({ offline: true })); localStorage.setItem('atlas.page.v1', '{"v":1,"rows":[]}') })
   const page2 = await ctx2.newPage()
   await page2.goto(`${BASE}/#/finance`)
   await page2.waitForTimeout(500)

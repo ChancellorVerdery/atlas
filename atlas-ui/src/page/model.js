@@ -219,7 +219,7 @@ export function moveRow(page, rowId, toIndex) {
 // directly — those become the col's single section. loadPage runs this
 // inside its try/catch, but render() runs outside it, so anything prune lets
 // through must render.
-const KINDS = new Set(['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'gfgraph', 'fintopspend', 'finrecent', 'fincategory', 'finsubs', 'finaccounts', 'finincexp', 'finbudget', 'finnetworth', 'finanomaly', 'slbedtime', 'sllog', 'slhours', 'sldebt', 'fmhouses', 'fmexpenses'])
+export const KINDS = new Set(['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'gfgraph', 'fintopspend', 'finrecent', 'fincategory', 'finsubs', 'finaccounts', 'finincexp', 'finbudget', 'finnetworth', 'finanomaly', 'slbedtime', 'sllog', 'slhours', 'sldebt', 'fmhouses', 'fmexpenses'])
 const isObj = (o) => o !== null && typeof o === 'object'
 function prune(page) {
   page.rows = (Array.isArray(page.rows) ? page.rows : []).filter((r) => isObj(r) && Array.isArray(r.cols))

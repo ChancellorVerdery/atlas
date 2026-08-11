@@ -4,6 +4,8 @@
 // entry here + its widget kind(s) in model.js (newWidget/KINDS) and
 // view.js (widgetHTML).
 
+import { isPluginEnabled } from './plugins.js'
+
 export const PAGES = [
   {
     id: 'dashboard',
@@ -115,3 +117,7 @@ export const PAGES = [
 ]
 
 export const pageById = (id) => PAGES.find((p) => p.id === id)
+
+// Pages whose plugin is currently enabled — what the nav and router see.
+// Dashboard is core; every other page's id doubles as its plugin id.
+export const activePages = () => PAGES.filter((p) => p.id === 'dashboard' || isPluginEnabled(p.id))

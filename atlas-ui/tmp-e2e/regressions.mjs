@@ -15,7 +15,7 @@ async function fresh(fixture) {
   const errs = [];
   page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
   page.on('pageerror', (e) => errs.push(e.message));
-  await page.goto('http://localhost:5173/', { waitUntil: 'load' });
+  await page.goto((process.env.ATLAS_BASE || 'http://localhost:5173') + '/', { waitUntil: 'load' });
   await page.waitForSelector('#customize', { timeout: 10000 }); // app shell rendered (async boot)
   return { context, page, errs };
 }

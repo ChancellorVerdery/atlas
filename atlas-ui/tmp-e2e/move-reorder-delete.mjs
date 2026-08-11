@@ -3,7 +3,7 @@ import { chromium } from 'playwright';
 const colLines = (c) => c.sections.flatMap((sec) => sec.lines); // cols hold sections now
 import { isDeepStrictEqual } from 'node:util';
 
-const URL = 'http://localhost:5173/';
+const URL = (process.env.ATLAS_BASE || 'http://localhost:5173') + '/';
 const FIXTURE = {"v":1,"rows":[
  {"id":"r-1","cols":[
    {"id":"c-1","lines":[

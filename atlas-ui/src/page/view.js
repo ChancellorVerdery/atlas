@@ -14,6 +14,7 @@ import { graphWidgetHTML, hydrateGraphWidgets, GF_KINDS } from './graphui.js'
 import { financeWidgetHTML, financeCategoryChartSVG, financeIncExpChartSVG, financeNetWorthChartSVG, FIN_KINDS } from './financeui.js'
 import { sleepWidgetHTML, sleepHoursChartSVG, sleepDebtChartSVG, SL_KINDS } from './sleepui.js'
 import { formalWidgetHTML, FM_KINDS } from './formalui.js'
+import { isKindEnabled, KIND_PLUGIN, pluginDef } from './plugins.js'
 import { MathfieldElement, convertLatexToMarkup } from 'mathlive'
 import 'mathlive/fonts.css'
 import 'mathlive/static.css'
@@ -273,21 +274,25 @@ const rowTitleHTML = (row, cz) => cz
   ? `<input class="pw-field prow-title-input" data-field="rowTitle" value="${esc(row.title ?? '')}" placeholder="Row title (optional)">`
   : (row.title ? `<h2 class="prow-title">${esc(row.title)}</h2>` : '')
 
-const rowHTML = (row, cz) => `<div class="prow" data-row-id="${esc(row.id)}"${rowStyle(row)}>
+const rowHTML = (row, cz) => {
+  if (!cz && !rowVisible(row)) return ''
+  const cols = cz ? row.cols : row.cols.filter(colVisible)
+  return `<div class="prow" data-row-id="${esc(row.id)}"${rowStyle(row)}>
   ${cz ? `<div class="prow-handle" draggable="true" title="Move row">⋮⋮</div>` : ''}
   ${rowTitleHTML(row, cz)}
   <div class="prow-body">
-    ${row.cols.map((c, i) =>
-      (cz && i ? `<div class="pcol-resize" data-left-col="${esc(row.cols[i - 1].id)}" data-right-col="${esc(c.id)}"></div>` : '') + colHTML(c, cz)
+    ${cols.map((c, i) =>
+      (cz && i ? `<div class="pcol-resize" data-left-col="${esc(cols[i - 1].id)}" data-right-col="${esc(c.id)}"></div>` : '') + colHTML(c, cz)
     ).join('')}
   </div>
   ${cz ? `<div class="prow-resize" title="Row width"></div><div class="prow-hresize" title="Row height"></div>` : ''}
 </div>`
+}
 
 const colWidth = (col) => (Number(col.width) > 0 ? Number(col.width) : 1)
 
 const colHTML = (col, cz) => `<div class="pcol" data-col-id="${esc(col.id)}" style="flex:${colWidth(col)} 1 0%">
-  ${col.sections.map((s) => sectionHTML(s, cz)).join('')}
+  ${(cz ? col.sections : col.sections.filter(secVisible)).map((s) => sectionHTML(s, cz)).join('')}
 </div>`
 
 // The section is the user-visible group: dashed frame in customize mode and
@@ -299,18 +304,46 @@ const sectionTitleHTML = (sec, cz) => cz
 
 const sectionHTML = (sec, cz) => {
   const secCtx = {} // per-section render state (e.g. successive "up next" widgets)
+  const lines = cz ? sec.lines : sec.lines.filter((l) => !l.widgets.length || lineVisible(l))
   return `<div class="psec" data-sec-id="${esc(sec.id)}">
   ${sectionTitleHTML(sec, cz)}
-  ${sec.lines.map((l) => lineHTML(l, cz, secCtx)).join('')}
+  ${lines.map((l) => lineHTML(l, cz, secCtx)).join('')}
 </div>`
 }
 
+// Widgets of a disabled plugin are skipped in VIEW mode only, never deleted —
+// they come back when the plugin is re-enabled. Customize mode renders every
+// model widget (hidden ones as stubs): drag/drop indices come from the DOM,
+// so the DOM must mirror the model 1:1 there or drops land one slot off.
 const lineHTML = (line, cz, secCtx) => `<div class="pline" data-line-id="${esc(line.id)}">
-  ${line.widgets.map((w) => widgetHTML(w, cz, secCtx)).join('')}
+  ${(cz ? line.widgets : line.widgets.filter((w) => isKindEnabled(w.kind))).map((w) => widgetHTML(w, cz, secCtx)).join('')}
 </div>`
+
+// View-mode visibility: structure whose every widget is hidden renders as
+// dead space (a blank flex column, a titled empty row) — skip it instead.
+// Customize shows everything. A widget-LESS skeleton the user built on
+// purpose (title-only sections) is not touched by any of this.
+const lineVisible = (l) => l.widgets.some((w) => isKindEnabled(w.kind))
+const secVisible = (s) => s.lines.some(lineVisible) || !s.lines.some((l) => l.widgets.length)
+const colVisible = (c) => c.sections.some(secVisible)
+const rowVisible = (r) => r.cols.some(colVisible)
+export const pageHasHiddenAll = (page) => {
+  const all = page.rows.flatMap((r) => r.cols.flatMap((c) => c.sections.flatMap((s) => s.lines.flatMap((l) => l.widgets))))
+  return all.length > 0 && !all.some((w) => isKindEnabled(w.kind))
+}
 
 export function widgetHTML(w, cz, secCtx = {}) {
   const del = cz ? `<button type="button" class="pw-delete" data-act="delete-widget" title="Delete">×</button>` : ''
+  if (!isKindEnabled(w.kind)) {
+    // Customize-mode stub for a disabled plugin's widget (view mode filters
+    // these out in lineHTML): keeps model↔DOM index parity for drag/drop,
+    // and makes the widget visible enough to move or delete while hidden.
+    const owner = pluginDef(KIND_PLUGIN[w.kind])
+    return `<article class="pwidget pwidget--off card" data-widget-id="${esc(w.id)}" draggable="true">${del}
+      <p class="pw-off__name">${esc(owner?.name || w.kind)} widget</p>
+      <p class="pw-off__sub">plugin is off — shows again when ${esc(owner?.name || 'its plugin')} is enabled</p>
+    </article>`
+  }
   if (GYM_KINDS.includes(w.kind)) {
     // Gym widgets are live views over the gym store — no editable title.
     return `<article class="pwidget pwidget--gym pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${gymWidgetHTML(w, cz, secCtx)}</article>`

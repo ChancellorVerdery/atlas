@@ -9,6 +9,7 @@
 
 import { loadPage, savePage, newWidget, findWidget, findSection, insertWidget, moveWidget, moveRow, removeWidget, setColWidths, setRowWidth, setRowHeight } from './model.js'
 import { snapshotZones, toLayoutPoint, resolveTarget, resolveRowTarget } from './hitzones.js'
+import { isKindEnabled } from './plugins.js'
 import { drawChart, fixAccentSubscript } from './view.js'
 
 let ctx = null       // { rerender, contentEl, paletteEl }
@@ -71,7 +72,8 @@ export function enterCustomize({ rerender, pageDef }) {
   const paletteEl = document.createElement('div')
   paletteEl.className = 'palette'
   const devMode = localStorage.getItem('atlas.devMode') === '1'
-  const kinds = pageDef.kinds.filter((k) => !KIND_META[k].dev || devMode)
+  // dev widgets need dev mode; plugin widgets need their plugin enabled
+  const kinds = pageDef.kinds.filter((k) => (!KIND_META[k].dev || devMode) && isKindEnabled(k))
   const groups = []
   for (const k of kinds) {
     let g = groups.find((x) => x.name === KIND_META[k].plugin)

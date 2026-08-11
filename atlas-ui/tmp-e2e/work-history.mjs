@@ -4,7 +4,7 @@
 import { chromium } from 'playwright'
 import { strictEqual, ok } from 'node:assert'
 
-const URL = 'http://localhost:5173/'
+const URL = (process.env.ATLAS_BASE || 'http://localhost:5173') + '/'
 const N = 25
 const shifts = Array.from({ length: N }, (_, i) => ({
   id: 'sh' + i,
