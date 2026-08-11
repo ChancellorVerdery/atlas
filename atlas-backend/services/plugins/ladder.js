@@ -26,16 +26,16 @@
 //   so duplicate ids are real. No PK, no per-field columns: identity is the
 //   array position (ord) and every key — including ones this service has never
 //   heard of — round-trips exactly.
-// - ladder_geo_cache.result is jsonb: values are {lat,lon}, null (cached
+// - geo_cache.result is jsonb: values are {lat,lon}, null (cached
 //   geocode failure — must be kept!), or even {lat:null,lon:null} (NaN coords
 //   flattened by JSON). One jsonb column preserves all three distinctly.
-// - ladder_drive_cache.minutes is jsonb: normalizeLadder re-applies the
+// - drive_cache.minutes is jsonb: normalizeLadder re-applies the
 //   loader's ceil-to-5 rounding to finite values, but non-finite leftovers
 //   (null, foreign junk) are loader-kept and must not fail an integer column.
-// - ladder_pushed_events is one row per DAY with a jsonb events array: pushing
+// - pushed_events is one row per DAY with a jsonb events array: pushing
 //   a day with no pushable blocks stores `pushed[day] = []`, which per-event
 //   rows would lose; the array also preserves creation order exactly.
-// - ladder_flex: no CHECK constraints and nullable kind-specific columns —
+// - flex: no CHECK constraints and nullable kind-specific columns —
 //   loadLadder only requires {id, title, minutes>0}; which other fields exist
 //   depends on the kind, and absent-vs-present matters (e.g. anchorLabel is
 //   set — possibly '' — for series:/id: anchors but never for tag: anchors).
@@ -53,8 +53,10 @@
 import { runPlugin } from '../../lib/runner.js'
 
 const ddl = `
-CREATE TABLE IF NOT EXISTS ladder_settings (
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS ladder;
+
+CREATE TABLE IF NOT EXISTS ladder.settings (
+  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   home        text NOT NULL DEFAULT '',
   wake        text NOT NULL DEFAULT '07:00',
   window_days integer NOT NULL DEFAULT 7,
@@ -64,14 +66,14 @@ CREATE TABLE IF NOT EXISTS ladder_settings (
   PRIMARY KEY (user_id)
 );
 
-CREATE TABLE IF NOT EXISTS ladder_meals (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS ladder.meals (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   meal    jsonb NOT NULL,   -- the meal object verbatim; ord is the identity
   ord     integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS ladder_flex (
-  user_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS ladder.flex (
+  user_id       uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   id            text NOT NULL,
   title         text NOT NULL,
   minutes       jsonb NOT NULL,  -- number OR numeric string, verbatim
@@ -90,30 +92,30 @@ CREATE TABLE IF NOT EXISTS ladder_flex (
   PRIMARY KEY (user_id, id)
 );
 
-CREATE TABLE IF NOT EXISTS ladder_geo_cache (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS ladder.geo_cache (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   address text NOT NULL,
   result  jsonb NOT NULL,
   ord     integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, address)
 );
 
-CREATE TABLE IF NOT EXISTS ladder_drive_cache (
-  user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS ladder.drive_cache (
+  user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   route_key text NOT NULL,
   minutes   jsonb NOT NULL,  -- multiple of 5, or null (non-finite flattened by JSON)
   ord       integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, route_key)
 );
 
-CREATE TABLE IF NOT EXISTS ladder_aliases (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS ladder.aliases (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   alias   jsonb NOT NULL,   -- the alias object verbatim; ord is the identity
   ord     integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS ladder_pushed_events (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS ladder.pushed_events (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   day     text NOT NULL,
   events  jsonb NOT NULL,
   ord     integer NOT NULL DEFAULT 0,
@@ -162,31 +164,32 @@ function normalizeLadder(raw) {
 
 const mapper = {
   name: 'ladder',
+  schema: 'ladder',
   storageKey: 'atlas.ladder.v1',
   ddl,
   // No FKs between ladder tables; order is arbitrary but stable.
   tables: [
-    'ladder_settings',
-    'ladder_meals',
-    'ladder_flex',
-    'ladder_geo_cache',
-    'ladder_drive_cache',
-    'ladder_aliases',
-    'ladder_pushed_events',
+    'settings',
+    'meals',
+    'flex',
+    'geo_cache',
+    'drive_cache',
+    'aliases',
+    'pushed_events',
   ],
 
   decompose(raw) {
     const s = normalizeLadder(raw)
     return {
-      ladder_settings: [{
+      settings: [{
         home: s.home,
         wake: s.wake,
         window_days: s.windowDays,
         buffer: JSON.stringify(s.buffer),
         cal_ids: JSON.stringify(s.calIds),
       }],
-      ladder_meals: s.meals.map(m => ({ meal: JSON.stringify(m) })),
-      ladder_flex: s.flex.map(f => ({
+      meals: s.meals.map(m => ({ meal: JSON.stringify(m) })),
+      flex: s.flex.map(f => ({
         id: f.id,
         title: f.title,
         minutes: JSON.stringify(f.minutes),
@@ -202,16 +205,16 @@ const mapper = {
         anchor_id: opt(f.anchorId),
         anchor_label: opt(f.anchorLabel),
       })),
-      ladder_geo_cache: Object.keys(s.geo).map(k => ({
+      geo_cache: Object.keys(s.geo).map(k => ({
         address: k,
         result: JSON.stringify(s.geo[k] ?? null), // {lat,lon} | null | {lat:null,lon:null}
       })),
-      ladder_drive_cache: Object.keys(s.drives).map(k => ({
+      drive_cache: Object.keys(s.drives).map(k => ({
         route_key: k, // 'lat,lon>lat,lon' at 4dp
         minutes: JSON.stringify(s.drives[k] ?? null), // multiple of 5, or null
       })),
-      ladder_aliases: s.aliases.map(a => ({ alias: JSON.stringify(a) })),
-      ladder_pushed_events: Object.keys(s.pushed).map(k => ({
+      aliases: s.aliases.map(a => ({ alias: JSON.stringify(a) })),
+      pushed_events: Object.keys(s.pushed).map(k => ({
         day: k, // 'YYYY-MM-DD'
         events: JSON.stringify(s.pushed[k] ?? null), // ordered [{calId, id}], possibly []
       })),
@@ -219,14 +222,14 @@ const mapper = {
   },
 
   recompose(rows) {
-    const st = rows.ladder_settings[0]
+    const st = rows.settings[0]
     return {
       home: st.home,
       wake: st.wake,
       windowDays: st.window_days,
       buffer: st.buffer, // jsonb: number or numeric string, verbatim
-      meals: rows.ladder_meals.map(r => r.meal),     // verbatim objects
-      flex: rows.ladder_flex.map(r => {
+      meals: rows.meals.map(r => r.meal),     // verbatim objects
+      flex: rows.flex.map(r => {
         const f = { id: r.id, title: r.title, minutes: r.minutes }
         put(f, 'kind', r.kind)
         put(f, 'date', r.date)
@@ -243,11 +246,11 @@ const mapper = {
       }),
       // fromEntries: a '__proto__' key (free-text addresses!) stays an own
       // property instead of mutating the object's prototype.
-      geo: Object.fromEntries(rows.ladder_geo_cache.map(r => [r.address, r.result])),
-      drives: Object.fromEntries(rows.ladder_drive_cache.map(r => [r.route_key, r.minutes])),
-      aliases: rows.ladder_aliases.map(r => r.alias), // verbatim objects
+      geo: Object.fromEntries(rows.geo_cache.map(r => [r.address, r.result])),
+      drives: Object.fromEntries(rows.drive_cache.map(r => [r.route_key, r.minutes])),
+      aliases: rows.aliases.map(r => r.alias), // verbatim objects
       calIds: st.cal_ids,
-      pushed: Object.fromEntries(rows.ladder_pushed_events.map(r => [r.day, r.events])),
+      pushed: Object.fromEntries(rows.pushed_events.map(r => [r.day, r.events])),
     }
   },
 }

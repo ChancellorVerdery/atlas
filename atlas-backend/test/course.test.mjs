@@ -3,7 +3,7 @@ import { deepStrictEqual } from 'node:assert'
 import mapper from '../services/plugins/course.js'
 
 // Columns declared jsonb in the DDL — pg returns them parsed.
-const JSONB = { course_settings: ['max_credits', 'summer_max'] }
+const JSONB = { settings: ['max_credits', 'summer_max'] }
 
 // Mimic the DB round trip: deep-clone rows, then JSON.parse jsonb columns
 // (decompose stringified them; SELECT returns the parsed value). text[],
@@ -155,8 +155,8 @@ roundTrip('realistic state', {
     settings: { maxCredits: 16, summerMax: 6, strategy: 'even' },
   }
   const rows = mapper.decompose(legacy)
-  deepStrictEqual(rows.course_terms.map(t => t.key), ['fall-2025', 'spring-2026'], 'unique term keys')
-  deepStrictEqual(rows.course_terms.filter(t => t.current).length, 1, 'single current')
+  deepStrictEqual(rows.terms.map(t => t.key), ['fall-2025', 'spring-2026'], 'unique term keys')
+  deepStrictEqual(rows.terms.filter(t => t.current).length, 1, 'single current')
   const back = mapper.recompose(simulatePg(rows))
   deepStrictEqual(back.terms, [
     { key: 'fall-2025', season: 'fall', year: 2025, current: false }, // demoted: latest current wins

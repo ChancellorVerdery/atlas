@@ -42,8 +42,10 @@
 import { runPlugin } from '../../lib/runner.js'
 
 const ddl = `
-CREATE TABLE IF NOT EXISTS sleep_settings (
-  user_id        uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS sleep;
+
+CREATE TABLE IF NOT EXISTS sleep.settings (
+  user_id        uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   pref_min       numeric NOT NULL DEFAULT 480 CHECK (pref_min > 0),
   bedtime        text NOT NULL DEFAULT '23:00',      -- 'HH:MM' (loader also allows 'H:MM')
   window_days    numeric NOT NULL DEFAULT 7 CHECK (window_days >= 1),
@@ -53,8 +55,8 @@ CREATE TABLE IF NOT EXISTS sleep_settings (
   ord            integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS sleep_logs (
-  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS sleep.logs (
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   id         text NOT NULL,      -- 'sl-...'; duplicates are loader-valid, so NOT unique
   type       text,               -- NULL = key absent; NO CHECK (loader never validates it)
   date       text NOT NULL,      -- verbatim; loader only requires truthy, not ISO
@@ -64,8 +66,8 @@ CREATE TABLE IF NOT EXISTS sleep_logs (
   quality    jsonb,              -- NULL = key absent (unrated); loader never validates the value
   ord        integer NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS sleep_logs_id   ON sleep_logs (user_id, id);
-CREATE INDEX IF NOT EXISTS sleep_logs_date ON sleep_logs (user_id, date);
+CREATE INDEX IF NOT EXISTS sleep_logs_id   ON sleep.logs (user_id, id);
+CREATE INDEX IF NOT EXISTS sleep_logs_date ON sleep.logs (user_id, date);
 `
 
 // undefined (key absent) → SQL NULL; everything else passes through.
@@ -76,9 +78,10 @@ const hmOk = t => /^(\d{1,2}):(\d{2})$/.test(String(t || '').trim())
 
 const mapper = {
   name: 'sleep',
+  schema: 'sleep',
   storageKey: 'atlas.sleep.v1',
   ddl,
-  tables: ['sleep_settings', 'sleep_logs'],
+  tables: ['settings', 'logs'],
 
   // Mirrors loadSleep() line for line so a save never fails on a state the
   // loader tolerates (raw imports bypass the loader entirely).
@@ -86,7 +89,7 @@ const mapper = {
     const logs = (Array.isArray(s.logs) ? s.logs : [])
       .filter(l => isObj(l) && l.id && l.date && Number.isFinite(l.minutes) && l.minutes > 0)
     return {
-      sleep_settings: [{
+      settings: [{
         pref_min: Number.isFinite(s.prefMin) && s.prefMin > 0 ? s.prefMin : 480,
         bedtime: hmOk(s.bedtime) ? s.bedtime : '23:00',
         window_days: Number.isInteger(s.windowDays) && s.windowDays >= 1 ? s.windowDays : 7,
@@ -94,7 +97,7 @@ const mapper = {
         nap_credit: Number.isFinite(s.napCredit) && s.napCredit >= 0 && s.napCredit <= 100 ? s.napCredit : 50,
         recover_nights: Number.isInteger(s.recoverNights) && s.recoverNights >= 1 ? s.recoverNights : 3,
       }],
-      sleep_logs: logs.map(l => ({
+      logs: logs.map(l => ({
         id: l.id,
         type: opt(l.type),
         date: l.date,
@@ -107,7 +110,7 @@ const mapper = {
   },
 
   recompose(rows) {
-    const st = rows.sleep_settings[0]
+    const st = rows.settings[0]
     return {
       prefMin: st.pref_min,          // numeric parser returns a Number
       bedtime: st.bedtime,
@@ -115,7 +118,7 @@ const mapper = {
       ratio: st.ratio,
       napCredit: st.nap_credit,
       recoverNights: st.recover_nights,
-      logs: rows.sleep_logs.map(r => {
+      logs: rows.logs.map(r => {
         const l = { id: r.id }
         if (r.type !== null) l.type = r.type
         l.date = r.date                // text column — stored verbatim

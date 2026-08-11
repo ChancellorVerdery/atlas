@@ -44,8 +44,10 @@
 import { runPlugin } from '../../lib/runner.js'
 
 const ddl = `
-CREATE TABLE IF NOT EXISTS gym_settings (
-  user_id          uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS gym;
+
+CREATE TABLE IF NOT EXISTS gym.settings (
+  user_id          uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   unit             text NOT NULL DEFAULT 'kg' CHECK (unit IN ('kg','lbs')),
   address          text NOT NULL DEFAULT '',
   default_duration jsonb NOT NULL DEFAULT '75',
@@ -54,8 +56,8 @@ CREATE TABLE IF NOT EXISTS gym_settings (
   ord              integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS gym_hours (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gym.hours (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   day     text NOT NULL,                 -- 'mon'..'sun' plus any extra keys the loader keeps
   open    text NOT NULL DEFAULT '',      -- 'HH:MM' or '' = unconstrained
   close   text NOT NULL DEFAULT '',
@@ -63,8 +65,8 @@ CREATE TABLE IF NOT EXISTS gym_hours (
   PRIMARY KEY (user_id, day)
 );
 
-CREATE TABLE IF NOT EXISTS gym_workouts (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gym.workouts (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   id      text NOT NULL,                 -- 'gw-...'
   name    text NOT NULL,
   rest    boolean,                       -- NULL = key absent (never toggled)
@@ -73,8 +75,8 @@ CREATE TABLE IF NOT EXISTS gym_workouts (
   PRIMARY KEY (user_id, id)
 );
 
-CREATE TABLE IF NOT EXISTS gym_exercises (
-  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gym.exercises (
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   id         text NOT NULL,              -- 'ge-...'
   workout_id text,                       -- soft ref; NULL = key absent (loader tolerates it)
   name       text NOT NULL,
@@ -84,8 +86,8 @@ CREATE TABLE IF NOT EXISTS gym_exercises (
   PRIMARY KEY (user_id, id)
 );
 
-CREATE TABLE IF NOT EXISTS gym_logs (
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gym.logs (
+  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   id          text,                      -- 'gl-...'; NULL = key absent (loader keeps id-less logs)
   exercise_id text NOT NULL,             -- soft ref: workout removal orphans logs by design
   date        text,                      -- 'YYYY-MM-DD'; text + nullable: loader never validates it
@@ -94,8 +96,8 @@ CREATE TABLE IF NOT EXISTS gym_logs (
   ord         integer NOT NULL DEFAULT 0 -- array position IS the identity (no PK: dup ids and
 );                                       -- dup exercise+date+side triples are loader-valid)
 
-CREATE TABLE IF NOT EXISTS gym_completions (
-  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gym.completions (
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   workout_id text,                       -- soft ref: never cleaned on workout delete
   date       text,
   ts         numeric,                    -- epoch ms (numeric: loader never validates it)
@@ -104,16 +106,16 @@ CREATE TABLE IF NOT EXISTS gym_completions (
   ord        integer NOT NULL DEFAULT 0  -- array position IS the identity (append-only)
 );
 
-CREATE TABLE IF NOT EXISTS gym_plan_weekly (
-  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gym.plan_weekly (
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   day        text NOT NULL,              -- 'mon'..'sun' plus any extra keys the loader keeps
   workout_id text,                       -- NULL = rest day
   ord        integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, day)
 );
 
-CREATE TABLE IF NOT EXISTS gym_plan_cycle (
-  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gym.plan_cycle (
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   position   integer NOT NULL,           -- array index; duplicate workout_ids allowed
   workout_id text,                       -- nullable: loader keeps null/absent order entries
   ord        integer NOT NULL DEFAULT 0,
@@ -182,35 +184,36 @@ function normalizeGym(raw) {
 
 const mapper = {
   name: 'gym',
+  schema: 'gym',
   storageKey: 'atlas.gym.v1',
   ddl,
   tables: [
-    'gym_settings',
-    'gym_hours',
-    'gym_workouts',
-    'gym_exercises',
-    'gym_logs',
-    'gym_completions',
-    'gym_plan_weekly',
-    'gym_plan_cycle',
+    'settings',
+    'hours',
+    'workouts',
+    'exercises',
+    'logs',
+    'completions',
+    'plan_weekly',
+    'plan_cycle',
   ],
 
   decompose(raw) {
     const g = normalizeGym(raw)
     return {
-      gym_settings: [{
+      settings: [{
         unit: g.unit,
         address: g.address,
         default_duration: JSON.stringify(g.defaultDuration), // jsonb: '75' vs 75 round-trips
         plan_type: g.plan.type,
         cycle_position: g.plan.cycle.position,
       }],
-      gym_hours: Object.keys(g.hours).map(day => ({
+      hours: Object.keys(g.hours).map(day => ({
         day,
         open: g.hours[day].open,
         close: g.hours[day].close,
       })),
-      gym_workouts: g.workouts.map(w => ({
+      workouts: g.workouts.map(w => ({
         id: w.id,
         name: w.name,
         // present non-booleans (foreign blobs) are coerced so the boolean
@@ -218,21 +221,21 @@ const mapper = {
         rest: w.rest === undefined ? null : !!w.rest,
         flex: w.flex === undefined ? null : !!w.flex,
       })),
-      gym_exercises: g.exercises.map(e => ({
+      exercises: g.exercises.map(e => ({
         id: e.id,
         workout_id: opt(e.workoutId),
         name: e.name,
         unilateral: e.unilateral === undefined ? null : !!e.unilateral,
         target: opt(e.target),
       })),
-      gym_logs: g.logs.map(l => ({
+      logs: g.logs.map(l => ({
         id: opt(l.id),                       // loader keeps id-less logs
         exercise_id: l.exerciseId,
         date: opt(l.date),                   // loader keeps date-less logs
         side: l.side ?? null,
         sets: JSON.stringify(l.sets),        // jsonb — keep the array a JSON array
       })),
-      gym_completions: g.completions.map(c => ({
+      completions: g.completions.map(c => ({
         workout_id: opt(c.workoutId),
         date: opt(c.date),
         // a non-number ts (foreign blob) is dropped rather than failing numeric
@@ -240,11 +243,11 @@ const mapper = {
         start_time: opt(c.start),
         end_time: opt(c.end),
       })),
-      gym_plan_weekly: Object.keys(g.plan.weekly).map(day => ({
+      plan_weekly: Object.keys(g.plan.weekly).map(day => ({
         day,
         workout_id: g.plan.weekly[day],      // workoutId or null
       })),
-      gym_plan_cycle: g.plan.cycle.order.map((workoutId, i) => ({
+      plan_cycle: g.plan.cycle.order.map((workoutId, i) => ({
         position: i,
         workout_id: workoutId ?? null,       // null entries are loader-valid
       })),
@@ -252,16 +255,16 @@ const mapper = {
   },
 
   recompose(rows) {
-    const s = rows.gym_settings[0]
+    const s = rows.settings[0]
     return {
       v: 1,
-      workouts: rows.gym_workouts.map(r => {
+      workouts: rows.workouts.map(r => {
         const w = { id: r.id, name: r.name }
         if (r.rest !== null) w.rest = r.rest
         if (r.flex !== null) w.flex = r.flex
         return w
       }),
-      exercises: rows.gym_exercises.map(r => {
+      exercises: rows.exercises.map(r => {
         const e = { id: r.id }
         if (r.workout_id !== null) e.workoutId = r.workout_id
         e.name = r.name
@@ -269,7 +272,7 @@ const mapper = {
         if (r.target !== null) e.target = r.target
         return e
       }),
-      logs: rows.gym_logs.map(r => {
+      logs: rows.logs.map(r => {
         const l = {}
         if (r.id !== null) l.id = r.id       // NULL = key absent
         l.exerciseId = r.exercise_id
@@ -278,7 +281,7 @@ const mapper = {
         l.sets = r.sets                      // jsonb comes back parsed
         return l
       }),
-      completions: rows.gym_completions.map(r => {
+      completions: rows.completions.map(r => {
         const c = {}
         if (r.workout_id !== null) c.workoutId = r.workout_id
         if (r.date !== null) c.date = r.date
@@ -290,15 +293,15 @@ const mapper = {
       plan: {
         type: s.plan_type,
         // fromEntries: a '__proto__' day stays an own key (no prototype writes)
-        weekly: Object.fromEntries(rows.gym_plan_weekly.map(r => [r.day, r.workout_id])),
+        weekly: Object.fromEntries(rows.plan_weekly.map(r => [r.day, r.workout_id])),
         cycle: {
-          order: rows.gym_plan_cycle.map(r => r.workout_id),
+          order: rows.plan_cycle.map(r => r.workout_id),
           position: s.cycle_position,
         },
       },
       unit: s.unit,
       address: s.address,
-      hours: Object.fromEntries(rows.gym_hours.map(r => [r.day, { open: r.open, close: r.close }])),
+      hours: Object.fromEntries(rows.hours.map(r => [r.day, { open: r.open, close: r.close }])),
       defaultDuration: s.default_duration,   // jsonb: number or numeric string, verbatim
     }
   },

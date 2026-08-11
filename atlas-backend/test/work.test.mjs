@@ -5,10 +5,10 @@ import mapper from '../services/plugins/work.js'
 // Columns declared jsonb per table (work has none — kept for parity with the
 // shared test pattern; simulatePg still exercises the pg-side transforms).
 const JSONB = {
-  work_settings: [],
-  work_shifts: [],
-  work_upcoming: [],
-  work_widget_ranges: [],
+  settings: [],
+  shifts: [],
+  upcoming: [],
+  widget_ranges: [],
 }
 
 // Mimic what SELECT * returns for rows the runner inserted: deep-cloned
@@ -142,9 +142,9 @@ deepStrictEqual(mapper.recompose(simulatePg(mapper.decompose(sparse))), {
 
 // Array order must survive via ord (runner selects ORDER BY ord).
 const dec = mapper.decompose(real)
-strictEqual(dec.work_shifts[0].id, 'saaaaaaa')
-strictEqual(dec.work_shifts[4].id, 'seeeeeee')
-strictEqual(dec.work_upcoming[2].gcal_id, '')
+strictEqual(dec.shifts[0].id, 'saaaaaaa')
+strictEqual(dec.shifts[4].id, 'seeeeeee')
+strictEqual(dec.upcoming[2].gcal_id, '')
 
 // decompose must never emit user_id or ord (the runner owns those).
 for (const rows of Object.values(dec))

@@ -49,8 +49,8 @@ const PUBLIC = new Set(['auth.signup', 'auth.login'])
 async function lookupSession(token) {
   const r = await pool.query(
     `SELECT u.id AS user_id, u.email
-       FROM sessions s
-       JOIN users u ON u.id = s.user_id
+       FROM auth.sessions s
+       JOIN auth.users u ON u.id = s.user_id
       WHERE s.token = $1 AND s.expires_at > now()`,
     [token],
   )

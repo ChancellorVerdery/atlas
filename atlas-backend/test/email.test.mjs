@@ -65,7 +65,7 @@ deepStrictEqual(back({ pinned: [], splitPct: '42' }).splitPct, 42)
 // Pin order survives; duplicate ids deduped (first wins) so the PK can't abort.
 {
   const rows = mapper.decompose({ pinned: ['a', 'b', 'a'], splitPct: 42 })
-  deepStrictEqual(rows.email_pins.map((r) => r.thread_id), ['a', 'b'])
+  deepStrictEqual(rows.pins.map((r) => r.thread_id), ['a', 'b'])
   deepStrictEqual(mapper.recompose(simulatePg(rows)).pinned, ['a', 'b'])
 }
 

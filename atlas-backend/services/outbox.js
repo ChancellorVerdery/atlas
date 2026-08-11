@@ -57,7 +57,7 @@ function deliver(msg) {
 
 async function lookupSession(token) {
   const r = await pool.query(
-    `SELECT user_id FROM sessions WHERE token = $1 AND expires_at > now()`,
+    `SELECT user_id FROM auth.sessions WHERE token = $1 AND expires_at > now()`,
     [token],
   )
   return r.rows[0] || null

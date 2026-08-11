@@ -9,13 +9,16 @@ import { runPlugin } from '../../lib/runner.js'
 
 const mapper = {
   name: 'graph',
+  schema: 'graph',
   storageKey: 'atlas.graph.v1',
 
   // Loader guard is maxNodes >= 1 (graph.js:18) — the UI input's min=50 is
   // cosmetic, so the CHECK stays >= 1.
   ddl: `
-CREATE TABLE IF NOT EXISTS graph_settings (
-  user_id   uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS graph;
+
+CREATE TABLE IF NOT EXISTS graph.settings (
+  user_id   uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   dir       text NOT NULL DEFAULT '',
   mode      text NOT NULL DEFAULT '2d' CHECK (mode IN ('2d','3d')),
   md_only   boolean NOT NULL DEFAULT false,
@@ -24,12 +27,12 @@ CREATE TABLE IF NOT EXISTS graph_settings (
 );
 `,
 
-  tables: ['graph_settings'],
+  tables: ['settings'],
 
   // state → single settings row (user_id/ord added by the runner)
   decompose(state) {
     return {
-      graph_settings: [
+      settings: [
         {
           dir: state.dir,
           mode: state.mode,
@@ -42,7 +45,7 @@ CREATE TABLE IF NOT EXISTS graph_settings (
 
   // rows → exact localStorage blob
   recompose(rows) {
-    const r = rows.graph_settings[0]
+    const r = rows.settings[0]
     return {
       dir: r.dir,
       mode: r.mode,

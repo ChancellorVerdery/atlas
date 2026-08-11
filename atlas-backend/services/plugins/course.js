@@ -21,8 +21,8 @@
 // - disabledTerms[] may contain keys with NO matching terms[] row (the UI lets
 //   the user toggle off future summers before they're ever scheduled, and
 //   loadCourse keeps any string). The spec's `disabled boolean` on
-//   course_terms would silently drop those, so disabled_terms is stored
-//   verbatim as text[] on course_settings (array order preserved).
+//   terms would silently drop those, so disabled_terms is stored
+//   verbatim as text[] on settings (array order preserved).
 // - settings.maxCredits / summerMax: loadCourse keeps numeric *strings* it
 //   finds in storage (e.g. "18" passes both its checks untouched), so a
 //   numeric column would coerce "18" → 18 and break the round trip. jsonb
@@ -33,18 +33,20 @@
 import { runPlugin } from '../../lib/runner.js'
 
 const ddl = `
-CREATE TABLE IF NOT EXISTS course_settings (
-  user_id        uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS course;
+
+CREATE TABLE IF NOT EXISTS course.settings (
+  user_id        uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   max_credits    jsonb NOT NULL,           -- number (or numeric string) as stored
   summer_max     jsonb NOT NULL,
   strategy       text NOT NULL
                  CHECK (strategy IN ('soonest-summer','soonest-optional-summer','even')),
-  disabled_terms text[] NOT NULL DEFAULT '{}',  -- may reference terms with no course_terms row
+  disabled_terms text[] NOT NULL DEFAULT '{}',  -- may reference terms with no terms row
   ord            integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS course_terms (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS course.terms (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   key     text NOT NULL,                   -- 'fall-2025' (= season || '-' || year)
   season  text NOT NULL CHECK (season IN ('spring','summer','fall')),
   year    numeric NOT NULL,                -- loader allows any finite number
@@ -53,10 +55,10 @@ CREATE TABLE IF NOT EXISTS course_terms (
   PRIMARY KEY (user_id, key)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS course_terms_one_current
-  ON course_terms(user_id) WHERE current;
+  ON course.terms(user_id) WHERE current;
 
-CREATE TABLE IF NOT EXISTS course_courses (
-  user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS course.courses (
+  user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   id        text NOT NULL,                 -- client-minted 'c-...'
   code      text NOT NULL DEFAULT '',      -- NOT unique; req refs match on this
   title     text NOT NULL DEFAULT '',
@@ -65,13 +67,13 @@ CREATE TABLE IF NOT EXISTS course_courses (
   coreqs    text[] NOT NULL DEFAULT '{}',  -- same term or earlier
   pre_or_co text[] NOT NULL DEFAULT '{}',
   summer_ok boolean NOT NULL DEFAULT false,
-  term_key  text,                          -- soft ref to course_terms.key; NULL = 'to take'
+  term_key  text,                          -- soft ref to terms.key; NULL = 'to take'
   ord       integer NOT NULL DEFAULT 0
   -- no PRIMARY KEY (user_id, id): loadCourse() keeps duplicate course ids
   -- (only id-LESS rows are dropped), so a hand-written import may legally
   -- carry the same id twice; row identity for recompose is ord.
 );
-CREATE INDEX IF NOT EXISTS course_courses_user ON course_courses(user_id, id);
+CREATE INDEX IF NOT EXISTS course_courses_user ON course.courses(user_id, id);
 `
 
 // ---- loadCourse()'s normalization rules, mirrored verbatim ------------------
@@ -88,9 +90,10 @@ const cleanRefs = (a) => (Array.isArray(a) ? a.map((x) => String(x).trim()).filt
 
 const mapper = {
   name: 'course',
+  schema: 'course',
   storageKey: 'atlas.course.v1',
   ddl,
-  tables: ['course_settings', 'course_terms', 'course_courses'],
+  tables: ['settings', 'terms', 'courses'],
 
   decompose(state) {
     // settings — same checks/defaults as loadCourse (numeric strings survive;
@@ -130,21 +133,21 @@ const mapper = {
       }))
 
     return {
-      course_settings: [{
+      settings: [{
         max_credits: JSON.stringify(settings.maxCredits),
         summer_max: JSON.stringify(settings.summerMax),
         strategy: settings.strategy,
         disabled_terms: disabledTerms,
       }],
-      course_terms: terms,
-      course_courses: courses,
+      terms: terms,
+      courses: courses,
     }
   },
 
   recompose(rows) {
-    const g = rows.course_settings[0]
+    const g = rows.settings[0]
     return {
-      courses: (rows.course_courses || []).map(r => ({
+      courses: (rows.courses || []).map(r => ({
         id: r.id,
         code: r.code,
         title: r.title,
@@ -155,7 +158,7 @@ const mapper = {
         summerOk: r.summer_ok,
         term: r.term_key,
       })),
-      terms: (rows.course_terms || []).map(r => ({
+      terms: (rows.terms || []).map(r => ({
         key: r.key,
         season: r.season,
         year: r.year,

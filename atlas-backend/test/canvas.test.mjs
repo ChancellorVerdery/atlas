@@ -4,11 +4,11 @@ import mapper from '../services/plugins/canvas.js'
 
 // Columns declared jsonb in the DDL (none for canvas — everything is text/bool).
 const JSONB = {
-  canvas_settings: [],
-  canvas_course_prefs: [],
-  canvas_dismissed: [],
-  canvas_semesters: [],
-  canvas_semester_classes: [],
+  settings: [],
+  course_prefs: [],
+  dismissed: [],
+  semesters: [],
+  semester_classes: [],
 }
 
 // Mimic the DB round trip: deep-clone rows and parse jsonb columns the way
@@ -150,7 +150,7 @@ deepStrictEqual(merged.credits['202'], '')
 //    the (user_id, course_id) PK aborts the whole save. Credits still merge.
 {
   const rows = mapper.decompose({ ...defaults, hiddenCourses: [123, '123', 456], credits: { 123: '3' } })
-  deepStrictEqual(rows.canvas_course_prefs.map(r => r.course_id), ['123', '456'], 'prefs deduped')
+  deepStrictEqual(rows.course_prefs.map(r => r.course_id), ['123', '456'], 'prefs deduped')
   const back = mapper.recompose(simulatePg(rows))
   deepStrictEqual(back.hiddenCourses, ['123', '456'])
   deepStrictEqual(back.credits, { 123: '3' })
@@ -160,7 +160,7 @@ deepStrictEqual(merged.credits['202'], '')
 //    must collapse or the (user_id, key) PK aborts the save.
 {
   const rows = mapper.decompose({ ...defaults, dismissed: ['1:2', '1:2', '3:4'] })
-  deepStrictEqual(rows.canvas_dismissed.map(r => r.key), ['1:2', '3:4'])
+  deepStrictEqual(rows.dismissed.map(r => r.key), ['1:2', '3:4'])
   deepStrictEqual(mapper.recompose(simulatePg(rows)).dismissed, ['1:2', '3:4'])
 }
 

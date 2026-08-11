@@ -1,5 +1,5 @@
-// Atlas auth service. Owns the users table (every plugin FK references it)
-// and sessions. Unlike plugin services, replies go back synchronously as the
+// Atlas auth service. Owns the `auth` schema: auth.users (every plugin FK
+// references it) and auth.sessions. Unlike plugin services, replies go back synchronously as the
 // HTTP response body — the inbox relays them to the client socket directly,
 // so the outbox is never involved.
 
@@ -9,15 +9,17 @@ import { applyDdl, serveHttp } from '../lib/runner.js'
 import { pool } from '../lib/db.js'
 
 const DDL = `
-  CREATE TABLE IF NOT EXISTS users (
+  CREATE SCHEMA IF NOT EXISTS auth;
+
+  CREATE TABLE IF NOT EXISTS auth.users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     email text UNIQUE NOT NULL,
     password_hash text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
   );
-  CREATE TABLE IF NOT EXISTS sessions (
+  CREATE TABLE IF NOT EXISTS auth.sessions (
     token text PRIMARY KEY,
-    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     created_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL
   );
@@ -28,7 +30,7 @@ const SESSION_DAYS = 30
 async function mintSession(userId) {
   const token = crypto.randomBytes(32).toString('hex')
   await pool.query(
-    `INSERT INTO sessions (token, user_id, expires_at)
+    `INSERT INTO auth.sessions (token, user_id, expires_at)
      VALUES ($1, $2, now() + interval '${SESSION_DAYS} days')`,
     [token, userId],
   )
@@ -44,7 +46,7 @@ async function signup(payload) {
   let row
   try {
     const r = await pool.query(
-      'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
+      'INSERT INTO auth.users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
       [email, hash],
     )
     row = r.rows[0]
@@ -58,11 +60,11 @@ async function signup(payload) {
 
 async function login(payload) {
   // Opportunistic cleanup of expired sessions.
-  await pool.query('DELETE FROM sessions WHERE expires_at < now()')
+  await pool.query('DELETE FROM auth.sessions WHERE expires_at < now()')
   const email = String((payload && payload.email) || '').trim()
   const password = String((payload && payload.password) || '')
   const r = await pool.query(
-    'SELECT id, email, password_hash FROM users WHERE lower(email) = lower($1)',
+    'SELECT id, email, password_hash FROM auth.users WHERE lower(email) = lower($1)',
     [email],
   )
   const row = r.rows[0]
@@ -73,15 +75,15 @@ async function login(payload) {
 }
 
 async function logout(token) {
-  if (token) await pool.query('DELETE FROM sessions WHERE token = $1', [token])
+  if (token) await pool.query('DELETE FROM auth.sessions WHERE token = $1', [token])
   return { ok: true, data: {} }
 }
 
 async function whoami(token) {
   if (!token) return { ok: false, error: 'Not signed in' }
   const r = await pool.query(
-    `SELECT u.id, u.email FROM sessions s
-     JOIN users u ON u.id = s.user_id
+    `SELECT u.id, u.email FROM auth.sessions s
+     JOIN auth.users u ON u.id = s.user_id
      WHERE s.token = $1 AND s.expires_at > now()`,
     [token],
   )

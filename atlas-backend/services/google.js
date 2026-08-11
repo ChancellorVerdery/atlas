@@ -40,8 +40,10 @@ const configured = !!(CLIENT_ID && CLIENT_SECRET)
 // primary key to (user_id, address). The DO block is idempotent — it only acts
 // while the pkey is still single-column.
 const ddl = `
-CREATE TABLE IF NOT EXISTS google_tokens (
-  user_id       uuid REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS google;
+
+CREATE TABLE IF NOT EXISTS google.tokens (
+  user_id       uuid REFERENCES auth.users(id) ON DELETE CASCADE,
   address       text,          -- connected Gmail address (part of the key)
   access_token  text,          -- ponytail: plaintext at rest, encrypt with pgcrypto when this leaves the tunnel
   refresh_token text,          -- ponytail: plaintext at rest, encrypt with pgcrypto when this leaves the tunnel
@@ -54,14 +56,14 @@ DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'google_tokens'::regclass AND contype = 'p'
+    WHERE conrelid = 'google.tokens'::regclass AND contype = 'p'
       AND array_length(conkey, 1) = 1
   ) THEN
-    ALTER TABLE google_tokens ADD COLUMN IF NOT EXISTS added_at bigint;
-    DELETE FROM google_tokens WHERE address IS NULL;
-    UPDATE google_tokens SET added_at = 0 WHERE added_at IS NULL;
-    ALTER TABLE google_tokens DROP CONSTRAINT google_tokens_pkey;
-    ALTER TABLE google_tokens ADD CONSTRAINT google_tokens_pkey PRIMARY KEY (user_id, address);
+    ALTER TABLE google.tokens ADD COLUMN IF NOT EXISTS added_at bigint;
+    DELETE FROM google.tokens WHERE address IS NULL;
+    UPDATE google.tokens SET added_at = 0 WHERE added_at IS NULL;
+    ALTER TABLE google.tokens DROP CONSTRAINT google_tokens_pkey;
+    ALTER TABLE google.tokens ADD CONSTRAINT google_tokens_pkey PRIMARY KEY (user_id, address);
   END IF;
 END $$;`
 
@@ -82,13 +84,13 @@ async function tokenPost(params) {
 // All accounts for a user, primary (earliest added) first.
 async function getAccounts(userId) {
   const r = await pool.query(
-    'SELECT * FROM google_tokens WHERE user_id = $1 ORDER BY added_at ASC, address ASC', [userId])
+    'SELECT * FROM google.tokens WHERE user_id = $1 ORDER BY added_at ASC, address ASC', [userId])
   return r.rows
 }
 // The row for one account; when address is omitted, the primary.
 async function getRow(userId, address) {
   if (address) {
-    const r = await pool.query('SELECT * FROM google_tokens WHERE user_id = $1 AND address = $2', [userId, address])
+    const r = await pool.query('SELECT * FROM google.tokens WHERE user_id = $1 AND address = $2', [userId, address])
     return r.rows[0] || null
   }
   return (await getAccounts(userId))[0] || null
@@ -100,7 +102,7 @@ async function upsert(userId, address, fields) {
   const ins = ['user_id', 'address', ...cols].join(', ')
   const ph = ['$1', '$2', ...cols.map((_, i) => `$${i + 3}`)].join(', ')
   await pool.query(
-    `INSERT INTO google_tokens (${ins}) VALUES (${ph})
+    `INSERT INTO google.tokens (${ins}) VALUES (${ph})
      ON CONFLICT (user_id, address) DO UPDATE SET ${set}`,
     [userId, address, ...cols.map((c) => fields[c])],
   )
@@ -122,7 +124,7 @@ function refreshToken(userId, address, row) {
           // invalid_grant = the refresh token was revoked/expired: drop just
           // this account so the user is cleanly prompted to reconnect it.
           if (t.error === 'invalid_grant') {
-            await pool.query('DELETE FROM google_tokens WHERE user_id = $1 AND address = $2', [userId, address])
+            await pool.query('DELETE FROM google.tokens WHERE user_id = $1 AND address = $2', [userId, address])
           }
           throw authErr('Google session expired — reconnect.')
         }
@@ -203,13 +205,13 @@ async function disconnect(userId, address) {
     const row = await getRow(userId, address)
     const tok = row && (row.refresh_token || row.access_token)
     if (tok) fetch(`${REVOKE_URL}?token=${encodeURIComponent(tok)}`, { method: 'POST' }).catch(() => {})
-    await pool.query('DELETE FROM google_tokens WHERE user_id = $1 AND address = $2', [userId, address])
+    await pool.query('DELETE FROM google.tokens WHERE user_id = $1 AND address = $2', [userId, address])
   } else {
     for (const row of await getAccounts(userId)) {
       const tok = row.refresh_token || row.access_token
       if (tok) fetch(`${REVOKE_URL}?token=${encodeURIComponent(tok)}`, { method: 'POST' }).catch(() => {})
     }
-    await pool.query('DELETE FROM google_tokens WHERE user_id = $1', [userId])
+    await pool.query('DELETE FROM google.tokens WHERE user_id = $1', [userId])
   }
   const accounts = (await getAccounts(userId)).map((r) => r.address)
   return { connected: accounts.length > 0, accounts }

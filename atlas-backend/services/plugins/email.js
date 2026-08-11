@@ -15,15 +15,17 @@
 import { runPlugin } from '../../lib/runner.js'
 
 const ddl = `
-CREATE TABLE IF NOT EXISTS email_prefs (
-  user_id    uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS email;
+
+CREATE TABLE IF NOT EXISTS email.prefs (
+  user_id    uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   split_pct  double precision NOT NULL,  -- loader always supplies it (default 42)
   nav_hidden boolean,                    -- NULL = navHidden key absent (never toggled)
   ord        integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS email_pins (
-  user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS email.pins (
+  user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   thread_id text NOT NULL,               -- Gmail thread id; may dangle (tolerated)
   ord       integer NOT NULL DEFAULT 0,  -- 0 = most recently pinned (unshift order)
   PRIMARY KEY (user_id, thread_id)
@@ -32,9 +34,10 @@ CREATE TABLE IF NOT EXISTS email_pins (
 
 const mapper = {
   name: 'email',
+  schema: 'email',
   storageKey: 'atlas.email.v1',
   ddl,
-  tables: ['email_prefs', 'email_pins'],
+  tables: ['prefs', 'pins'],
 
   decompose(state) {
     const pinned = Array.isArray(state.pinned) ? state.pinned : []
@@ -49,15 +52,15 @@ const mapper = {
       pins.push({ thread_id: id })
     }
     return {
-      email_prefs: [{ split_pct: splitPct, nav_hidden: state.navHidden === undefined ? null : state.navHidden }],
-      email_pins: pins,
+      prefs: [{ split_pct: splitPct, nav_hidden: state.navHidden === undefined ? null : state.navHidden }],
+      pins: pins,
     }
   },
 
   recompose(rows) {
     const s = {}
-    const p = (rows.email_prefs || [])[0]
-    s.pinned = (rows.email_pins || []).map((r) => r.thread_id)
+    const p = (rows.prefs || [])[0]
+    s.pinned = (rows.pins || []).map((r) => r.thread_id)
     s.splitPct = p ? p.split_pct : 42
     if (p && p.nav_hidden !== null) s.navHidden = p.nav_hidden
     return s

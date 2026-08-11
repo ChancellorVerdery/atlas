@@ -5,7 +5,7 @@ import { deepStrictEqual } from 'node:assert'
 import mapper from '../services/plugins/gym.js'
 
 // Columns declared jsonb in the DDL — pg returns them parsed.
-const JSONB = { gym_settings: ['default_duration'], gym_logs: ['sets'] }
+const JSONB = { settings: ['default_duration'], logs: ['sets'] }
 
 // Mimic the runner + pg: deep-clone rows, stamp user_id/ord (recompose must
 // ignore them), map undefined → NULL, parse jsonb columns.
@@ -161,7 +161,7 @@ const normTrip = (name, input, expected) => {
 
 // 4a. legacy backup: hours is the old single {start,end} pair and plan/most
 // keys are missing entirely (pre-migration app version). Previously: TypeError
-// at g.plan.type + NOT NULL violation on gym_hours.open.
+// at g.plan.type + NOT NULL violation on hours.open.
 normTrip(
   'legacy hours {start,end} + missing plan (raw backup import)',
   { hours: { start: '06:00', end: '22:00' } },

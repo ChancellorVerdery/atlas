@@ -7,13 +7,13 @@ import mapper from '../services/plugins/ladder.js'
 // Columns declared jsonb in the mapper's DDL. node-pg sends the stringified
 // value and returns it JSON.parse'd on SELECT; simulate exactly that.
 const JSONB = {
-  ladder_settings: ['buffer', 'cal_ids'],
-  ladder_meals: ['meal'],
-  ladder_flex: ['minutes', 'weekday'],
-  ladder_geo_cache: ['result'],
-  ladder_drive_cache: ['minutes'],
-  ladder_aliases: ['alias'],
-  ladder_pushed_events: ['events'],
+  settings: ['buffer', 'cal_ids'],
+  meals: ['meal'],
+  flex: ['minutes', 'weekday'],
+  geo_cache: ['result'],
+  drive_cache: ['minutes'],
+  aliases: ['alias'],
+  pushed_events: ['events'],
 }
 
 // Deep-clone the decomposed rows, parse jsonb columns, and stamp the columns
@@ -184,7 +184,7 @@ roundTrip({
 }, 'duplicate meal/alias ids both survive')
 
 // id-less meals are loader-valid (loadLadder filters meals by isObj only).
-// Previously: 23502 on ladder_meals.id NOT NULL. Extra keys also survive now.
+// Previously: 23502 on meals.id NOT NULL. Extra keys also survive now.
 roundTrip({
   ...defaults,
   meals: [

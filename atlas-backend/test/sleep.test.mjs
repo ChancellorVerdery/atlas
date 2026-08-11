@@ -5,7 +5,7 @@ import { deepStrictEqual } from 'node:assert'
 import mapper from '../services/plugins/sleep.js'
 
 // Columns declared jsonb in the DDL — pg returns them parsed.
-const JSONB = { sleep_logs: ['quality'] }
+const JSONB = { logs: ['quality'] }
 
 // Mimic the runner + pg: deep-clone rows, stamp user_id/ord (recompose must
 // ignore them), map undefined → NULL, parse jsonb columns.
@@ -113,7 +113,7 @@ roundTrip('loader-lenient type/quality/date values', lenient)
 
 // ---- 5. regression: duplicate log ids are loader-valid ----------------------
 // loadSleep never dedupes (the UI tolerates copies: removeLog filters all,
-// creditedFor sums both), so sleep_logs has NO primary key on id — both rows
+// creditedFor sums both), so logs has NO primary key on id — both rows
 // must be stored and round-trip. Deduping would change the app's debt math.
 
 const dupIds = {
@@ -125,7 +125,7 @@ const dupIds = {
   ],
 }
 roundTrip('duplicate log ids survive (no PK, no dedupe)', dupIds)
-if (mapper.decompose(dupIds).sleep_logs.length !== 3) throw new Error('duplicate-id logs were dropped')
+if (mapper.decompose(dupIds).logs.length !== 3) throw new Error('duplicate-id logs were dropped')
 console.log('  pass: decompose keeps all duplicate-id rows')
 
 // ---- 6. regression: raw legacy blob decomposes like loadSleep loads ---------

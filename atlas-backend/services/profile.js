@@ -14,14 +14,16 @@ import { applyDdl, serveHttp, deliver } from '../lib/runner.js'
 import { pool, tx } from '../lib/db.js'
 
 const DDL = `
-CREATE TABLE IF NOT EXISTS page_boards (
-  user_id     uuid  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS profile;
+
+CREATE TABLE IF NOT EXISTS profile.page_boards (
+  user_id     uuid  NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   storage_key text  NOT NULL,
   board       jsonb NOT NULL,
   PRIMARY KEY (user_id, storage_key)
 );
-CREATE TABLE IF NOT EXISTS user_flags (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS profile.user_flags (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   flag    text NOT NULL,
   value   text NOT NULL,
   PRIMARY KEY (user_id, flag)
@@ -73,13 +75,13 @@ async function postSvc(svc, path, body) {
 async function pageGet(userId, storageKey) {
   if (BOARD_KEYS.includes(storageKey)) {
     const r = await pool.query(
-      'SELECT board FROM page_boards WHERE user_id = $1 AND storage_key = $2',
+      'SELECT board FROM profile.page_boards WHERE user_id = $1 AND storage_key = $2',
       [userId, storageKey],
     )
     return r.rows.length ? r.rows[0].board : null
   }
   const r = await pool.query(
-    'SELECT value FROM user_flags WHERE user_id = $1 AND flag = $2',
+    'SELECT value FROM profile.user_flags WHERE user_id = $1 AND flag = $2',
     [userId, storageKey],
   )
   return r.rows.length ? r.rows[0].value : null
@@ -91,7 +93,7 @@ async function pageSave(userId, storageKey, value) {
   if (BOARD_KEYS.includes(storageKey)) {
     if (!value || typeof value !== 'object') throw new Error('board value must be an object')
     await pool.query(
-      `INSERT INTO page_boards (user_id, storage_key, board) VALUES ($1, $2, $3)
+      `INSERT INTO profile.page_boards (user_id, storage_key, board) VALUES ($1, $2, $3)
        ON CONFLICT (user_id, storage_key) DO UPDATE SET board = EXCLUDED.board`,
       [userId, storageKey, JSON.stringify(value)],
     )
@@ -105,7 +107,7 @@ async function pageSave(userId, storageKey, value) {
   // on every device at the next pull.
   const str = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)
   await pool.query(
-    `INSERT INTO user_flags (user_id, flag, value) VALUES ($1, $2, $3)
+    `INSERT INTO profile.user_flags (user_id, flag, value) VALUES ($1, $2, $3)
      ON CONFLICT (user_id, flag) DO UPDATE SET value = EXCLUDED.value`,
     [userId, storageKey, str],
   )
@@ -119,12 +121,12 @@ async function pullAll(userId) {
   const states = {}
   const warnings = []
   const boards = await pool.query(
-    'SELECT storage_key, board FROM page_boards WHERE user_id = $1',
+    'SELECT storage_key, board FROM profile.page_boards WHERE user_id = $1',
     [userId],
   )
   for (const row of boards.rows) states[row.storage_key] = row.board
   const flags = await pool.query(
-    'SELECT flag, value FROM user_flags WHERE user_id = $1',
+    'SELECT flag, value FROM profile.user_flags WHERE user_id = $1',
     [userId],
   )
   for (const row of flags.rows) states[row.flag] = row.value
@@ -183,7 +185,7 @@ async function importAll(userId, data) {
 
   // Boards and flags in one transaction: wipe, then re-insert what's present.
   await tx(async c => {
-    await c.query('DELETE FROM page_boards WHERE user_id = $1', [userId])
+    await c.query('DELETE FROM profile.page_boards WHERE user_id = $1', [userId])
     for (const key of BOARD_KEYS) {
       if (!(key in data)) continue
       const board = parse(key, data[key])
@@ -193,18 +195,18 @@ async function importAll(userId, data) {
         continue
       }
       await c.query(
-        'INSERT INTO page_boards (user_id, storage_key, board) VALUES ($1, $2, $3)',
+        'INSERT INTO profile.page_boards (user_id, storage_key, board) VALUES ($1, $2, $3)',
         [userId, key, JSON.stringify(board)],
       )
       imported++
     }
-    await c.query('DELETE FROM user_flags WHERE user_id = $1', [userId])
+    await c.query('DELETE FROM profile.user_flags WHERE user_id = $1', [userId])
     // Catch-all for every other atlas.* key so nothing in a backup is lost.
     for (const [key, v] of Object.entries(data)) {
       if (!key.startsWith('atlas.')) continue
       if (BOARD_KEYS.includes(key) || key in PLUGINS || NEVER_STORE.has(key)) continue
       await c.query(
-        'INSERT INTO user_flags (user_id, flag, value) VALUES ($1, $2, $3)',
+        'INSERT INTO profile.user_flags (user_id, flag, value) VALUES ($1, $2, $3)',
         [userId, key, typeof v === 'string' ? v : JSON.stringify(v)],
       )
       imported++

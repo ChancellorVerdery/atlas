@@ -5,7 +5,7 @@ import mapper from '../services/plugins/calendar.js'
 // No jsonb columns in this plugin, so pg hands rows back structurally
 // unchanged; still deep-clone to prove recompose doesn't rely on the exact
 // objects decompose produced.
-const JSONB = { calendar_prefs: [], calendar_hidden_cals: [] }
+const JSONB = { prefs: [], hidden_cals: [] }
 function simulatePg(byTable) {
   const out = {}
   for (const [table, rows] of Object.entries(byTable)) {

@@ -3,12 +3,17 @@
 // A plugin service is a pure "mapper" module:
 //   export default {
 //     name: 'gym',                      // code prefix ('gym.get' / 'gym.save')
+//     schema: 'gym',                    // Postgres schema owning its tables
 //     storageKey: 'atlas.gym.v1',       // the localStorage key it mirrors
-//     ddl: 'CREATE TABLE IF NOT EXISTS ...',  // its own tables, idempotent
-//     tables: ['gym_settings', ...],    // parents before children (FK order)
+//     ddl: 'CREATE SCHEMA ... CREATE TABLE ...',  // its own tables, idempotent
+//     tables: ['settings', ...],        // parents before children (FK order)
 //     decompose(state) -> { table: [row, ...] },   // row keys = column names
 //     recompose({ table: [row, ...] }) -> state,   // exact localStorage shape
 //   }
+// Every plugin owns a Postgres SCHEMA named after it, so a table's full
+// identity is `<schema>.<table>` — gym.workouts, finance.networth_history.
+// `tables` holds the bare names (which are also the decompose/recompose row-map
+// keys); qualify() is the single place they become SQL.
 // The runner owns HTTP, transactions, row ordering, and outbox delivery, so
 // mappers stay pure and testable without a database.
 //
@@ -20,6 +25,10 @@ import http from 'node:http'
 import { pool, tx } from './db.js'
 
 const OUTBOX = process.env.OUTBOX_URL || 'http://atlas-outbox/deliver'
+
+// Bare table name -> schema-qualified SQL identity. Both halves come from the
+// mapper (never from a request), so this is not an injection surface.
+const qualify = (mapper, t) => `${mapper.schema}.${t}`
 
 export async function deliver(msg) {
   try {
@@ -33,13 +42,14 @@ export async function deliver(msg) {
   }
 }
 
-// Retry until Postgres is up and the users table (owned by the auth service,
+// Retry until Postgres is up and auth.users (owned by the auth service,
 // referenced by every plugin FK) exists. Only plausibly-transient errors are
-// retried: connection failures and undefined_table (42P01, users not created
-// yet). Permanent DDL problems (syntax errors, schema drift — SQLSTATE class
-// 42 other than 42P01) exit immediately so a bad DDL is visible to the
-// orchestrator instead of hiding behind an infinite retry loop; everything
-// else is retried but capped at ~2 minutes before exiting.
+// retried: connection failures, undefined_table (42P01) and invalid_schema_name
+// (3F000) — a plugin whose DDL runs before the auth service has created its
+// schema hits the latter. Permanent DDL problems (syntax errors, schema drift —
+// SQLSTATE class 42 other than 42P01) exit immediately so a bad DDL is visible
+// to the orchestrator instead of hiding behind an infinite retry loop;
+// everything else is retried but capped at ~2 minutes before exiting.
 const DDL_MAX_ATTEMPTS = 40
 const DDL_RETRY_MS = 3000
 
@@ -106,7 +116,7 @@ export async function load(mapper, userId) {
     let total = 0
     for (const t of mapper.tables) {
       const r = await c.query(
-        `SELECT * FROM ${t} WHERE user_id = $1 ORDER BY ord, ctid`,
+        `SELECT * FROM ${qualify(mapper, t)} WHERE user_id = $1 ORDER BY ord, ctid`,
         [userId],
       )
       rows[t] = r.rows
@@ -124,14 +134,14 @@ export async function store(mapper, userId, value) {
   const byTable = mapper.decompose(value)
   await tx(async c => {
     for (const t of [...mapper.tables].reverse())
-      await c.query(`DELETE FROM ${t} WHERE user_id = $1`, [userId])
+      await c.query(`DELETE FROM ${qualify(mapper, t)} WHERE user_id = $1`, [userId])
     for (const t of mapper.tables) {
       const rows = byTable[t] || []
       for (let i = 0; i < rows.length; i++) {
         const row = { ...rows[i], user_id: userId, ord: i }
         const cols = Object.keys(row)
         await c.query(
-          `INSERT INTO ${t} (${cols.join(',')}) VALUES (${cols.map((_, j) => `$${j + 1}`).join(',')})`,
+          `INSERT INTO ${qualify(mapper, t)} (${cols.join(',')}) VALUES (${cols.map((_, j) => `$${j + 1}`).join(',')})`,
           cols.map(k => (row[k] === undefined ? null : row[k])),
         )
       }
@@ -176,7 +186,7 @@ export async function runPlugin(mapper) {
     '/state/clear': async ({ userId }) => {
       await tx(async c => {
         for (const t of [...mapper.tables].reverse())
-          await c.query(`DELETE FROM ${t} WHERE user_id = $1`, [userId])
+          await c.query(`DELETE FROM ${qualify(mapper, t)} WHERE user_id = $1`, [userId])
       })
       return {}
     },

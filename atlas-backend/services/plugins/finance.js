@@ -32,8 +32,8 @@
 //   date or non-numeric amount goes NULL in the extract, never 500s). No PKs
 //   on these tables: the loader never dedupes, so array position (ord) is the
 //   identity — hand-merged backups with duplicate ids must save.
-// - No FKs to finance_items: item_id is a soft ref like every other ref here
-//   (gym_logs.exercise_id, finance_overrides.transaction_id) — the loader
+// - No FKs to items: item_id is a soft ref like every other ref here
+//   (gym.logs.exercise_id, overrides.transaction_id) — the loader
 //   happily renders orphaned accounts/transactions.
 // - overrides are partial objects: category NULL = key absent, is_transfer
 //   NULL = key absent (explicit false is stored as false, not NULL). Keys of
@@ -42,10 +42,10 @@
 // - budgets.monthly_limit is jsonb: setBudget writes positive numbers, but
 //   Infinity stringifies to null and the loader keeps budgets verbatim — a
 //   NOT NULL numeric column would permanently break saves.
-// - dismissedAnomalies/dismissedSubscriptions fold into finance_settings as
+// - dismissedAnomalies/dismissedSubscriptions fold into settings as
 //   jsonb (order-preserving); the loader only checks Array.isArray, so
 //   entries can be anything.
-// - ranges{} + categoryView{} share finance_widget_prefs via nullable columns:
+// - ranges{} + categoryView{} share widget_prefs via nullable columns:
 //   NULL range = widgetId absent from ranges, NULL cat_view = absent from
 //   categoryView. No CHECK constraints on the values: the loader passes stored
 //   values through unvalidated (rangeFor/categoryViewFor coerce at READ time),
@@ -56,8 +56,10 @@
 import { runPlugin } from '../../lib/runner.js'
 
 const ddl = `
-CREATE TABLE IF NOT EXISTS finance_settings (
-  user_id             uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS finance;
+
+CREATE TABLE IF NOT EXISTS finance.settings (
+  user_id             uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   client_id           text NOT NULL DEFAULT '',        -- Plaid client_id
   secret              text NOT NULL DEFAULT '',        -- ponytail: plaintext at rest, encrypt with pgcrypto when this leaves the tunnel
   env                 text NOT NULL DEFAULT 'sandbox' CHECK (env IN ('sandbox','production')),
@@ -68,10 +70,10 @@ CREATE TABLE IF NOT EXISTS finance_settings (
 );
 -- CREATE TABLE IF NOT EXISTS above skips the whole statement on an existing
 -- table, so a column added after first deploy needs its own idempotent ALTER.
-ALTER TABLE finance_settings ADD COLUMN IF NOT EXISTS dismissed_subscriptions jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS dismissed_subscriptions jsonb NOT NULL DEFAULT '[]';
 
-CREATE TABLE IF NOT EXISTS finance_items (
-  user_id          uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS finance.items (
+  user_id          uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   item_id          text,                               -- extracted; NULL when absent/unusable
   access_token     text,                               -- ponytail: plaintext at rest, encrypt with pgcrypto when this leaves the tunnel
   institution_name text,
@@ -80,8 +82,8 @@ CREATE TABLE IF NOT EXISTS finance_items (
   ord              integer NOT NULL DEFAULT 0          -- array position is the identity (no PK)
 );
 
-CREATE TABLE IF NOT EXISTS finance_accounts (
-  user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS finance.accounts (
+  user_id         uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   account_id      text,                                -- extracted; NULL when absent/unusable
   item_id         text,                                -- soft ref (no FK): orphans are loader-valid
   name            text,
@@ -93,8 +95,8 @@ CREATE TABLE IF NOT EXISTS finance_accounts (
   ord             integer NOT NULL DEFAULT 0           -- array position is the identity (no PK)
 );
 
-CREATE TABLE IF NOT EXISTS finance_transactions (
-  user_id        uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS finance.transactions (
+  user_id        uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   transaction_id text,                                 -- extracted; NULL when absent/unusable
   item_id        text,                                 -- soft ref (no FK)
   account_id     text,
@@ -106,10 +108,10 @@ CREATE TABLE IF NOT EXISTS finance_transactions (
   raw            jsonb NOT NULL,                       -- full Plaid txn object, recomposed verbatim
   ord            integer NOT NULL DEFAULT 0            -- array position is the identity (no PK)
 );
-CREATE INDEX IF NOT EXISTS finance_transactions_user_date ON finance_transactions(user_id, date);
+CREATE INDEX IF NOT EXISTS finance_transactions_user_date ON finance.transactions(user_id, date);
 
-CREATE TABLE IF NOT EXISTS finance_overrides (
-  user_id        uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS finance.overrides (
+  user_id        uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   transaction_id text NOT NULL,                        -- soft ref; may outlive the txn (tolerated)
   category       text,                                 -- NULL = category key absent from override
   is_transfer    boolean,                              -- NULL = isTransfer key absent; false suppresses heuristics
@@ -117,31 +119,31 @@ CREATE TABLE IF NOT EXISTS finance_overrides (
   PRIMARY KEY (user_id, transaction_id)
 );
 
-CREATE TABLE IF NOT EXISTS finance_custom_categories (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS finance.custom_categories (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   cat     jsonb NOT NULL,                              -- {key,label,color} verbatim; dup keys are loader-valid
   ord     integer NOT NULL DEFAULT 0                   -- array position is the identity (no PK)
 );
 
-CREATE TABLE IF NOT EXISTS finance_budgets (
-  user_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS finance.budgets (
+  user_id       uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   category_key  text NOT NULL,                         -- builtin or custom; may dangle after category.remove (tolerated)
   monthly_limit jsonb NOT NULL,                        -- jsonb: Infinity arrives as JSON null and must round-trip
   ord           integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, category_key)
 );
 
-CREATE TABLE IF NOT EXISTS finance_networth_history (
+CREATE TABLE IF NOT EXISTS finance.networth_history (
   id        bigserial PRIMARY KEY,
-  user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   date      text,                                      -- extracted; multiple rows per date allowed (one per sync)
   net_worth numeric,                                   -- extracted; NULL when absent/unusable
   raw       jsonb NOT NULL,                            -- the history entry verbatim — recompose truth
   ord       integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS finance_widget_prefs (
-  user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS finance.widget_prefs (
+  user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   widget_id text NOT NULL,                             -- soft FK into page-board widget ids (orphans tolerated)
   range     text,                                      -- NULL = widgetId absent from ranges{}
   cat_view  text,                                      -- NULL = widgetId absent from categoryView{}
@@ -179,25 +181,26 @@ function normalizeFinance(raw) {
 
 const mapper = {
   name: 'finance',
+  schema: 'finance',
   storageKey: 'atlas.finance.v1',
   ddl,
   tables: [
-    'finance_settings',
-    'finance_items',
-    'finance_accounts',
-    'finance_transactions',
-    'finance_overrides',
-    'finance_custom_categories',
-    'finance_budgets',
-    'finance_networth_history',
-    'finance_widget_prefs',
+    'settings',
+    'items',
+    'accounts',
+    'transactions',
+    'overrides',
+    'custom_categories',
+    'budgets',
+    'networth_history',
+    'widget_prefs',
   ],
 
   decompose(raw) {
     const state = normalizeFinance(raw)
     const widgetIds = [...new Set([...Object.keys(state.ranges), ...Object.keys(state.categoryView)])]
     return {
-      finance_settings: [{
+      settings: [{
         client_id: state.clientId,
         secret: state.secret,
         env: state.env,
@@ -205,14 +208,14 @@ const mapper = {
         dismissed_anomalies: JSON.stringify(state.dismissedAnomalies), // jsonb, entries verbatim
         dismissed_subscriptions: JSON.stringify(state.dismissedSubscriptions), // jsonb, entries verbatim
       }],
-      finance_items: state.items.map(i => ({
+      items: state.items.map(i => ({
         item_id: str(i?.itemId),
         access_token: str(i?.accessToken),
         institution_name: str(i?.institutionName),
         cursor: str(i?.cursor),                          // null pre-first-sync (raw keeps the key)
         raw: JSON.stringify(i ?? null),                  // jsonb — truth
       })),
-      finance_accounts: state.accounts.map(a => ({
+      accounts: state.accounts.map(a => ({
         account_id: str(a?.account_id),
         item_id: str(a?.item_id),
         name: str(a?.name),
@@ -222,7 +225,7 @@ const mapper = {
         balance_current: num(a?.balances?.current),
         raw: JSON.stringify(a ?? null),                  // jsonb — truth
       })),
-      finance_transactions: state.transactions.map(t => ({
+      transactions: state.transactions.map(t => ({
         transaction_id: str(t?.transaction_id),
         item_id: str(t?.item_id),
         account_id: str(t?.account_id),
@@ -233,26 +236,26 @@ const mapper = {
         pfc_primary: str(t?.personal_finance_category?.primary),
         raw: JSON.stringify(t ?? null),                  // jsonb — truth
       })),
-      finance_overrides: Object.entries(state.overrides).map(([txnId, o]) => ({
+      overrides: Object.entries(state.overrides).map(([txnId, o]) => ({
         transaction_id: txnId,
         category: isObj(o) && 'category' in o ? o.category : null,
         // only a real boolean reaches the boolean column; anything else is
         // treated as key-absent rather than failing the save
         is_transfer: isObj(o) && typeof o.isTransfer === 'boolean' ? o.isTransfer : null,
       })),
-      finance_custom_categories: state.customCategories.map(c => ({
+      custom_categories: state.customCategories.map(c => ({
         cat: JSON.stringify(c ?? null),                  // jsonb — verbatim, dup keys fine
       })),
-      finance_budgets: Object.entries(state.budgets).map(([key, limit]) => ({
+      budgets: Object.entries(state.budgets).map(([key, limit]) => ({
         category_key: key,
         monthly_limit: JSON.stringify(limit ?? null),    // jsonb: null (Infinity) / strings survive
       })),
-      finance_networth_history: state.netWorthHistory.map(e => ({
+      networth_history: state.netWorthHistory.map(e => ({
         date: str(e?.date),
         net_worth: num(e?.netWorth),
         raw: JSON.stringify(e ?? null),                  // jsonb — truth
       })),
-      finance_widget_prefs: widgetIds.map(w => ({
+      widget_prefs: widgetIds.map(w => ({
         widget_id: w,
         range: w in state.ranges ? state.ranges[w] : null,
         cat_view: w in state.categoryView ? state.categoryView[w] : null,
@@ -261,19 +264,19 @@ const mapper = {
   },
 
   recompose(rows) {
-    const st = (rows.finance_settings || [])[0] ||
+    const st = (rows.settings || [])[0] ||
       { client_id: '', secret: '', env: 'sandbox', last_sync: 0, dismissed_anomalies: [], dismissed_subscriptions: [] }
     // Object.fromEntries everywhere a key is user/blob-controlled: a
     // '__proto__' key becomes a plain own property (no prototype writes).
-    const overrides = Object.fromEntries((rows.finance_overrides || []).map(r => {
+    const overrides = Object.fromEntries((rows.overrides || []).map(r => {
       const o = {}
       if (r.category !== null) o.category = r.category
       if (r.is_transfer !== null) o.isTransfer = r.is_transfer
       return [r.transaction_id, o]
     }))
     const budgets = Object.fromEntries(
-      (rows.finance_budgets || []).map(r => [r.category_key, r.monthly_limit]))
-    const prefs = rows.finance_widget_prefs || []
+      (rows.budgets || []).map(r => [r.category_key, r.monthly_limit]))
+    const prefs = rows.widget_prefs || []
     const ranges = Object.fromEntries(
       prefs.filter(r => r.range !== null).map(r => [r.widget_id, r.range]))
     const categoryView = Object.fromEntries(
@@ -282,13 +285,13 @@ const mapper = {
       clientId: st.client_id,
       secret: st.secret,
       env: st.env,
-      items: (rows.finance_items || []).map(r => r.raw),               // verbatim entry
-      accounts: (rows.finance_accounts || []).map(r => r.raw),         // verbatim Plaid object
-      transactions: (rows.finance_transactions || []).map(r => r.raw), // verbatim Plaid object
+      items: (rows.items || []).map(r => r.raw),               // verbatim entry
+      accounts: (rows.accounts || []).map(r => r.raw),         // verbatim Plaid object
+      transactions: (rows.transactions || []).map(r => r.raw), // verbatim Plaid object
       overrides,
-      customCategories: (rows.finance_custom_categories || []).map(r => r.cat), // verbatim
+      customCategories: (rows.custom_categories || []).map(r => r.cat), // verbatim
       budgets,
-      netWorthHistory: (rows.finance_networth_history || []).map(r => r.raw),   // verbatim
+      netWorthHistory: (rows.networth_history || []).map(r => r.raw),   // verbatim
       dismissedAnomalies: st.dismissed_anomalies,
       dismissedSubscriptions: st.dismissed_subscriptions,
       ranges,

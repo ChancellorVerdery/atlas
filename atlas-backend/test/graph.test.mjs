@@ -5,7 +5,7 @@ import { deepStrictEqual } from 'node:assert'
 import mapper from '../services/plugins/graph.js'
 
 // Columns declared jsonb in the mapper's DDL: none for graph.
-const JSONB_COLS = { graph_settings: [] }
+const JSONB_COLS = { settings: [] }
 
 // Deep-clone the decomposed rows and parse jsonb strings, mimicking what pg
 // hands back from SELECT *.

@@ -8,13 +8,13 @@ import mapper from '../services/plugins/finance.js'
 // 'YYYY-MM-DD' strings and come back as the same strings; numeric/int8 come
 // back as JS numbers via db.js parsers; text[] comes back as a JS array).
 const JSONB = {
-  finance_settings: ['dismissed_anomalies', 'dismissed_subscriptions'],
-  finance_items: ['raw'],
-  finance_accounts: ['raw'],
-  finance_transactions: ['raw'],
-  finance_custom_categories: ['cat'],
-  finance_budgets: ['monthly_limit'],
-  finance_networth_history: ['raw'],
+  settings: ['dismissed_anomalies', 'dismissed_subscriptions'],
+  items: ['raw'],
+  accounts: ['raw'],
+  transactions: ['raw'],
+  custom_categories: ['cat'],
+  budgets: ['monthly_limit'],
+  networth_history: ['raw'],
 }
 
 function simulatePg(byTable) {
@@ -174,7 +174,7 @@ deepStrictEqual(roundTrip(realistic), realistic)
 
 // Orphaned item_id refs (hand-merged backup): accounts/transactions whose
 // item_id matches no items entry render fine in every widget. Previously:
-// 23503 on the hard composite FKs to finance_items (now dropped — soft refs).
+// 23503 on the hard composite FKs to items (now dropped — soft refs).
 {
   const S = {
     ...defaults,

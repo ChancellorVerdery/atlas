@@ -1,7 +1,10 @@
 # Atlas monorepo — atlas-ui, atlas-backend, notes-ink, server console app.
 
 # Dependencies + build output (restorable from package-lock / a build)
+# Both spellings: the trailing slash misses a node_modules SYMLINK, which is how
+# a git worktree usually gets its deps (linked from the main checkout).
 node_modules/
+node_modules
 dist/
 dist-app/
 

@@ -42,11 +42,14 @@ const isObj = o => o !== null && typeof o === 'object'
 
 const mapper = {
   name: 'work',
+  schema: 'work',
   storageKey: 'atlas.work.v1',
 
   ddl: `
-    CREATE TABLE IF NOT EXISTS work_settings (
-      user_id    uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS work;
+
+    CREATE TABLE IF NOT EXISTS work.settings (
+      user_id    uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
       wage       numeric NOT NULL DEFAULT 0,
       tips       boolean NOT NULL DEFAULT false,
       open_ended boolean NOT NULL DEFAULT false,
@@ -54,8 +57,8 @@ const mapper = {
       cal_id     text NOT NULL DEFAULT '',
       ord        integer NOT NULL DEFAULT 0
     );
-    CREATE TABLE IF NOT EXISTS work_shifts (
-      user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    CREATE TABLE IF NOT EXISTS work.shifts (
+      user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
       id         text,                -- NULL = key absent (loader keeps id-less rows); NOT unique
       date       text,                -- free text (loader never validates); NULL = key absent
       start_time text NOT NULL DEFAULT '',
@@ -65,9 +68,9 @@ const mapper = {
       wage       numeric NOT NULL DEFAULT 0,
       ord        integer NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS work_shifts_user ON work_shifts (user_id);
-    CREATE TABLE IF NOT EXISTS work_upcoming (
-      user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    CREATE INDEX IF NOT EXISTS work_shifts_user ON work.shifts (user_id);
+    CREATE TABLE IF NOT EXISTS work.upcoming (
+      user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
       id         text,                -- NULL = key absent on every column below
       date       text,
       start_time text,
@@ -76,9 +79,9 @@ const mapper = {
       gcal_id    text,
       ord        integer NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS work_upcoming_user ON work_upcoming (user_id);
-    CREATE TABLE IF NOT EXISTS work_widget_ranges (
-      user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    CREATE INDEX IF NOT EXISTS work_upcoming_user ON work.upcoming (user_id);
+    CREATE TABLE IF NOT EXISTS work.widget_ranges (
+      user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
       widget_id text NOT NULL,
       period    text,                 -- nullable: a null period is loader-valid
       ord       integer NOT NULL DEFAULT 0,
@@ -87,7 +90,7 @@ const mapper = {
   `,
 
   // No FKs between these tables; settings first for readability.
-  tables: ['work_settings', 'work_shifts', 'work_upcoming', 'work_widget_ranges'],
+  tables: ['settings', 'shifts', 'upcoming', 'widget_ranges'],
 
   decompose(state) {
     const wage = Number(state.wage) // loader keeps numeric strings; the column coerces anyway
@@ -95,14 +98,14 @@ const mapper = {
     const upcoming = (Array.isArray(state.upcoming) ? state.upcoming : []).filter(isObj)
     const ranges = isObj(state.ranges) && !Array.isArray(state.ranges) ? state.ranges : {}
     return {
-      work_settings: [{
+      settings: [{
         wage: Number.isFinite(wage) ? wage : 0,
         tips: !!state.tips,
         open_ended: !!state.openEnded,
         address: typeof state.address === 'string' ? state.address : '',
         cal_id: typeof state.calId === 'string' ? state.calId : '',
       }],
-      work_shifts: shifts.map(sh => ({
+      shifts: shifts.map(sh => ({
         id: opt(sh.id),
         date: opt(sh.date),
         start_time: sh.start ?? '',   // '' when logged as a duration (or key absent)
@@ -112,7 +115,7 @@ const mapper = {
         tips: Number(sh.tips) || 0,   // shiftEarned's read
         wage: Number(sh.wage) || 0,   // snapshot at entry — never the current wage
       })),
-      work_upcoming: upcoming.map(sh => ({
+      upcoming: upcoming.map(sh => ({
         id: opt(sh.id),
         date: opt(sh.date),
         start_time: opt(sh.start),
@@ -120,7 +123,7 @@ const mapper = {
         end_mode: opt(sh.endMode),
         gcal_id: opt(sh.gcalId),
       })),
-      work_widget_ranges: Object.entries(ranges).map(([widget_id, period]) => ({
+      widget_ranges: Object.entries(ranges).map(([widget_id, period]) => ({
         widget_id,
         period: opt(period),
       })),
@@ -128,12 +131,12 @@ const mapper = {
   },
 
   recompose(rows) {
-    const st = rows.work_settings[0]
+    const st = rows.settings[0]
     return {
       wage: st.wage,
       tips: st.tips,
       openEnded: st.open_ended,
-      shifts: rows.work_shifts.map(r => {
+      shifts: rows.shifts.map(r => {
         const sh = {}
         put(sh, 'id', r.id)
         put(sh, 'date', r.date)
@@ -144,8 +147,8 @@ const mapper = {
         sh.wage = r.wage
         return sh
       }),
-      ranges: Object.fromEntries(rows.work_widget_ranges.map(r => [r.widget_id, r.period])),
-      upcoming: rows.work_upcoming.map(r => {
+      ranges: Object.fromEntries(rows.widget_ranges.map(r => [r.widget_id, r.period])),
+      upcoming: rows.upcoming.map(r => {
         const sh = {}
         put(sh, 'id', r.id)
         put(sh, 'date', r.date)

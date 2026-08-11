@@ -24,15 +24,17 @@
 import { runPlugin } from '../../lib/runner.js'
 
 const ddl = `
-CREATE TABLE IF NOT EXISTS calendar_prefs (
-  user_id    uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE SCHEMA IF NOT EXISTS calendar;
+
+CREATE TABLE IF NOT EXISTS calendar.prefs (
+  user_id    uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   view       text NOT NULL DEFAULT 'month' CHECK (view IN ('month','week','day')),
   nav_hidden boolean,                     -- NULL = navHidden key absent (never toggled)
   ord        integer NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS calendar_hidden_cals (
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS calendar.hidden_cals (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   cal_id  text NOT NULL,                  -- Google calendar id
   ord     integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, cal_id)           -- safe: decompose dedupes + skips non-strings
@@ -41,28 +43,29 @@ CREATE TABLE IF NOT EXISTS calendar_hidden_cals (
 
 const mapper = {
   name: 'calendar',
+  schema: 'calendar',
   storageKey: 'atlas.calendar.v1',
   ddl,
-  tables: ['calendar_prefs', 'calendar_hidden_cals'],
+  tables: ['prefs', 'hidden_cals'],
 
   decompose(state) {
     const hidden = Array.isArray(state.hiddenCals) ? state.hiddenCals : []
     return {
-      calendar_prefs: [{
+      prefs: [{
         view: ['month', 'week', 'day'].includes(state.view) ? state.view : 'month', // loadCal's rule
         nav_hidden: state.navHidden === undefined ? null : !!state.navHidden,
       }],
       // Dedupe (first wins, order preserved) and skip non-strings: duplicates
       // and dud entries are loader-valid but would violate the PK / NOT NULL.
-      calendar_hidden_cals: [...new Set(hidden.filter(id => typeof id === 'string'))]
+      hidden_cals: [...new Set(hidden.filter(id => typeof id === 'string'))]
         .map(id => ({ cal_id: id })),
     }
   },
 
   recompose(rows) {
-    const p = (rows.calendar_prefs || [])[0] || { view: 'month', nav_hidden: null }
+    const p = (rows.prefs || [])[0] || { view: 'month', nav_hidden: null }
     const s = {
-      hiddenCals: (rows.calendar_hidden_cals || []).map(r => r.cal_id),
+      hiddenCals: (rows.hidden_cals || []).map(r => r.cal_id),
       view: p.view,
     }
     if (p.nav_hidden !== null) s.navHidden = p.nav_hidden
