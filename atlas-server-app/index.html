@@ -25,6 +25,7 @@
   <button data-t="shell" class="on">Terminal</button>
   <button data-t="docker">Docker</button>
   <button data-t="db">Database</button>
+  <button data-t="git">Git</button>
 </nav>
 <main>
   <iframe id="shell" class="on" src="/shell/"></iframe>
@@ -32,6 +33,8 @@
   <!-- pgsql param prefills driver+server; adding username= would make adminer
        attempt a passwordless login and 403 -->
   <iframe id="db" data-src="/db/?pgsql=postgres"></iframe>
+  <!-- trailing slash matters: the board's fetches are relative to /git/ -->
+  <iframe id="git" data-src="/git/"></iframe>
 </main>
 <script>
   // Portainer cannot live under a subpath; :9001 is caddy stripping its

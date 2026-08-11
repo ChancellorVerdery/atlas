@@ -12,6 +12,12 @@
 			header_down -Content-Security-Policy
 		}
 	}
+	# Git board: python stdlib service over the bare mirror at ~/git/atlas.git.
+	# handle_path strips /git, so the page loads at /git/ and its relative
+	# fetches land on /git/api/*. Read-only, and basic_auth above covers it.
+	handle_path /git* {
+		reverse_proxy 127.0.0.1:7682
+	}
 	handle {
 		root * /srv
 		file_server

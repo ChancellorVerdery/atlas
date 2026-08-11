@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas — Git</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3; --dim:#8b949e; --acc:#58a6ff;
+          --add:#3fb950; --del:#f85149; --lane-w:26px; --row-h:56px; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; background:var(--bg); color:var(--fg);
+              font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow:hidden; }
+  body { display:flex; flex-direction:column; }
+
+  header { display:flex; align-items:center; gap:10px; background:var(--panel);
+           border-bottom:1px solid var(--line); padding:8px 12px; flex:none; }
+  header .title { color:var(--dim); font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+  header .grow { flex:1; }
+  button.tool { background:none; border:1px solid var(--line); color:var(--dim); font:inherit;
+                font-size:12px; padding:4px 10px; border-radius:6px; cursor:pointer; }
+  button.tool:hover { color:var(--fg); border-color:var(--acc); }
+  #hint { color:var(--dim); font-size:11.5px; }
+
+  main { flex:1; display:flex; min-height:0; }
+
+  /* Stage: the pannable/zoomable board. Wires (SVG) and cards (HTML) live in
+     one transformed viewport so they can never drift out of alignment. */
+  #stage { flex:1; position:relative; overflow:hidden; cursor:grab; touch-action:none; }
+  #stage.drag { cursor:grabbing; }
+  #viewport { position:absolute; top:0; left:0; transform-origin:0 0; }
+  #wires { position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
+
+  .card { position:absolute; width:360px; background:var(--panel); border:1px solid var(--line);
+          border-radius:8px; padding:7px 11px; cursor:pointer; }
+  .card:hover { border-color:var(--acc); }
+  .card.sel { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc); }
+  .card .top { display:flex; align-items:baseline; gap:8px; }
+  .card .ver { color:var(--acc); font-weight:600; font-size:12.5px; font-family:ui-monospace,Menlo,monospace; }
+  .card .sha { color:var(--dim); font-size:11px; font-family:ui-monospace,Menlo,monospace; margin-left:auto; }
+  .card .subj { margin-top:1px; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card .meta { color:var(--dim); font-size:11px; margin-top:2px; }
+  .ref { display:inline-block; font-size:10px; font-family:ui-monospace,Menlo,monospace;
+         border:1px solid var(--acc); color:var(--acc); border-radius:99px; padding:0 6px; margin-right:4px; }
+  .ref.tag { border-color:var(--add); color:var(--add); }
+
+  #panel { width:460px; flex:none; background:var(--panel); border-left:1px solid var(--line);
+           display:none; flex-direction:column; min-height:0; }
+  #panel.on { display:flex; }
+  #panel .head { padding:12px 14px; border-bottom:1px solid var(--line); flex:none; }
+  #panel .head h2 { font-size:15px; font-weight:600; margin-bottom:4px; }
+  #panel .head .sub { color:var(--dim); font-size:12px; }
+  #panel .body { flex:1; overflow:auto; padding:12px 14px; min-height:0; }
+  #panel .close { float:right; background:none; border:none; color:var(--dim); font-size:18px; cursor:pointer; }
+  .sect { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.07em; margin:14px 0 6px; }
+  .sect:first-child { margin-top:0; }
+  .file { display:flex; gap:8px; font-size:12px; font-family:ui-monospace,Menlo,monospace; padding:2px 0; }
+  .file .p { flex:1; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:left; }
+  .file .a { color:var(--add); } .file .d { color:var(--del); }
+  pre.diff { font:11.5px/1.5 ui-monospace,Menlo,monospace; white-space:pre; overflow-x:auto;
+             background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; }
+  pre.diff .a { color:var(--add); } pre.diff .d { color:var(--del); }
+  pre.diff .h { color:var(--acc); } pre.diff .f { color:var(--dim); }
+  .msg { white-space:pre-wrap; font-size:12.5px; color:var(--dim); }
+  .empty { padding:40px; color:var(--dim); text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">git</span>
+  <button class="tool" id="fit">Fit</button>
+  <button class="tool" id="zin">+</button>
+  <button class="tool" id="zout">−</button>
+  <button class="tool" id="reload">Refresh</button>
+  <span class="grow"></span>
+  <span id="hint">drag to pan · scroll to zoom · click a version for details</span>
+</header>
+<main>
+  <div id="stage"><div id="viewport"><svg id="wires"></svg></div></div>
+  <aside id="panel">
+    <div class="head">
+      <button class="close" id="pclose" title="Close">×</button>
+      <h2 id="ptitle"></h2>
+      <div class="sub" id="psub"></div>
+    </div>
+    <div class="body" id="pbody"></div>
+  </aside>
+</main>
+<script>
+// ROW_H must exceed the rendered card height (~63px: version row + subject +
+// meta + padding) or cards overlap and clip each other's author/date line.
+const LANE_W = 26, ROW_H = 76, PAD = 26, CARD_W = 360;
+const LANE_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7', '#39c5cf'];
+const stage = document.getElementById('stage'), viewport = document.getElementById('viewport');
+const wires = document.getElementById('wires'), panel = document.getElementById('panel');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+let commits = [], selected = null;
+
+// ---- DAG lane assignment ----------------------------------------------------
+// Standard git-graph sweep, newest → oldest. `lanes[i]` holds the sha that lane
+// i is currently waiting to draw; a commit claims the lane reserved by its
+// child, else the first free one. The first parent inherits the lane (so a
+// straight line = the mainline) and extra parents open lanes of their own.
+function layout(list) {
+  const lanes = [];
+  list.forEach((c, row) => {
+    let lane = lanes.indexOf(c.sha);
+    if (lane === -1) {
+      lane = lanes.indexOf(null);
+      if (lane === -1) { lane = lanes.length; lanes.push(null); }
+    }
+    c.lane = lane; c.row = row;
+    // other lanes waiting on this same sha converge here (merge)
+    for (let i = 0; i < lanes.length; i++) if (i !== lane && lanes[i] === c.sha) lanes[i] = null;
+    lanes[lane] = c.parents[0] || null;
+    for (let p = 1; p < c.parents.length; p++) {
+      if (lanes.includes(c.parents[p])) continue;
+      let free = lanes.indexOf(null);
+      if (free === -1) { free = lanes.length; lanes.push(null); }
+      lanes[free] = c.parents[p];
+    }
+  });
+  return Math.max(1, ...list.map((c) => c.lane + 1));
+}
+
+const nodeX = (c) => PAD + c.lane * LANE_W;
+const nodeY = (c) => PAD + c.row * ROW_H;
+
+// ---- render -----------------------------------------------------------------
+function render() {
+  viewport.querySelectorAll('.card').forEach((n) => n.remove());
+  if (!commits.length) {
+    wires.innerHTML = '';
+    stage.insertAdjacentHTML('beforeend', '<p class="empty">No commits yet.</p>');
+    return;
+  }
+  const laneCount = layout(commits);
+  const gutter = PAD + laneCount * LANE_W + 10;
+  const w = gutter + CARD_W + PAD, h = PAD + commits.length * ROW_H + PAD;
+  wires.setAttribute('width', w); wires.setAttribute('height', h);
+  viewport.style.width = w + 'px'; viewport.style.height = h + 'px';
+
+  const byS = new Map(commits.map((c) => [c.sha, c]));
+  let svg = '';
+  for (const c of commits) {
+    for (const ps of c.parents) {
+      const p = byS.get(ps);
+      if (!p) continue; // parent outside the listing (shallow clone)
+      const x1 = nodeX(c), y1 = nodeY(c), x2 = nodeX(p), y2 = nodeY(p);
+      const col = LANE_COLORS[(x1 === x2 ? c.lane : p.lane) % LANE_COLORS.length];
+      // same lane → straight; lane change → S-curve that settles into the
+      // parent's lane, which is what makes a branch read as a branch
+      const d = x1 === x2 ? `M${x1} ${y1} L${x2} ${y2}`
+        : `M${x1} ${y1} C${x1} ${y1 + ROW_H * 0.45} ${x2} ${y2 - ROW_H * 0.45} ${x2} ${y2}`;
+      svg += `<path d="${d}" fill="none" stroke="${col}" stroke-width="2" opacity=".85"/>`;
+    }
+  }
+  for (const c of commits) {
+    const col = LANE_COLORS[c.lane % LANE_COLORS.length];
+    svg += `<circle cx="${nodeX(c)}" cy="${nodeY(c)}" r="5.5" fill="${col}" stroke="#0d1117" stroke-width="2"/>`;
+  }
+  wires.innerHTML = svg;
+
+  const frag = document.createDocumentFragment();
+  for (const c of commits) {
+    const d = new Date(c.date);
+    const refs = c.refs.map((r) => {
+      const tag = r.startsWith('tag:');
+      return `<span class="ref${tag ? ' tag' : ''}">${esc(tag ? r.slice(4).trim() : r.replace('HEAD -> ', ''))}</span>`;
+    }).join('');
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.dataset.sha = c.sha;
+    el.style.left = gutter + 'px';
+    el.style.top = (nodeY(c) - 31) + 'px'; // centre the card on its node
+    el.innerHTML = `<div class="top"><span class="ver">v${c.version}</span>${refs}<span class="sha">${esc(c.short)}</span></div>
+      <div class="subj" title="${esc(c.subject)}">${esc(c.subject)}</div>
+      <div class="meta">${esc(c.author)} · ${d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>`;
+    frag.appendChild(el);
+  }
+  viewport.appendChild(frag);
+}
+
+// ---- pan + zoom -------------------------------------------------------------
+let tx = 0, ty = 0, k = 1;
+const applyT = () => { viewport.style.transform = `translate(${tx}px,${ty}px) scale(${k})`; };
+function zoomAt(cx, cy, factor) {
+  const nk = Math.min(3, Math.max(0.15, k * factor));
+  // keep the point under the cursor fixed while scaling
+  tx = cx - (cx - tx) * (nk / k);
+  ty = cy - (cy - ty) * (nk / k);
+  k = nk; applyT();
+}
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+}, { passive: false });
+
+// Drag starts anywhere — cards cover most of the board, so exempting them
+// would leave a dead zone where panning silently does nothing. A gesture only
+// becomes a pan once it moves past a threshold; below that it's a click, and
+// pointer capture is deferred until then so pointerup still targets the card.
+let drag = null;
+const MOVE_SLOP = 4;
+stage.addEventListener('pointerdown', (e) => {
+  drag = { x: e.clientX - tx, y: e.clientY - ty, sx: e.clientX, sy: e.clientY, moved: false };
+});
+stage.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  if (!drag.moved) {
+    if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) <= MOVE_SLOP) return;
+    drag.moved = true;
+    stage.classList.add('drag');
+    stage.setPointerCapture(e.pointerId);
+  }
+  tx = e.clientX - drag.x; ty = e.clientY - drag.y; applyT();
+});
+const endDrag = () => { drag = null; stage.classList.remove('drag'); };
+stage.addEventListener('pointerup', (e) => {
+  const clicked = drag && !drag.moved;
+  endDrag();
+  if (!clicked) return;
+  const card = e.target.closest('.card');
+  if (card) select(card.dataset.sha);
+});
+stage.addEventListener('pointercancel', endDrag);
+
+function fit() {
+  const r = stage.getBoundingClientRect();
+  const w = parseFloat(viewport.style.width) || 1, h = parseFloat(viewport.style.height) || 1;
+  k = Math.min(1, (r.width - 24) / w, (r.height - 24) / h);
+  tx = 12; ty = 12; applyT();
+}
+document.getElementById('fit').onclick = fit;
+const ctr = () => [stage.clientWidth / 2, stage.clientHeight / 2];
+document.getElementById('zin').onclick = () => zoomAt(...ctr(), 1.25);
+document.getElementById('zout').onclick = () => zoomAt(...ctr(), 1 / 1.25);
+
+// ---- detail panel -----------------------------------------------------------
+function diffHTML(text) {
+  const lines = text.split('\n');
+  const shown = lines.slice(0, 3000);
+  const html = shown.map((l) => {
+    const cls = l.startsWith('+++') || l.startsWith('---') ? 'f'
+      : l.startsWith('+') ? 'a' : l.startsWith('-') ? 'd'
+      : l.startsWith('@@') ? 'h' : l.startsWith('diff ') || l.startsWith('index ') ? 'f' : '';
+    return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);
+  }).join('\n');
+  return `<pre class="diff">${html}</pre>` +
+    (lines.length > shown.length ? `<p class="msg">… ${lines.length - shown.length} more lines</p>` : '');
+}
+
+async function select(sha) {
+  selected = sha;
+  document.querySelectorAll('.card').forEach((n) => n.classList.toggle('sel', n.dataset.sha === sha));
+  panel.classList.add('on');
+  document.getElementById('pbody').innerHTML = '<p class="msg">Loading…</p>';
+  let d;
+  try {
+    const r = await fetch('api/commit?sha=' + encodeURIComponent(sha));
+    d = await r.json();
+    if (d.error) throw new Error(d.error);
+  } catch (e) {
+    document.getElementById('pbody').innerHTML = `<p class="msg">Couldn’t load this commit: ${esc(e.message)}</p>`;
+    return;
+  }
+  const c = commits.find((x) => x.sha === sha);
+  document.getElementById('ptitle').textContent = (c ? `v${c.version} — ` : '') + d.subject;
+  document.getElementById('psub').textContent =
+    `${d.short} · ${d.author} · ${new Date(d.date).toLocaleString()}`;
+  const adds = d.files.reduce((t, f) => t + (f.added || 0), 0);
+  const dels = d.files.reduce((t, f) => t + (f.removed || 0), 0);
+  document.getElementById('pbody').innerHTML =
+    (d.body ? `<div class="sect">Message</div><div class="msg">${esc(d.body)}</div>` : '') +
+    `<div class="sect">${d.files.length} file${d.files.length === 1 ? '' : 's'} changed
+      <span class="a" style="color:var(--add)">+${adds}</span>
+      <span class="d" style="color:var(--del)">−${dels}</span></div>` +
+    d.files.map((f) => `<div class="file"><span class="p">${esc(f.path)}</span>
+      <span class="a">${f.added == null ? 'bin' : '+' + f.added}</span>
+      <span class="d">${f.removed == null ? '' : '−' + f.removed}</span></div>`).join('') +
+    `<div class="sect">Diff</div>` +
+    (d.diff.trim() ? diffHTML(d.diff) : '<p class="msg">No textual diff.</p>') +
+    (d.truncated ? '<p class="msg">Diff truncated — it is very large.</p>' : '');
+}
+// (selection is driven by pointerup above, so a pan never opens a commit)
+document.getElementById('pclose').onclick = () => {
+  panel.classList.remove('on');
+  document.querySelectorAll('.card.sel').forEach((n) => n.classList.remove('sel'));
+};
+
+// ---- boot -------------------------------------------------------------------
+async function load() {
+  stage.querySelectorAll('.empty').forEach((n) => n.remove());
+  try {
+    const r = await fetch('api/log');
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    commits = j.commits;
+  } catch (e) {
+    stage.insertAdjacentHTML('beforeend', `<p class="empty">Couldn’t reach the git service: ${esc(e.message)}</p>`);
+    return;
+  }
+  render();
+  fit();
+  if (selected && commits.some((c) => c.sha === selected)) select(selected);
+}
+document.getElementById('reload').onclick = load;
+load();
+</script>
+</body>
+</html>

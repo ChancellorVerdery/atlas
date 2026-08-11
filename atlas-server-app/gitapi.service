@@ -1,0 +1,18 @@
+[Unit]
+Description=Atlas git board API (console Git tab)
+After=network.target
+
+[Service]
+User=chancellor
+WorkingDirectory=/home/user/stack/gitapi
+ExecStart=/usr/bin/python3 /home/user/stack/gitapi/gitapi.py
+Restart=always
+RestartSec=2
+# Read-only service over a bare repo — no writes, no network egress needed.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
