@@ -34,8 +34,10 @@
 }
 
 # Atlas sync WebSockets — public via cloudflared (sync.myatlasapp.net -> here).
-# No basic_auth: mirrors the old Oracle public caddy; the services gate
-# themselves. Exact paths only — the outbox's internal POST /deliver must
+# No basic_auth: the services behind this block authenticate every request
+# themselves, and the listener is loopback-only behind cloudflared. (This used
+# to justify itself by pointing at the Oracle caddy, which no longer exists —
+# the reason stands on its own.) Exact paths only — the outbox's POST /deliver must
 # never be reachable from outside. Port-only address so any Host header
 # matches (cloudflared forwards Host: sync.myatlasapp.net); bind keeps the
 # listener off the LAN.

@@ -9,9 +9,29 @@ import { fileURLToPath } from 'node:url'
 // https://<host>/<path> from the dev server process — the token stays on
 // this machine and no third-party service is involved. GET only.
 function canvasProxy() {
+  // The host comes from the URL, so it must be allowlisted rather than merely
+  // pattern-matched. Unrestricted, this is an open HTTPS forwarder that carries
+  // a caller-chosen Authorization header — harmless on loopback, but on a
+  // networked host it reaches sibling containers (postgres, adminer, portainer)
+  // and the whole home LAN. Anchored at both ends so
+  // `uncc.instructure.com.attacker.net` cannot pass, and a trailing dot is out.
+  // Two real shapes: Canvas SaaS (<school>.instructure.com) and self-hosted under
+  // the school's own domain. The live setting here is instructure.charlotte.edu,
+  // which a bare *.instructure.com rule rejects outright — checked against the
+  // stored host before writing this, rather than assuming the SaaS form.
+  const HOST_OK = [
+    /^[a-z0-9][a-z0-9-]*\.instructure\.com$/,
+    /^instructure\.[a-z0-9][a-z0-9-]*\.edu$/,
+  ]
+  const EXTRA_HOSTS = new Set((process.env.CANVAS_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
+  const allowedHost = (h) => {
+    const host = String(h).toLowerCase()
+    return HOST_OK.some((re) => re.test(host)) || EXTRA_HOSTS.has(host)
+  }
   const handler = async (req, res) => {
     const m = req.url.match(/^\/([a-zA-Z0-9.-]+)(\/.*)$/)
     if (!m || req.method !== 'GET') { res.statusCode = 400; res.end('bad canvas-proxy request'); return }
+    if (!allowedHost(m[1])) { res.statusCode = 403; res.end('canvas-proxy: host not allowed'); return }
     try {
       const r = await fetch(`https://${m[1]}${m[2]}`, {
         headers: req.headers.authorization ? { Authorization: req.headers.authorization } : {},
@@ -161,12 +181,12 @@ function graphApi() {
 // that keeps the secret off the wire to plaid.com's CORS-less API.
 function plaidApi() {
   const BASE = { sandbox: 'https://sandbox.plaid.com', production: 'https://production.plaid.com' }
-  const readBody = (req) => new Promise((resolve, reject) => {
-    let data = ''
-    req.on('data', (c) => { data += c })
-    req.on('end', () => { try { resolve(data ? JSON.parse(data) : {}) } catch (e) { reject(e) } })
-    req.on('error', reject)
-  })
+  // Uses the shared, size-capped readBody below rather than a private copy.
+  // There were two functions of this name in this file and the local one — which
+  // won here — accumulated the body with no limit at all: an unbounded-memory
+  // POST sink the moment this handler is reachable from anywhere but loopback.
+  // 1MB is generous; the largest legitimate Plaid body is a token and a cursor.
+  const PLAID_BODY_CAP = 1e6
   async function plaid(env, path, body) {
     const r = await fetch(`${BASE[env] || BASE.sandbox}${path}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -180,7 +200,7 @@ function plaidApi() {
     const json = (code, obj) => { res.statusCode = code; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(obj)) }
     if (req.method !== 'POST') return json(405, { error: 'POST only' })
     let body
-    try { body = await readBody(req) } catch { return json(400, { error: 'bad request body' }) }
+    try { body = await readBody(req, PLAID_BODY_CAP) } catch { return json(400, { error: 'bad request body' }) }
     const { client_id, secret, env } = body
     if (!client_id || !secret) return json(400, { error: 'missing client_id/secret' })
     const base = { client_id, secret }
@@ -311,6 +331,12 @@ function writeUploads(tmp, files) {
 
 // Run a headless claude job that must return schema-shaped JSON. Model pinned
 // (Sonnet 5) so results don't drift with the user's Claude Code default.
+// askClaude defaults to no extra args, which means the CLI's DEFAULT tool set.
+// /chat and /judge run with uploaded course documents in context, so the model
+// is reading attacker-influenceable text — pin it to Read and nothing else
+// rather than inheriting whatever the CLI enables.
+const READ_ONLY_TOOLS = ['--allowedTools', 'Read']
+
 async function askClaude(prompt, schema, extra = []) {
   const args = ['-p', prompt, '--output-format', 'json', '--json-schema', schema, '--model', 'claude-sonnet-5', '--effort', 'medium', ...extra]
   let res
@@ -1035,12 +1061,12 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
       if (u.pathname === '/extract') return json(200, enqueue(body))
       if (u.pathname === '/chat') {
         const transcript = (Array.isArray(body.transcript) ? body.transcript : []).slice(-30)
-        return json(200, await askClaude(chatPrompt({ ...body, transcript }).filter(Boolean).join('\n\n'), SCHEMAS.chat))
+        return json(200, await askClaude(chatPrompt({ ...body, transcript }).filter(Boolean).join('\n\n'), SCHEMAS.chat, READ_ONLY_TOOLS))
       }
       if (u.pathname === '/judge') {
         const items = (Array.isArray(body.items) ? body.items : []).slice(0, 20)
         if (!items.length) throw fail(400, 'no items to judge')
-        return json(200, await askClaude(judgePrompt(items).filter(Boolean).join('\n\n'), SCHEMAS.judge))
+        return json(200, await askClaude(judgePrompt(items).filter(Boolean).join('\n\n'), SCHEMAS.judge, READ_ONLY_TOOLS))
       }
       json(404, { error: 'unknown study-api endpoint' })
     } catch (err) {

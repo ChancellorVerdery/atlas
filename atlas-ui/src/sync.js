@@ -5,9 +5,11 @@
 
 // Direct HTTPS to the backend on the Atlas server (cloudflared terminates TLS,
 // host caddy routes to the WS services); set localStorage 'atlas.backend' to
-// override — e.g. the old Oracle door {"inbox":"wss://150-230-179-46.sslip.io/inbox",
-// "outbox":"wss://150-230-179-46.sslip.io/outbox"} or an SSH-tunnel fallback
-// ({"inbox":"ws://localhost:8100","outbox":"ws://localhost:8101"}).
+// override. The useful override is an SSH-tunnel fallback for when the public
+// door is down — {"inbox":"ws://localhost:8100","outbox":"ws://localhost:8101"},
+// matching the loopback ports atlas-backend/docker-compose.yml publishes.
+// A stale override silently sends every device to a dead endpoint, so clear it
+// rather than leaving one set.
 const DEFAULTS = {
   inbox: 'wss://sync.myatlasapp.net/inbox',
   outbox: 'wss://sync.myatlasapp.net/outbox',
