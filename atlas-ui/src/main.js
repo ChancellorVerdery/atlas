@@ -9,6 +9,12 @@ import logoUrl from './assets/atlas-logo.svg'
 
 const AUTH_KEY = 'atlas.auth.v1'
 const SKIP_KEYS = [AUTH_KEY, 'atlas.devMode', 'atlas.backend']
+// Which account the Atlas data cached in this browser belongs to. Deliberately
+// NOT an 'atlas.' key: sync's pushKey, the import map, and the backup export
+// all filter on that prefix, so this stays device-local by construction — and
+// unlike AUTH_KEY it survives logout, which is when it has to answer "is the
+// cache sitting here still yours?".
+const LAST_USER_KEY = 'atlasLastUser'
 
 // Captured before the hook wraps setItem: writes through this never sync.
 const origSetItem = localStorage.setItem.bind(localStorage)
@@ -60,6 +66,26 @@ async function bootApp() {
 
 const localAtlasKeys = () =>
   Object.keys(localStorage).filter((k) => k.startsWith('atlas.') && !SKIP_KEYS.includes(k))
+
+// The server owns a profile; localStorage is only this device's cache of it.
+// That cache is per-account, so opening a DIFFERENT account here must not
+// inherit the previous one's keys — they would render as the new account's
+// data, and the write hook would then upload them into it.
+//
+// No record = a browser from before this shipped, so assume the cache is the
+// current user's: wiping on a guess would destroy local data that was never
+// pushed (offline edits, a pre-sync profile). Same user is always a merge for
+// the same reason — the server returns null both for "never saved" and for
+// "plugin service unreachable" (backend lib/runner.js), so absence there can
+// never be read as a deletion.
+// ponytail: identity check only. Genuine per-key deletions still don't sync —
+// the wire has no delete op, only page.save upserts; add one if it bites.
+const isForeignAccount = (userId) => {
+  const prev = localStorage.getItem(LAST_USER_KEY)
+  return !!(prev && userId && prev !== userId)
+}
+const rememberAccount = (userId) => { if (userId) localStorage.setItem(LAST_USER_KEY, userId) }
+const clearLocalAtlas = () => { for (const k of localAtlasKeys()) localStorage.removeItem(k) }
 
 // ---- login view ------------------------------------------------------------
 
@@ -136,7 +162,7 @@ function renderLogin({ warning } = {}) {
         email: data.email || email,
       }))
       await sync.connect({ token: data.token }) // opens the outbox socket
-      await postLoginHydrate(gate, mode === 'signup')
+      await postLoginHydrate(gate, mode === 'signup', data.userId)
     } catch (err) {
       setError(err?.message || 'Sign in failed.')
       setBusy(false)
@@ -147,15 +173,23 @@ function renderLogin({ warning } = {}) {
 // After a fresh login: empty profile + existing local data → offer an import;
 // otherwise adopt the server's states. `isNewAccount` is true only for signup,
 // and decides whether this profile starts with no plugins enabled.
-async function postLoginHydrate(gate, isNewAccount) {
+async function postLoginHydrate(gate, isNewAccount, userId) {
   const states = await sync.pullAll()
   const serverEmpty = Object.values(states || {}).every((v) => v == null)
-  const localKeys = localAtlasKeys()
+  const foreign = isForeignAccount(userId)
+  const localKeys = foreign ? [] : localAtlasKeys()
 
+  // Only ever offer to carry up data this browser holds on the current user's
+  // behalf. Another account's cache isn't theirs to import, so it's dropped
+  // rather than offered — otherwise the prompt reads as "upload someone else's
+  // profile into yours?".
   if (serverEmpty && localKeys.length) {
-    await renderImportCard(gate, localKeys, isNewAccount)
+    rememberAccount(userId)
+    await renderImportCard(gate, localKeys)
     return
   }
+  if (foreign) clearLocalAtlas()
+  rememberAccount(userId)
   applyStates(states)
   installHook()
   // After the hook, so the empty registry syncs to this account's other devices.
@@ -163,7 +197,7 @@ async function postLoginHydrate(gate, isNewAccount) {
   await bootApp()
 }
 
-function renderImportCard(gate, localKeys, isNewAccount) {
+function renderImportCard(gate, localKeys) {
   return new Promise((resolve) => {
     const card = gate.querySelector('.auth-card')
     card.innerHTML = `
@@ -180,12 +214,21 @@ function renderImportCard(gate, localKeys, isNewAccount) {
     // seedFresh=false on "Import everything": the user is carrying a whole
     // pre-plugin profile across, so the legacy migration should light up the
     // plugins that own the data they just imported — otherwise it would all
-    // land invisible. "Start fresh" takes the empty registry.
+    // land invisible. Nothing is cleared there: the local keys were just
+    // uploaded, so the cache already matches the server.
     const finish = async (seedFresh) => {
       installHook()
       if (seedFresh) seedFreshPluginState()
       await bootApp()
       resolve()
+    }
+
+    // "Start fresh" has to mean it. The server holds nothing for this account,
+    // so the cache must match: left in place, the old profile stays live here
+    // and the write hook uploads it into the account on the next edit.
+    const startFresh = async () => {
+      clearLocalAtlas()
+      await finish(true)
     }
 
     importBtn.addEventListener('click', async () => {
@@ -209,7 +252,7 @@ function renderImportCard(gate, localKeys, isNewAccount) {
       }
     })
 
-    freshBtn.addEventListener('click', () => finish(isNewAccount))
+    freshBtn.addEventListener('click', startFresh)
   })
 }
 
@@ -223,6 +266,11 @@ if (auth?.offline) {
   try {
     const res = await withTimeout(sync.connect({ token: auth.token }))
     if (res?.ok) {
+      const userId = res.userId || auth.userId
+      // Resuming a session, so a mismatch means a stale cache from whoever used
+      // this browser before — drop it before the pull rather than merging it in.
+      if (isForeignAccount(userId)) clearLocalAtlas()
+      rememberAccount(userId)
       applyStates(await sync.pullAll())
       installHook()
       await bootApp()
