@@ -1,0 +1,315 @@
+{
+ "v": 1,
+ "plan": {
+  "type": "cycle",
+  "weekly": {
+   "mon": null,
+   "tue": null,
+   "wed": null,
+   "thu": null,
+   "fri": null,
+   "sat": null,
+   "sun": null
+  },
+  "cycle": {
+   "order": [
+    "gw-import1",
+    "gw-import2",
+    "gw-import3",
+    "gw-import4",
+    "gw-import5",
+    "gw-import6",
+    "gw-import7"
+   ],
+   "position": 0
+  }
+ },
+ "workouts": [
+  {
+   "id": "gw-import1",
+   "name": "Chest & Back A"
+  },
+  {
+   "id": "gw-import2",
+   "name": "Quads & Hamstrings"
+  },
+  {
+   "id": "gw-import3",
+   "name": "Shoulders, Traps, Calves, & Abs"
+  },
+  {
+   "id": "gw-import4",
+   "name": "Rest Day",
+   "rest": true,
+   "flex": true
+  },
+  {
+   "id": "gw-import5",
+   "name": "Chest & Back B"
+  },
+  {
+   "id": "gw-import6",
+   "name": "Triceps, Biceps, & Side Delts"
+  },
+  {
+   "id": "gw-import7",
+   "name": "Glutes, Forearms, Calves, & Abs"
+  }
+ ],
+ "exercises": [
+  {
+   "id": "ge-import1",
+   "workoutId": "gw-import1",
+   "name": "Incline Dumbbell Press",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import2",
+   "workoutId": "gw-import1",
+   "name": "Chest Supported Dumbbell Row",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import3",
+   "workoutId": "gw-import1",
+   "name": "Machine Chest Press",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import4",
+   "workoutId": "gw-import1",
+   "name": "Lat Pulldowns",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import5",
+   "workoutId": "gw-import1",
+   "name": "Cable Fly",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import6",
+   "workoutId": "gw-import1",
+   "name": "Single Arm Cable Row",
+   "unilateral": true,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import7",
+   "workoutId": "gw-import2",
+   "name": "Barbell Squats",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import8",
+   "workoutId": "gw-import2",
+   "name": "Romanian Deadlifts",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import9",
+   "workoutId": "gw-import2",
+   "name": "Leg Press",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import10",
+   "workoutId": "gw-import2",
+   "name": "Seated Leg Curl",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import11",
+   "workoutId": "gw-import2",
+   "name": "Leg Extension",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import12",
+   "workoutId": "gw-import2",
+   "name": "Lying Leg Curl",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import13",
+   "workoutId": "gw-import3",
+   "name": "Seated Overhead Press",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import14",
+   "workoutId": "gw-import3",
+   "name": "Dumbbell Shrug",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import15",
+   "workoutId": "gw-import3",
+   "name": "Cable Lateral Raises",
+   "unilateral": false,
+   "target": "3\u00d715"
+  },
+  {
+   "id": "ge-import16",
+   "workoutId": "gw-import3",
+   "name": "Reverse Pec Deck",
+   "unilateral": false,
+   "target": "3\u00d715"
+  },
+  {
+   "id": "ge-import17",
+   "workoutId": "gw-import3",
+   "name": "Seated Calf Raise",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import18",
+   "workoutId": "gw-import3",
+   "name": "Abductor Crunch Machine",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import19",
+   "workoutId": "gw-import5",
+   "name": "Incline Dumbbell Press",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import20",
+   "workoutId": "gw-import5",
+   "name": "Pull Ups",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import21",
+   "workoutId": "gw-import5",
+   "name": "Machine Chest Press",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import22",
+   "workoutId": "gw-import5",
+   "name": "Barbell Row",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import23",
+   "workoutId": "gw-import5",
+   "name": "Pec Deck",
+   "unilateral": false,
+   "target": "2\u00d712"
+  },
+  {
+   "id": "ge-import24",
+   "workoutId": "gw-import5",
+   "name": "Straight Arm Pulldown",
+   "unilateral": false,
+   "target": "2\u00d712"
+  },
+  {
+   "id": "ge-import25",
+   "workoutId": "gw-import6",
+   "name": "Hammer Curls",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import26",
+   "workoutId": "gw-import6",
+   "name": "Overhead Cable Tricep Extension",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import27",
+   "workoutId": "gw-import6",
+   "name": "Incline Dumbbell Curl",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import28",
+   "workoutId": "gw-import6",
+   "name": "Tricep Pushdown",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import29",
+   "workoutId": "gw-import6",
+   "name": "Straight Bar Preacher Curl",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import30",
+   "workoutId": "gw-import6",
+   "name": "Dumbbell Lateral Raises",
+   "unilateral": false,
+   "target": "3\u00d712"
+  },
+  {
+   "id": "ge-import31",
+   "workoutId": "gw-import7",
+   "name": "Standing Calf Raise",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import32",
+   "workoutId": "gw-import7",
+   "name": "Barbell Hip Thrust",
+   "unilateral": false,
+   "target": "3\u00d78"
+  },
+  {
+   "id": "ge-import33",
+   "workoutId": "gw-import7",
+   "name": "Wrist Extensions",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import34",
+   "workoutId": "gw-import7",
+   "name": "Glute-biased Bulgarian Split Squat",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import35",
+   "workoutId": "gw-import7",
+   "name": "Forearm Curl",
+   "unilateral": false,
+   "target": "3\u00d710"
+  },
+  {
+   "id": "ge-import36",
+   "workoutId": "gw-import7",
+   "name": "Leg Raises",
+   "unilateral": false,
+   "target": "3\u00d712"
+  }
+ ],
+ "logs": [],
+ "completions": []
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=web terminal (claude code)
+After=network.target
+
+[Service]
+User=chancellor
+WorkingDirectory=/home/user
+Environment=TERM=xterm-256color
+ExecStart=/usr/local/bin/ttyd -p 7682 -i 127.0.0.1 -b /claude -W /home/user/.local/bin/claude
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=web terminal (shell)
+After=network.target
+
+[Service]
+User=chancellor
+WorkingDirectory=/home/user
+Environment=TERM=xterm-256color
+# tmux new -A: attach the persistent "console" session, create on first use —
+# the shell survives disconnects and is the same session from every device
+ExecStart=/usr/local/bin/ttyd -p 7681 -i 127.0.0.1 -b /shell -W tmux new-session -A -s console
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

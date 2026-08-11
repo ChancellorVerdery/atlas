@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-page="dashboard">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" type="image/svg+xml" href="/src/assets/atlas-logo.svg" />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand__mark">
+            <img class="brand__img" src="/src/assets/atlas-logo.svg" alt="Atlas" />
+          </span>
+          <span class="brand__text">
+            <span class="brand__name">Atlas</span>
+          </span>
+        </div>
+
+        <nav class="nav" id="nav" aria-label="Primary"></nav>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar__lead">
+            <p class="crumb" id="crumb">Atlas / Dashboard</p>
+            <h1 class="title" id="title">Dashboard</h1>
+            <nav id="page-tabs" class="page-tabs"></nav>
+          </div>
+          <div class="topbar__actions">
+            <button type="button" id="customize" class="action-btn" data-act="customize">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="4" y1="8" x2="20" y2="8" />
+                <line x1="4" y1="16" x2="20" y2="16" />
+                <circle cx="10" cy="8" r="2.2" />
+                <circle cx="15" cy="16" r="2.2" />
+              </svg>
+              <span>Customize</span>
+            </button>
+          </div>
+        </header>
+        <section class="content" id="content"></section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

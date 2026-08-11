@@ -1,0 +1,145 @@
+/* Atlas auth gate — reuses the observatory theme tokens from styles.css. */
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(120% 80% at -10% -12%, rgba(224, 177, 92, 0.10), transparent 45%),
+    radial-gradient(90% 70% at 112% -5%, rgba(116, 214, 196, 0.05), transparent 50%),
+    radial-gradient(circle at 1px 1px, rgba(202, 214, 242, 0.05) 1px, transparent 0) 0 0 / 26px 26px,
+    var(--bg);
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(360px, 100%);
+  padding: 34px 32px 26px;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+  animation: rise 0.5s both ease-out;
+}
+
+.auth-card__logo {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  box-shadow: 0 8px 22px -10px rgba(58, 123, 213, 0.65), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+.auth-card__name {
+  margin: 14px 0 4px;
+  font-family: "Instrument Serif", serif;
+  font-weight: 400;
+  font-size: 32px;
+  line-height: 1;
+  color: var(--ink);
+}
+.auth-card__tag {
+  margin: 0 0 20px;
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
+  color: var(--ink-dim);
+}
+
+.auth-warn {
+  margin: 0 0 16px;
+  padding: 9px 12px;
+  border: 1px solid rgba(224, 177, 92, 0.4);
+  border-radius: 10px;
+  background: rgba(224, 177, 92, 0.08);
+  color: var(--brass);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.auth-form { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.auth-label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.auth-input {
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: rgba(202, 214, 242, 0.03);
+  color: var(--ink);
+  font-family: "Hanken Grotesk", system-ui, sans-serif;
+  font-size: 14px;
+}
+.auth-input:focus { outline: none; border-color: var(--brass); }
+
+.auth-error {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #e07a6c;
+}
+
+.auth-submit {
+  margin-top: 4px;
+  padding: 11px 18px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--brass), var(--brass-deep));
+  color: #1c1305;
+  font-family: "Hanken Grotesk", system-ui, sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+.auth-submit:hover:not(:disabled) { filter: brightness(1.08); }
+.auth-submit:disabled { opacity: 0.55; cursor: default; }
+.auth-submit.is-busy { animation: auth-pulse 1.2s ease-in-out infinite; }
+@keyframes auth-pulse { 50% { opacity: 0.75; } }
+
+.auth-toggle {
+  padding: 7px;
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: "Hanken Grotesk", system-ui, sans-serif;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.auth-toggle:hover:not(:disabled) { color: var(--brass); }
+.auth-toggle:disabled { opacity: 0.5; cursor: default; }
+
+.auth-offline {
+  margin-top: 18px;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.auth-offline:hover { color: var(--ink); }
+.auth-offline--loud {
+  padding: 8px 16px;
+  border: 1px solid rgba(224, 177, 92, 0.5);
+  border-radius: 10px;
+  background: rgba(224, 177, 92, 0.1);
+  color: var(--brass);
+}
+.auth-offline--loud:hover { color: var(--brass); background: rgba(224, 177, 92, 0.18); }

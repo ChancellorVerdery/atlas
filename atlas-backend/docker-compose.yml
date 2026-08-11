@@ -1,0 +1,81 @@
+# Atlas backend. Joins the existing ~/stack network to reach its Postgres.
+# Only inbox/outbox publish ports, and only on 127.0.0.1 — reachable solely
+# through an SSH tunnel, same rule as the rest of the stack.
+#
+# Deploy: grep ^POSTGRES_PASSWORD ~/stack/.env | cut -d= -f2- > .pgpass
+#         chmod 600 .pgpass && sudo docker compose up -d --build
+#
+# The password is bind-mounted as a raw file: compose interpolates ${...} in
+# both the yml AND env_file values (v2.24+), mangling passwords containing $.
+
+x-svc: &svc
+  build: .
+  image: atlas-backend
+  restart: unless-stopped
+  environment:
+    PGHOST: postgres
+    PGUSER: atlas_user
+    PGDATABASE: atlas
+  volumes:
+    - ./.pgpass:/run/pgpass:ro
+  networks: [stack]
+
+services:
+  # No caddy container here anymore: on the Atlas server the public door is
+  # wss://sync.myatlasapp.net/{inbox,outbox} — cloudflared terminates TLS and
+  # the host stack caddy (127.0.0.1:8090 site) routes to the loopback ports.
+  atlas-inbox:
+    <<: *svc
+    command: node services/inbox.js
+    ports: ["127.0.0.1:8100:80"] # tunnel fallback
+  atlas-outbox:
+    <<: *svc
+    command: node services/outbox.js
+    ports: ["127.0.0.1:8101:80"] # tunnel fallback
+  atlas-auth:
+    <<: *svc
+    command: node services/auth.js
+  atlas-profile:
+    <<: *svc
+    command: node services/profile.js
+  atlas-google:
+    <<: *svc
+    command: node services/google.js
+    # Google OAuth client id + secret live only here. .google.env is created at
+    # deploy (chmod 600); passed raw so a secret containing $ is never mangled.
+    env_file: .google.env
+  atlas-gym:
+    <<: *svc
+    command: node services/plugins/gym.js
+  atlas-course:
+    <<: *svc
+    command: node services/plugins/course.js
+  atlas-finance:
+    <<: *svc
+    command: node services/plugins/finance.js
+  atlas-calendar:
+    <<: *svc
+    command: node services/plugins/calendar.js
+  atlas-canvas:
+    <<: *svc
+    command: node services/plugins/canvas.js
+  atlas-email:
+    <<: *svc
+    command: node services/plugins/email.js
+  atlas-graph:
+    <<: *svc
+    command: node services/plugins/graph.js
+  atlas-ladder:
+    <<: *svc
+    command: node services/plugins/ladder.js
+  atlas-sleep:
+    <<: *svc
+    command: node services/plugins/sleep.js
+  atlas-work:
+    <<: *svc
+    command: node services/plugins/work.js
+
+networks:
+  stack:
+    name: stack_default
+    external: true

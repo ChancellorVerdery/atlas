@@ -1,0 +1,24 @@
+{
+  "name": "atlas-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Atlas control UI — Vite",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1",
+    "vite": "^8.1.0"
+  },
+  "dependencies": {
+    "@cortex-js/compute-engine": "^0.96.0",
+    "3d-force-graph": "^1.80.0",
+    "force-graph": "^1.51.4",
+    "marked": "^18.0.5",
+    "mathlive": "^0.110.0",
+    "vis-network": "^9.1.6"
+  }
+}

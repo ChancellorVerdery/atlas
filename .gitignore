@@ -1,0 +1,24 @@
+# Atlas monorepo — atlas-ui, atlas-backend, notes-ink, server console app.
+
+# Dependencies + build output (restorable from package-lock / a build)
+node_modules/
+dist/
+dist-app/
+
+# QA screenshot baselines: 81 MB of PNGs. Regenerate with tmp-e2e/_qa-baseline.mjs
+# rather than carry them in every clone. Test SCRIPTS (*.mjs) are tracked.
+atlas-ui/tmp-e2e/_qa/
+atlas-ui/tmp-e2e/**/*.png
+
+# Secrets never belong here — the real ones live only on the servers
+# (~/atlas-backend/.google.env, ~/stack/.env, ~/.app-password, ~/.pgpass).
+# These rules are belt-and-braces in case one is ever copied down.
+.env
+.env.*
+*.pgpass
+.google.env
+*.pem
+*.key
+.app-password
+
+.DS_Store

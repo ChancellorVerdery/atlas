@@ -1,0 +1,6 @@
+node_modules
+dist
+.DS_Store
+
+# packaged desktop app (build artifact)
+dist-app/

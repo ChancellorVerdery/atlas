@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2535"/>
+      <stop offset="1" stop-color="#0b0f16"/>
+    </linearGradient>
+    <linearGradient id="brass" gradientUnits="userSpaceOnUse" x1="512" y1="200" x2="512" y2="824">
+      <stop offset="0" stop-color="#f0cd85"/>
+      <stop offset="0.55" stop-color="#e0b15c"/>
+      <stop offset="1" stop-color="#b9863a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#e0b15c" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#e0b15c" stop-opacity="0"/>
+    </radialGradient>
+    <!-- compass ray, centred on the origin: long cardinal point -->
+    <path id="ray" d="M 0 -400 57.6 -57.6 400 0 57.6 57.6 0 400 -57.6 57.6 -400 0 -57.6 -57.6 Z"/>
+  </defs>
+
+  <!-- macOS-style rounded square -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#glow)"/>
+  <rect x="66.5" y="66.5" width="891" height="891" rx="198" fill="none"
+        stroke="#ffffff" stroke-opacity="0.06" stroke-width="5"/>
+
+  <!-- windrose: concentric bezels + four-point compass star -->
+  <g transform="translate(512 512)" fill="none" stroke="url(#brass)" stroke-linejoin="round">
+    <circle r="312" stroke-width="9" opacity="0.30"/>
+    <circle r="232" stroke-width="7" opacity="0.20"/>
+
+    <!-- ordinal star (NE/SE/SW/NW), set behind and dimmer -->
+    <use href="#ray" transform="rotate(45) scale(0.60)"
+         fill="url(#brass)" fill-opacity="0.45" stroke="#b9863a" stroke-width="6"/>
+    <!-- cardinal star (N/E/S/W) -->
+    <use href="#ray"
+         fill="url(#brass)" fill-opacity="0.95" stroke="#8a6328" stroke-width="6"/>
+
+    <!-- hub -->
+    <circle r="58" fill="#101723" stroke="url(#brass)" stroke-width="11"/>
+    <circle r="20" fill="url(#brass)" stroke="none"/>
+  </g>
+</svg>

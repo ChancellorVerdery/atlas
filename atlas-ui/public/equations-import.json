@@ -1,0 +1,91 @@
+{
+  "title": "Physics II formula sheet",
+  "anchor": "physic",
+  "sections": [
+    { "title": "Constants", "items": [
+      { "name": "Coulomb constant", "latex": "K = 9.00 \\times 10^9\\ \\mathrm{Nm^2/C^2}" },
+      { "name": "Permittivity of free space", "latex": "\\epsilon_0 = 8.85 \\times 10^{-12}\\ \\frac{\\mathrm{C^2}}{\\mathrm{Nm^2}}" },
+      { "name": "Elementary charge", "latex": "q = 1.60 \\times 10^{-19}\\ \\mathrm{C}" },
+      { "name": "Permeability of free space", "latex": "\\mu_0 = 4\\pi \\times 10^{-7}\\ \\frac{\\mathrm{Tm}}{\\mathrm{A}}" }
+    ] },
+    { "title": "Coulomb’s law & electric field", "items": [
+      { "name": "Coulomb’s law", "latex": "F = K\\frac{|q_1||q_2|}{r^2}" },
+      { "name": "Force on a charge", "latex": "\\vec{F} = q\\vec{E}" }
+    ] },
+    { "title": "Electric dipoles", "items": [
+      { "name": "Dipole moment", "latex": "\\vec{p} = q\\vec{d}" },
+      { "name": "Energy in a field", "latex": "U = -\\vec{p} \\cdot \\vec{E}" },
+      { "name": "Torque in a field", "latex": "\\vec{\\tau} = \\vec{p} \\times \\vec{E}" }
+    ] },
+    { "title": "Electric flux & Gauss’s law", "items": [
+      { "name": "Flux, uniform field", "latex": "\\Phi_e = \\vec{E} \\cdot \\vec{A}" },
+      { "name": "Gauss’s law", "latex": "\\Phi_e = \\oint \\vec{E} \\cdot d\\vec{A} = \\frac{Q_{\\text{in}}}{\\epsilon_0}" }
+    ] },
+    { "title": "Electric potential & energy", "items": [
+      { "name": "Potential of point charges", "latex": "V(r) = K\\sum_i \\frac{q_i}{r_i}" },
+      { "name": "Energy of a charge", "latex": "U = qV" },
+      { "name": "Uniform field", "latex": "V = Ed" },
+      { "name": "Energy of a configuration", "latex": "U = \\Sigma_{i<j}\\frac{Kq_iq_j}{r_{ij}}\\ \\text{or}\\ U = \\sum_{i=1}^{N} q_i K \\sum_{j<i}\\frac{q_j}{r_{ij}}" }
+    ] },
+    { "title": "Capacitance", "items": [
+      { "name": "Definition", "latex": "C = \\frac{Q}{V}" },
+      { "name": "Parallel plate, dielectric", "latex": "C = \\epsilon\\,\\frac{A}{d},\\ \\epsilon = \\kappa\\epsilon_0" },
+      { "name": "Dielectric constant", "latex": "C = \\kappa C_0,\\ C_0 = \\epsilon_0\\frac{A}{d}" },
+      { "name": "Stored energy", "latex": "U = \\frac{Q^2}{2C} = \\frac{CV^2}{2} = \\frac{QV}{2}" },
+      { "name": "Series or parallel", "latex": "\\frac{1}{C_{eq}} = \\frac{1}{C_1} + \\frac{1}{C_2} + \\frac{1}{C_3}\\ \\text{or}\\ C_{eq} = C_1 + C_2 + C_3" }
+    ] },
+    { "title": "Current, resistance & power", "items": [
+      { "name": "Current", "latex": "I = \\frac{dq}{dt}" },
+      { "name": "Ohm’s law", "latex": "I = \\frac{V}{R}\\ \\text{or}\\ I = \\frac{\\varepsilon}{R}" },
+      { "name": "Resistance of a wire", "latex": "R = \\rho\\frac{L}{A}" },
+      { "name": "Power", "latex": "P = IV = I^2R" },
+      { "name": "Kilowatt-hour", "latex": "1\\ \\mathrm{kWh} = 3{,}600{,}000\\ \\mathrm{J}" }
+    ] },
+    { "title": "Circuit rules", "items": [
+      { "name": "Series or parallel", "latex": "R_{eq} = R_1 + R_2 + R_3\\ \\text{or}\\ \\frac{1}{R_{eq}} = \\frac{1}{R_1} + \\frac{1}{R_2} + \\frac{1}{R_3}" },
+      { "name": "Junction rule", "latex": "\\Sigma I_{(at\\ a\\ junction)} = 0\\ \\text{or}\\ \\Sigma I_{in} = \\Sigma I_{out}" },
+      { "name": "Loop rule", "latex": "\\Sigma V_{(in\\ a\\ loop)} = 0" }
+    ] },
+    { "title": "Magnetic force & torque", "items": [
+      { "name": "Force on a moving charge", "latex": "\\vec{F} = q\\vec{v} \\times \\vec{B}" },
+      { "name": "Force on a current", "latex": "\\vec{F} = I(\\vec{l} \\times \\vec{B})" },
+      { "name": "Torque on a magnetic dipole", "latex": "\\vec{\\tau} = \\vec{\\mu} \\times \\vec{B}" }
+    ] },
+    { "title": "Magnetic fields from currents", "items": [
+      { "name": "Biot–Savart law", "latex": "\\vec{B} = \\frac{\\mu_0}{4\\pi}\\frac{q\\vec{v} \\times \\hat{r}}{r^2}" },
+      { "name": "Ampère’s law", "latex": "\\oint \\vec{B} \\cdot d\\vec{l} = \\mu_0 I_{\\text{enclosed}}" },
+      { "name": "Long straight wire", "latex": "B = \\frac{\\mu_0 I}{2\\pi x}" }
+    ] },
+    { "title": "Induction & inductance", "items": [
+      { "name": "Magnetic flux", "latex": "\\Phi_m = \\vec{B} \\cdot \\vec{A} = BA\\cos\\theta" },
+      { "name": "Faraday’s law", "latex": "\\mathcal{E} = -\\frac{d\\Phi_m}{dt}" },
+      { "name": "Inductance", "latex": "L = \\frac{N\\Phi_m}{i}" },
+      { "name": "Induced emf", "latex": "\\mathcal{E}_L = -L\\frac{di}{dt}" },
+      { "name": "Energy stored", "latex": "U = \\frac{1}{2}Li^2" }
+    ] },
+    { "title": "Capacitor charging", "items": [
+      { "name": "Time constant", "latex": "\\tau_c = RC" },
+      { "name": "Charge", "latex": "Q(t) = Q_{\\text{final}}\\left(1 - e^{-\\frac{t}{\\tau_c}}\\right)" },
+      { "name": "Current", "latex": "i(t) = I_{\\text{initial}}e^{-\\frac{t}{\\tau_c}}" },
+      { "name": "Resistor voltage", "latex": "v_R(t) = Ve^{-\\frac{t}{\\tau_c}}" },
+      { "name": "Capacitor voltage", "latex": "v_c(t) = V(1 - e^{-\\frac{t}{\\tau_c}})" }
+    ] },
+    { "title": "Capacitor discharging", "items": [
+      { "name": "Charge", "latex": "Q(t) = Q_{\\text{ini}}e^{-\\frac{t}{\\tau_C}}" },
+      { "name": "Current", "latex": "i(t) = I_{\\text{ini}}e^{-\\frac{t}{\\tau_C}}" },
+      { "name": "Resistor voltage", "latex": "V_R(t) = Ve^{-\\frac{t}{\\tau_C}}" },
+      { "name": "Capacitor voltage", "latex": "V_C(t) = Ve^{-\\frac{t}{\\tau_C}}" }
+    ] },
+    { "title": "Inductor energizing", "items": [
+      { "name": "Time constant", "latex": "\\tau_L = \\frac{L}{R}" },
+      { "name": "Current", "latex": "i(t) = I_{\\text{final}}\\left(1 - e^{-\\frac{t}{\\tau_L}}\\right)" },
+      { "name": "Resistor voltage", "latex": "v_R(t) = V(1 - e^{-\\frac{t}{\\tau_L}})" },
+      { "name": "Inductor voltage", "latex": "v_L(t) = Ve^{-\\frac{t}{\\tau_L}}" }
+    ] },
+    { "title": "Inductor de-energizing", "items": [
+      { "name": "Current", "latex": "i(t) = I_{\\text{ini}}e^{-\\frac{t}{\\tau_L}}" },
+      { "name": "Resistor voltage", "latex": "V_R(t) = Ve^{-\\frac{t}{\\tau_L}}" },
+      { "name": "Inductor voltage", "latex": "V_L(t) = Ve^{-\\frac{t}{\\tau_L}}" }
+    ] }
+  ]
+}

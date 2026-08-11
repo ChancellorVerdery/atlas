@@ -1,0 +1,45 @@
+:80 {
+	basic_auth {
+		chancellor __HASH__
+	}
+	handle /shell* {
+		reverse_proxy 127.0.0.1:7681
+	}
+	handle_path /db* {
+		# adminer 5 also refuses framing; it lives inside our tab, so strip it
+		reverse_proxy 127.0.0.1:8082 {
+			header_down -X-Frame-Options
+			header_down -Content-Security-Policy
+		}
+	}
+	handle {
+		root * /srv
+		file_server
+	}
+}
+
+# Portainer refuses to be iframed (CSP frame-ancestors 'none') and cannot live
+# under a subpath, so it gets its own port with that one header stripped.
+# Its own login still gates it; direct :9000 is loopback-only now.
+:9001 {
+	reverse_proxy 127.0.0.1:9000 {
+		header_down -Content-Security-Policy
+	}
+}
+
+# Atlas sync WebSockets — public via cloudflared (sync.myatlasapp.net -> here).
+# No basic_auth: mirrors the old Oracle public caddy; the services gate
+# themselves. Exact paths only — the outbox's internal POST /deliver must
+# never be reachable from outside. Port-only address so any Host header
+# matches (cloudflared forwards Host: sync.myatlasapp.net); bind keeps the
+# listener off the LAN.
+:8090 {
+	bind 127.0.0.1
+	handle_path /inbox {
+		reverse_proxy 127.0.0.1:8100
+	}
+	handle_path /outbox {
+		reverse_proxy 127.0.0.1:8101
+	}
+	respond 404
+}

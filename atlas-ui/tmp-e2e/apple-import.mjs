@@ -1,0 +1,23 @@
+import { chromium } from 'playwright'
+const VAULT = process.env.CLAUDE_JOB_DIR + '/tmp/fakevault'
+const browser = await chromium.launch()
+const page = await browser.newPage()
+await page.addInitScript((vault) => {
+  localStorage.setItem('atlas.auth.v1', JSON.stringify({ offline: true }))
+  localStorage.setItem('atlas.notes.v1', JSON.stringify({ dir: vault, lastSubdir: '' }))
+}, VAULT)
+await page.goto('http://localhost:5173/#/notes')
+await page.waitForSelector('[data-nt="new"]', { timeout: 15000 })
+await page.click('[data-nt="new"]')
+await page.waitForSelector('.nt-overlay [data-nt="up-apple"]', { timeout: 5000 })
+console.log('ok - From Apple Notes button renders')
+await page.click('.nt-overlay [data-nt="up-apple"]')
+await page.waitForSelector('.nt-apple select option', { state: 'attached', timeout: 15000 })
+const n = await page.locator('.nt-apple select option').count()
+console.log(n > 5 ? `ok - picker lists ${n} notes` : `FAIL - only ${n} options`)
+const sel = await page.locator('.nt-apple select').inputValue()
+console.log(sel ? `ok - default selection "${sel}"` : 'FAIL - no selection')
+await page.click('[data-nt="apple-cancel"]')
+await page.waitForSelector('.nt-apple', { state: 'detached', timeout: 3000 })
+console.log('ok - cancel removes picker')
+await browser.close()
