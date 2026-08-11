@@ -26,16 +26,28 @@ const readAuth = () => {
 const asRaw = (v) => (typeof v === 'string' ? v : JSON.stringify(v))
 
 // Server → localStorage, without triggering a push back to the server.
-const applyStates = (states) => {
+// Keys this device has written since the app started. Only meaningful on the
+// warm-cache path, where the app is already running when the pull lands.
+const writtenSinceBoot = new Set()
+
+// `skip` guards the warm-cache race: applying the server's copy over a key the
+// user (or a boot-time refresh like refreshGoogleStatus) just wrote would
+// silently undo it. That write already pushed, so letting local win keeps both
+// ends agreeing instead of diverging.
+const applyStates = (states, skip) => {
   for (const [key, value] of Object.entries(states || {})) {
-    if (value == null) continue
+    if (value == null || skip?.has(key)) continue
     origSetItem(key, asRaw(value))
   }
 }
 
 const installHook = () => {
   // ponytail: removeItem/clear not hooked — deletions do not sync yet.
-  localStorage.setItem = (k, v) => { origSetItem(k, v); sync.pushKey(k, v) }
+  localStorage.setItem = (k, v) => {
+    writtenSinceBoot.add(k)
+    origSetItem(k, v)
+    sync.pushKey(k, v)
+  }
 }
 
 // connect() retries forever when the server is down; race a deadline so an
@@ -86,6 +98,15 @@ const isForeignAccount = (userId) => {
 }
 const rememberAccount = (userId) => { if (userId) localStorage.setItem(LAST_USER_KEY, userId) }
 const clearLocalAtlas = () => { for (const k of localAtlasKeys()) localStorage.removeItem(k) }
+
+// Enough of this account's layout cached to paint the whole shell without the
+// network: the plugin registry (which drives the nav and every gate) plus at
+// least one page board. The registry is non-negotiable — booting without it
+// would let plugins.js's legacy-evidence migration read the cached plugin data
+// as a pre-registry profile and switch everything on.
+const hasCachedLayout = () =>
+  localStorage.getItem('atlas.plugins.v1') !== null &&
+  Object.keys(localStorage).some((k) => /^atlas\.page(\.\w+)?\.v1$/.test(k))
 
 // ---- login view ------------------------------------------------------------
 
@@ -263,26 +284,64 @@ const auth = readAuth()
 if (auth?.offline) {
   await bootApp()
 } else if (auth?.token) {
-  try {
-    const res = await withTimeout(sync.connect({ token: auth.token }))
-    if (res?.ok) {
-      const userId = res.userId || auth.userId
-      // Resuming a session, so a mismatch means a stale cache from whoever used
-      // this browser before — drop it before the pull rather than merging it in.
-      if (isForeignAccount(userId)) clearLocalAtlas()
-      rememberAccount(userId)
-      applyStates(await sync.pullAll())
-      installHook()
-      await bootApp()
-    } else {
-      // Server answered but rejected the session — sign in again.
-      localStorage.removeItem(AUTH_KEY)
-      renderLogin()
+  // Warm cache: this device already holds THIS account's layout, so paint it
+  // now and reconcile with the server behind the app. A cold connect+pull is a
+  // network round trip, and blocking the first frame on it is what made the
+  // desktop app open on an empty window. The account check is what makes this
+  // safe — a cache belonging to someone else must be cleared before anything
+  // renders, so that case still takes the blocking path below.
+  if (!isForeignAccount(auth.userId) && hasCachedLayout()) {
+    installHook()
+    await bootApp()
+    hydrateInBackground(auth) // deliberately not awaited
+  } else {
+    try {
+      const res = await withTimeout(sync.connect({ token: auth.token }))
+      if (res?.ok) {
+        const userId = res.userId || auth.userId
+        // Resuming a session, so a mismatch means a stale cache from whoever used
+        // this browser before — drop it before the pull rather than merging it in.
+        if (isForeignAccount(userId)) clearLocalAtlas()
+        rememberAccount(userId)
+        applyStates(await sync.pullAll())
+        installHook()
+        await bootApp()
+      } else {
+        // Server answered but rejected the session — sign in again.
+        localStorage.removeItem(AUTH_KEY)
+        renderLogin()
+      }
+    } catch {
+      // Server unreachable — never block the user from their local data.
+      renderLogin({ warning: 'Could not reach the sync server. Sign in later, or continue offline with your local data.' })
     }
-  } catch {
-    // Server unreachable — never block the user from their local data.
-    renderLogin({ warning: 'Could not reach the sync server. Sign in later, or continue offline with your local data.' })
   }
 } else {
   renderLogin()
+}
+
+// Reconcile the already-painted cache with the database. Failure is survivable
+// by design: the app is on screen either way, and sync.js queues writes made
+// while offline and flushes them on reconnect.
+async function hydrateInBackground(auth) {
+  let res
+  try {
+    res = await withTimeout(sync.connect({ token: auth.token }))
+  } catch {
+    return // offline — the cached layout is already up, and pushes will queue
+  }
+  if (!res?.ok) {
+    // Session expired or revoked. The cache on screen is real data, but nothing
+    // more can sync, so send them to the gate rather than let it drift.
+    localStorage.removeItem(AUTH_KEY)
+    location.reload()
+    return
+  }
+  rememberAccount(res.userId || auth.userId)
+  try {
+    applyStates(await sync.pullAll(), writtenSinceBoot)
+  } catch {
+    return // pull failed; the cache stands
+  }
+  window.dispatchEvent(new CustomEvent('atlas:hydrated'))
 }

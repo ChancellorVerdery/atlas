@@ -566,6 +566,10 @@ window.addEventListener('hashchange', render)
 window.addEventListener('atlas:sync-update', (e) => {
   if (e.detail?.key === 'atlas.plugins.v1') render()
 })
+// Warm-cache boot paints from the local copy, then the server's state lands a
+// moment later — re-render once so anything changed on another device appears
+// without a manual reload.
+window.addEventListener('atlas:hydrated', render)
 if (!location.hash) location.replace('#/dashboard')
 render()
 // Let first-load entrance animations finish, then disable replays on re-render.
