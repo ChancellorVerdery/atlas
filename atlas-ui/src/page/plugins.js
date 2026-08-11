@@ -88,6 +88,14 @@ export function loadPlugins() {
 }
 export function savePlugins(s) { localStorage.setItem(KEY, JSON.stringify(s)) }
 
+// A brand-new account starts with every plugin OFF, whatever leftover Atlas
+// data this browser happens to hold. Called at signup (main.js): writing the
+// registry up front is what stops loadPlugins' legacy-evidence migration from
+// firing on someone else's data that merely shares the browser.
+export function seedFreshPluginState() {
+  savePlugins({ enabled: {}, installed: {} })
+}
+
 export const isPluginEnabled = (id) => !!loadPlugins().enabled[id]
 // A widget kind renders only while its plugin is on; core kinds always do.
 export const isKindEnabled = (kind, s = loadPlugins()) => {

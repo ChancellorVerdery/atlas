@@ -3,6 +3,7 @@
 // hydrates localStorage from the sync backend and installs the write hook
 // before the app shell loads.
 import { sync } from './sync.js'
+import { seedFreshPluginState } from './page/plugins.js'
 import './auth.css'
 import logoUrl from './assets/atlas-logo.svg'
 
@@ -135,7 +136,7 @@ function renderLogin({ warning } = {}) {
         email: data.email || email,
       }))
       await sync.connect({ token: data.token }) // opens the outbox socket
-      await postLoginHydrate(gate)
+      await postLoginHydrate(gate, mode === 'signup')
     } catch (err) {
       setError(err?.message || 'Sign in failed.')
       setBusy(false)
@@ -144,22 +145,25 @@ function renderLogin({ warning } = {}) {
 }
 
 // After a fresh login: empty profile + existing local data → offer an import;
-// otherwise adopt the server's states.
-async function postLoginHydrate(gate) {
+// otherwise adopt the server's states. `isNewAccount` is true only for signup,
+// and decides whether this profile starts with no plugins enabled.
+async function postLoginHydrate(gate, isNewAccount) {
   const states = await sync.pullAll()
   const serverEmpty = Object.values(states || {}).every((v) => v == null)
   const localKeys = localAtlasKeys()
 
   if (serverEmpty && localKeys.length) {
-    await renderImportCard(gate, localKeys)
+    await renderImportCard(gate, localKeys, isNewAccount)
     return
   }
   applyStates(states)
   installHook()
+  // After the hook, so the empty registry syncs to this account's other devices.
+  if (isNewAccount) seedFreshPluginState()
   await bootApp()
 }
 
-function renderImportCard(gate, localKeys) {
+function renderImportCard(gate, localKeys, isNewAccount) {
   return new Promise((resolve) => {
     const card = gate.querySelector('.auth-card')
     card.innerHTML = `
@@ -173,8 +177,13 @@ function renderImportCard(gate, localKeys) {
     const importBtn = card.querySelector('[data-act="import"]')
     const freshBtn = card.querySelector('[data-act="fresh"]')
 
-    const finish = async () => {
+    // seedFresh=false on "Import everything": the user is carrying a whole
+    // pre-plugin profile across, so the legacy migration should light up the
+    // plugins that own the data they just imported — otherwise it would all
+    // land invisible. "Start fresh" takes the empty registry.
+    const finish = async (seedFresh) => {
       installHook()
+      if (seedFresh) seedFreshPluginState()
       await bootApp()
       resolve()
     }
@@ -189,7 +198,7 @@ function renderImportCard(gate, localKeys) {
         const map = {}
         for (const key of localKeys) map[key] = localStorage.getItem(key)
         await sync.importAll(map)
-        await finish()
+        await finish(false)
       } catch (err) {
         importBtn.disabled = false
         freshBtn.disabled = false
@@ -200,7 +209,7 @@ function renderImportCard(gate, localKeys) {
       }
     })
 
-    freshBtn.addEventListener('click', finish)
+    freshBtn.addEventListener('click', () => finish(isNewAccount))
   })
 }
 

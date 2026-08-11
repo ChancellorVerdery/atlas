@@ -3,7 +3,7 @@
 import { chromium } from 'playwright'
 import { deepStrictEqual } from 'node:assert'
 
-const URL = 'http://localhost:5173/'
+const URL = (process.env.ATLAS_BASE || 'http://localhost:5173') + '/'
 const email = `ui-${Date.now()}@test.local`
 const password = 'correct-horse-9'
 const sleepState = {
