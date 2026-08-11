@@ -49,7 +49,7 @@ const FOLDERS = [
 const st = {
   folder: 'INBOX', account: 'all', threads: [], nextPageToken: null, loadingList: false,
   openId: null, open: null, loadingView: false,
-  userLabels: [], seq: 0, viewSeq: 0,
+  labels: {}, seq: 0, viewSeq: 0, // labels: the user labels of each account, by address
 }
 
 // The account a thread belongs to (merged "all" view mixes accounts per row).
@@ -61,9 +61,29 @@ let rerenderApp = null
 let composeCtx = null
 
 const q = (sel) => rootEl?.querySelector(sel)
+
+// A label id is unique to the mailbox that owns it, so the merged view can't
+// address one: shared folders are matched by name instead, which is what Gmail
+// search does anyway.
+const SHARED = 'shared:'
+const sharedFolder = (name) => ({ id: SHARED + name, name, icon: 'label', q: `label:"${name.replace(/"/g, '')}"` })
+const labelFolder = (l) => ({ id: l.id, name: l.name, icon: 'label', labelIds: l.id })
+
+// What sits under one account in the nav. Gmail's system folders are the same
+// in every mailbox; user labels are not, so "All inboxes" lists only the names
+// every connected account has.
+export function foldersFor(account, labels = {}, accts = []) {
+  if (account !== 'all') return FOLDERS.concat((labels[account] || []).map(labelFolder))
+  const sets = accts.map((a) => new Set((labels[a] || []).map((l) => l.name)))
+  const common = sets.length ? [...sets[0]].filter((n) => sets.every((s) => s.has(n))).sort() : []
+  return FOLDERS.concat(common.map(sharedFolder))
+}
+
+// Labels load after the first paint, so an id can outrun its list — keep
+// serving it as a label rather than falling back to the inbox.
 const folderDef = (fid) =>
-  FOLDERS.find((f) => f.id === fid) ||
-  { id: fid, name: st.userLabels.find((l) => l.id === fid)?.name || fid, icon: 'label', labelIds: fid }
+  foldersFor(st.account, st.labels, connectedAccounts()).find((f) => f.id === fid) ||
+  (fid.startsWith(SHARED) ? sharedFolder(fid.slice(SHARED.length)) : labelFolder({ id: fid, name: fid }))
 
 // ---- entry -----------------------------------------------------------------
 
@@ -75,7 +95,9 @@ export function renderEmailPage(root, rerender) {
   const s = loadEmail()
   if (!isConnected(s)) { renderConnect(s); return }
   const accts = connectedAccounts(s)
-  if (st.account !== 'all' && !accts.includes(st.account)) st.account = 'all' // a removed account → back to all
+  // 'all' only means something with several mailboxes; one account IS the view.
+  if (accts.length === 1) st.account = accts[0]
+  else if (st.account !== 'all' && !accts.includes(st.account)) st.account = 'all' // a removed account → back to all
   setActiveAccount(st.account)
   root.innerHTML = `
     <div class="mail">
@@ -83,7 +105,7 @@ export function renderEmailPage(root, rerender) {
         <button type="button" class="mail-iconbtn" data-mail="toggle-nav" title="Show or hide folders" aria-label="Show or hide folders">${ICON.panel}</button>
         <span class="mail-top__folder" id="mail-folder-name">${esc(folderDef(st.folder).name)}</span>
         <button type="button" class="mail-iconbtn" data-mail="refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
-        ${accountPicker(accts)}
+        <span class="mail-top__addr" title="${esc(st.account)}">${esc(st.account === 'all' ? 'All inboxes' : st.account)}</span>
         <button type="button" class="mail-btn mail-btn--primary" data-mail="compose">Compose</button>
       </div>
       <div class="mail-body${s.navHidden ? ' nav-hidden' : ''}">
@@ -94,46 +116,23 @@ export function renderEmailPage(root, rerender) {
       </div>
     </div>`
   root.onclick = onClick
-  root.onchange = onChange
   root.onmousedown = (e) => { if (e.target.closest('#mail-split')) startSplit(e) }
   renderNav()
   renderView()
   loadFolder(st.folder)
-  if (!st.userLabels.length) {
-    guard(async () => {
-      st.userLabels = (await listLabels()).filter((l) => l.type === 'user' && l.labelListVisibility !== 'labelHide')
-      renderNav()
-    })
+  // Every account's labels, not just the active one: the nav shows them all,
+  // and the shared list is an intersection. One failing mailbox must not blank
+  // the others, so each is caught on its own.
+  const missing = accts.filter((a) => !st.labels[a])
+  if (missing.length) {
+    Promise.all(missing.map((a) => listLabels(a)
+      .then((ls) => { st.labels[a] = ls.filter((l) => l.type === 'user' && l.labelListVisibility !== 'labelHide') })
+      .catch(() => { st.labels[a] = [] }))).then(renderNav)
   }
 }
 
 // The @-prefix of an address, for compact per-row badges ("chancellor").
 const shortAddr = (a) => (a ? String(a).split('@')[0] : '')
-
-// Account switcher: a single connected account shows as a static label; several
-// show a dropdown with "All inboxes" first. Absent entirely when none.
-function accountPicker(accts) {
-  if (!accts.length) return ''
-  if (accts.length === 1) return `<span class="mail-top__addr">${esc(accts[0])}</span>`
-  return `<select class="mail-top__acct" data-mail-acct aria-label="Which account">
-    <option value="all"${st.account === 'all' ? ' selected' : ''}>All inboxes</option>
-    ${accts.map((a) => `<option value="${esc(a)}"${st.account === a ? ' selected' : ''}>${esc(a)}</option>`).join('')}
-  </select>`
-}
-
-function onChange(e) {
-  const sel = e.target.closest('[data-mail-acct]')
-  if (!sel) return
-  st.account = sel.value
-  setActiveAccount(st.account)
-  st.openId = null; st.open = null
-  // labels can differ per account; refresh them for the newly active mailbox
-  if (st.account !== 'all') guard(async () => {
-    st.userLabels = (await listLabels()).filter((l) => l.type === 'user' && l.labelListVisibility !== 'labelHide')
-    renderNav()
-  })
-  loadFolder(st.folder)
-}
 
 function renderConnect(s) {
   const expired = !!s.address // was connected before; the token lapsed
@@ -158,17 +157,32 @@ function renderConnect(s) {
 
 // ---- panes -----------------------------------------------------------------
 
-function renderNav() {
-  const el = q('#mail-nav')
-  if (!el) return
-  const item = (f) => `
-    <button type="button" class="mail-folder${st.folder === f.id ? ' is-active' : ''}" data-mail-folder="${esc(f.id)}">
+// The nav IS the account switcher: each connected address is a heading with its
+// own folders and labels beneath it, and "All inboxes" leads with what they
+// share. One account keeps the plain folder list it always had.
+export function navHTML(accts, account = st.account, folder = st.folder, labels = st.labels) {
+  const item = (f, acct) => `
+    <button type="button" class="mail-folder${account === acct && folder === f.id ? ' is-active' : ''}" data-mail-folder="${esc(f.id)}" data-mail-account="${esc(acct)}">
       ${ICON[f.icon] || ICON.label}<span>${esc(f.name)}</span>
     </button>`
-  el.innerHTML = FOLDERS.map(item).join('') +
-    (st.userLabels.length
-      ? `<p class="mail-nav__head">Labels</p>` + st.userLabels.map((l) => item({ id: l.id, name: l.name, icon: 'label' })).join('')
-      : '')
+  const rows = (acct) => {
+    const list = foldersFor(acct, labels, accts)
+    const i = list.findIndex((f) => f.icon === 'label') // labels always sort after the system folders
+    const cell = (f) => item(f, acct)
+    return i < 0 ? list.map(cell).join('')
+      : list.slice(0, i).map(cell).join('') + `<p class="mail-nav__head">Labels</p>` + list.slice(i).map(cell).join('')
+  }
+  const group = (acct, name) => `
+    <button type="button" class="mail-nav__acct${account === acct ? ' is-active' : ''}" data-mail-folder="INBOX" data-mail-account="${esc(acct)}" title="${esc(name)}">${esc(name)}</button>
+    <div class="mail-nav__sub">${rows(acct)}</div>`
+  return accts.length < 2
+    ? rows(account)
+    : group('all', 'All inboxes') + accts.map((a) => group(a, a)).join('')
+}
+
+function renderNav() {
+  const el = q('#mail-nav')
+  if (el) el.innerHTML = navHTML(connectedAccounts())
 }
 
 const decodeEnt = (s) => { const t = document.createElement('textarea'); t.innerHTML = s; return t.value }
@@ -343,6 +357,18 @@ async function fetchFolder(fid, pageToken) {
 // — that is what is on screen before the user scrolls.
 const threadCacheKey = (account, fid) => `email.threads.${account}.${fid}`
 
+// Every nav entry carries the account whose section it sits in, so one click
+// picks mailbox and folder together.
+function selectFolder(fid, account) {
+  if (account && account !== st.account) {
+    st.account = account
+    setActiveAccount(account)
+    // A label id belongs to one mailbox; it means nothing in the next.
+    if (!foldersFor(st.account, st.labels, connectedAccounts()).some((f) => f.id === fid)) fid = 'INBOX'
+  }
+  loadFolder(fid)
+}
+
 function loadFolder(fid) {
   st.folder = fid
   st.threads = []
@@ -373,9 +399,11 @@ function loadFolder(fid) {
 // Boot prefetch: the inbox, which is what Mail opens on.
 export async function warmEmail() {
   if (!isConnected()) return
+  const accts = connectedAccounts()
+  const account = accts.length === 1 ? accts[0] : 'all' // the view Mail opens on
   try {
-    const res = await listThreads({ labelIds: ['INBOX'], account: 'all' })
-    writeCache(threadCacheKey('all', 'INBOX'), { threads: res.threads, nextPageToken: res.nextPageToken })
+    const res = await listThreads({ labelIds: ['INBOX'], account })
+    writeCache(threadCacheKey(account, 'INBOX'), { threads: res.threads, nextPageToken: res.nextPageToken })
   } catch { /* prefetch is best-effort */ }
 }
 
@@ -520,7 +548,7 @@ function openMoveMenu(id) {
   const bar = q('.mail-view__bar')
   if (!bar) return
   const addr = emailAddr(latestFrom())
-  const folders = st.userLabels
+  const folders = st.labels[acctOf(id)] || [] // this thread's own mailbox, not the active view's
   const menu = document.createElement('div')
   menu.className = 'mail-movemenu'
   menu.dataset.id = id
@@ -547,14 +575,13 @@ function doMove(id, labelId, alsoSender) {
     if (labelId === '__new__') {
       const name = prompt('New folder name:')?.trim()
       if (!name) return
-      // Labels are per-account. Match the cached list only when it belongs to
-      // this thread's mailbox (the active single-account view); otherwise just
-      // create it in that account.
-      const existing = account === st.account
-        ? st.userLabels.find((l) => l.name.toLowerCase() === name.toLowerCase()) : null
+      // Labels are per-account, and st.labels is keyed the same way, so reuse
+      // is decided inside the thread's own mailbox.
+      const mine = st.labels[account]
+      const existing = mine?.find((l) => l.name.toLowerCase() === name.toLowerCase())
       const lbl = existing || await createLabel(name, account)
       lid = lbl.id
-      if (!existing && account === st.account) { st.userLabels.push({ id: lbl.id, name: lbl.name }); renderNav() }
+      if (!existing && mine) { mine.push({ id: lbl.id, name: lbl.name }); renderNav() }
     }
     await moveThread(id, lid, account)
     patch(id, { inInbox: false })
@@ -783,7 +810,7 @@ function onClick(e) {
     return
   }
   const folder = e.target.closest('[data-mail-folder]')
-  if (folder) { loadFolder(folder.dataset.mailFolder); return }
+  if (folder) { selectFolder(folder.dataset.mailFolder, folder.dataset.mailAccount); return }
   const row = e.target.closest('.mail-row')
   if (row) {
     if (row.dataset.draftId) openDraftCompose(row.dataset.draftId, row.dataset.account || null)
