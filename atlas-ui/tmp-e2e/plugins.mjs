@@ -160,6 +160,52 @@ const navLabels = (page) => page.$$eval('#nav .nav__item .nav__label', (n) => n.
   await ctx.close()
 }
 
+// ---- D2. settings: no dev mode, working logout ------------------------------
+{
+  // Seed ONCE per tab (not per load): logout reloads, and the gate can only
+  // appear if the offline seed doesn't come straight back.
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } })
+  await ctx.addInitScript(() => {
+    if (sessionStorage.getItem('seeded')) return
+    sessionStorage.setItem('seeded', '1')
+    localStorage.setItem('atlas.auth.v1', '{"offline":true}')
+  })
+  const page = await ctx.newPage()
+  await page.goto(BASE + '/#/settings')
+  await page.waitForSelector('[data-plug-toggle]', { timeout: 10000 })
+
+  await check('settings has no Dev mode row', async () => {
+    strictEqual(await page.locator('[data-act="toggle-dev-mode"]').count(), 0)
+    ok(!(await page.locator('.page').innerText()).includes('Dev mode'), 'Dev mode text still present')
+  })
+  await check('offline session offers to leave offline mode', async () => {
+    const btn = page.locator('[data-act="logout"]')
+    strictEqual(await btn.count(), 1)
+    strictEqual((await btn.innerText()).trim(), 'Leave offline mode')
+  })
+  await check('signed-in session names the account and says Log out', async () => {
+    // Swap the auth shape in place and re-render via hashchange — a reload
+    // would re-run main.js's gate, which waits on the backend for a real token.
+    await page.evaluate(() => {
+      localStorage.setItem('atlas.auth.v1', '{"token":"t","userId":"u1","email":"alex@example.com"}')
+      location.hash = '#/dashboard'
+    })
+    await page.evaluate(() => { location.hash = '#/settings' })
+    await page.waitForFunction(() =>
+      document.querySelector('[data-act="logout"]')?.textContent.trim() === 'Log out', null, { timeout: 5000 })
+    ok((await page.locator('.page').innerText()).includes('alex@example.com'), 'signed-in email not shown')
+    await page.evaluate(() => localStorage.setItem('atlas.auth.v1', '{"offline":true}')) // back to offline for the logout check
+  })
+  await check('logout clears auth and returns to the login gate', async () => {
+    await page.evaluate(() => { location.hash = '#/settings' })
+    await page.waitForSelector('[data-act="logout"]')
+    await page.click('[data-act="logout"]')
+    await page.waitForSelector('.auth-card', { timeout: 10000 }) // logout reloads → gate
+    strictEqual(await page.evaluate(() => localStorage.getItem('atlas.auth.v1')), null)
+  })
+  await ctx.close()
+}
+
 // ---- E. hidden widgets in customize: stubs keep model↔DOM parity ------------
 {
   const board = { v: 1, rows: [{ id: 'r1', cols: [{ id: 'c1', sections: [{ id: 's1', lines: [{ id: 'l1', widgets: [

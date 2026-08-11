@@ -71,10 +71,10 @@ function route() {
   return { name: 'page', def, sub: subName }
 }
 
-const isDevMode = () => localStorage.getItem('atlas.devMode') === '1'
-function setDevMode(on) {
-  localStorage.setItem('atlas.devMode', on ? '1' : '0')
-  document.documentElement.classList.toggle('dev-mode', on)
+// Who's signed in, for the Settings account row. {token,userId,email} normally,
+// {offline:true} when the login gate was skipped.
+const authState = () => {
+  try { return JSON.parse(localStorage.getItem('atlas.auth.v1')) || {} } catch { return {} }
 }
 
 let customizing = false
@@ -142,7 +142,7 @@ const emptyDash = (def) => `
   </div>`
 
 const settingsHTML = () => {
-  const on = isDevMode()
+  const auth = authState()
   const em = loadEmail()
   const accounts = em.accounts?.length ? em.accounts : (em.address ? [em.address] : [])
   const gmail = accounts.length
@@ -156,15 +156,6 @@ const settingsHTML = () => {
       </div>`
     : `<button type="button" class="gym-btn" data-act="gmail-connect">Connect Google</button>`
   return `<div class="page">
-    <div class="set-row">
-      <div class="set-row__meta">
-        <span class="set-row__name">Dev mode</span>
-        <span class="set-row__sub">Extra logging and debug affordances.</span>
-      </div>
-      <button type="button" class="switch${on ? ' is-on' : ''}" role="switch" aria-checked="${on}" data-act="toggle-dev-mode">
-        <span class="switch__dot"></span>
-      </button>
-    </div>
     <div class="set-row set-row--gmail">
       <div class="set-row__meta">
         <span class="set-row__name">Google account</span>
@@ -186,6 +177,15 @@ const settingsHTML = () => {
         <input type="file" id="import-file" accept="application/json,.json" hidden>
         <span class="set-row__sub set-data__status" id="data-status"></span>
       </div>
+    </div>
+    <div class="set-row">
+      <div class="set-row__meta">
+        <span class="set-row__name">Account</span>
+        <span class="set-row__sub">${auth.offline
+          ? 'Working offline — this device isn’t signed in, so nothing syncs. Leaving offline mode returns to the login screen; the data on this device stays put.'
+          : `Signed in as ${esc(auth.email || 'your account')}. Signing out returns to the login screen — your data stays on this device and on the server.`}</span>
+      </div>
+      <button type="button" class="gym-btn gym-btn--ghost" data-act="logout">${auth.offline ? 'Leave offline mode' : 'Log out'}</button>
     </div>
   </div>`
 }
@@ -298,7 +298,9 @@ function render() {
 document.body.addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')
   if (act) {
-    if (act.dataset.act === 'toggle-dev-mode') { setDevMode(!isDevMode()); render(); return }
+    // main.js owns the sign-out (clears the auth key, then reloads); it also
+    // resolves fine offline, where sync.request rejects instead of hanging.
+    if (act.dataset.act === 'logout') { window.atlasLogout?.(); return }
     if (act.dataset.act === 'customize') { setCustomizing(!customizing); return }
     if (act.dataset.act === 'gmail-connect') {
       act.disabled = true
@@ -565,7 +567,6 @@ window.addEventListener('atlas:sync-update', (e) => {
   if (e.detail?.key === 'atlas.plugins.v1') render()
 })
 if (!location.hash) location.replace('#/dashboard')
-setDevMode(isDevMode()) // sync html.dev-mode class on boot
 render()
 // Let first-load entrance animations finish, then disable replays on re-render.
 setTimeout(() => document.documentElement.classList.add('ready'), 750)

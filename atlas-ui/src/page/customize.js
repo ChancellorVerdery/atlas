@@ -71,6 +71,8 @@ export function enterCustomize({ rerender, pageDef }) {
   const contentEl = document.getElementById('content')
   const paletteEl = document.createElement('div')
   paletteEl.className = 'palette'
+  // No Settings toggle for this since the Dev-mode row was removed — set
+  // localStorage 'atlas.devMode' to '1' by hand to get the dev widgets back.
   const devMode = localStorage.getItem('atlas.devMode') === '1'
   // dev widgets need dev mode; plugin widgets need their plugin enabled
   const kinds = pageDef.kinds.filter((k) => (!KIND_META[k].dev || devMode) && isKindEnabled(k))
