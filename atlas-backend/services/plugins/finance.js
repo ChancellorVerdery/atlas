@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS finance.settings (
 );
 -- CREATE TABLE IF NOT EXISTS above skips the whole statement on an existing
 -- table, so a column added after first deploy needs its own idempotent ALTER.
-ALTER TABLE settings ADD COLUMN IF NOT EXISTS dismissed_subscriptions jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE finance.settings ADD COLUMN IF NOT EXISTS dismissed_subscriptions jsonb NOT NULL DEFAULT '[]';
 
 CREATE TABLE IF NOT EXISTS finance.items (
   user_id          uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,

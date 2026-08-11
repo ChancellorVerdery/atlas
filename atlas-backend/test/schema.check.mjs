@@ -44,6 +44,13 @@ for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.js'))) {
     ok(m[1].includes('.'), `${where}: unqualified FK target "${m[1]}"`)
   for (const m of mapper.ddl.matchAll(/CREATE (?:UNIQUE )?INDEX[^\n]*? ON ([\w.]+)/g))
     ok(m[1].includes('.'), `${where}: unqualified index target "${m[1]}"`)
+  // ALTER TABLE is the one that actually bit: finance.js carried an in-place
+  // column migration whose table name was left bare, so it resolved through
+  // search_path to a nonexistent public.settings and the service retried its
+  // DDL forever. Any statement that names a table has to be checked, not just
+  // the ones that were easy to think of.
+  for (const m of mapper.ddl.matchAll(/\b(?:ALTER TABLE|DROP TABLE|TRUNCATE|INSERT INTO|UPDATE|DELETE FROM)\s+(?:IF EXISTS\s+)?([\w.]+)/g))
+    ok(m[1].includes('.'), `${where}: unqualified table in a DDL statement — "${m[1]}"`)
 
   // decompose() must emit exactly the tables the runner will write, or rows
   // are silently dropped (missing key) / crash on insert (unknown key).
