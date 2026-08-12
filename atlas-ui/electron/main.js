@@ -6,11 +6,17 @@
 // database — writes go through the hooked setItem and push to the server, so
 // edits made here land in the database like they do in the browser.
 import { app, BrowserWindow, shell, nativeImage } from 'electron'
+import fs from 'node:fs'
+import path from 'node:path'
 import { startHost, distExists } from './host.js'
 
 // --smoke boots everything without showing a window, prints a report and exits.
 // --smoke-hold boots the same hidden window and stays up, so a test driving
 // Electron over CDP gets the real app rather than a browser approximation.
+// Menus, ~/Library paths and app.getName(). The dock's hover label comes from
+// the bundle instead — electron/name.mjs, run by the npm scripts, sets that.
+app.setName('Atlas')
+
 const SMOKE = process.argv.includes('--smoke')
 const HOLD = process.argv.includes('--smoke-hold')
 const HEADLESS = SMOKE || HOLD
@@ -75,6 +81,15 @@ async function createWindow() {
 
   if (SMOKE) await runSmoke(win)
   if (HOLD) console.log('ATLAS_HOLD_READY ' + host.origin)
+}
+
+// The name macOS actually shows: read from the running bundle, not from us.
+function readBundleName() {
+  try {
+    // exe lives in Electron.app/Contents/MacOS/, the plist one level up
+    const plist = fs.readFileSync(path.resolve(path.dirname(app.getPath('exe')), '..', 'Info.plist'), 'utf8')
+    return plist.match(/<key>CFBundleName<\/key>\s*<string>([^<]*)<\/string>/)?.[1] ?? '(unset)'
+  } catch { return '(unreadable)' }
 }
 
 // Proves the three things that make this a standalone app rather than a viewer
@@ -142,6 +157,11 @@ async function runSmoke(win) {
       if (!repainted) await new Promise((r) => setTimeout(r, 100))
     }
     check('a scheme change repaints the icon', repainted)
+
+    // What the dock shows on hover comes from the bundle, not app.setName().
+    const bundleName = readBundleName()
+    check('the app is named Atlas', app.getName() === 'Atlas' && bundleName === 'Atlas',
+      `app=${app.getName()} bundle=${bundleName}`)
     await win.webContents.executeJavaScript(`window.atlasTheme.pushAppIcon()`) // back to theirs
   } catch (e) {
     check('smoke run', false, e.message)

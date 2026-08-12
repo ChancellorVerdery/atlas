@@ -13,7 +13,25 @@ const KEY = 'atlas.theme.v1'
 // The ink ramp is shared: it's the readable-text scale, and re-tuning contrast
 // per scheme is a good way to ship an unreadable one. Schemes vary the surface
 // they sit on and the accent that picks things out.
-const INK = '#e9e7df', INK_DIM = '#9aa0ad', INK_FAINT = '#5c616e'
+//
+// Two ramps, one per mode. `rgb` is the one that matters most: dozens of rules
+// wash the foreground over the surface at low alpha (hovers, hairlines, active
+// rows). Flipping that triplet is what makes those rules darken on a light
+// surface instead of vanishing — one variable instead of ~90 rewritten rules.
+const MODES = {
+  dark: {
+    ink: '#e9e7df', inkDim: '#9aa0ad', inkFaint: '#5c616e',
+    rgb: '202, 214, 242',
+  },
+  light: {
+    // Surfaces come from the mode, not the scheme: a scheme's dark background
+    // is meaningless here, and the accent is what carries its identity.
+    bg: '#f4f3ef', panel: '#ffffff',
+    ink: '#161a21', inkDim: '#535a68', inkFaint: '#858c9b',
+    rgb: '22, 26, 33',
+  },
+}
+export const DEFAULT_MODE = 'dark'
 
 export const PRESETS = {
   brass: { label: 'Brass', bg: '#090b11', panel: '#0e1219', accent: '#e0b15c', signal: '#74d6c4' },
@@ -49,22 +67,114 @@ export function shade(hex, f) {
   return toHex(f <= 1 ? rgb.map((c) => c * f) : rgb.map((c) => c + (255 - c) * (f - 1)))
 }
 
+// Relative luminance / contrast ratio (WCAG). Here because a scheme is only
+// worth applying if you can still read the app afterwards — and a custom accent
+// can be any colour at all.
+const luminance = (hex) => {
+  const [r, g, b] = parseHex(hex).map((v) => {
+    const s = v / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+export const contrast = (a, b) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+// Nudge a colour until it stands out against the surface it sits on. A fixed
+// shift can't do this: Slate's accent is nearly white, so darkening it "a bit"
+// for light mode still left it at 2.4:1. Colours that already pass come back
+// untouched.
+//
+// The direction has to come from the PAIR, not the background: near-black text
+// on a mid-tone accent is already on the dark side, and the rule "dark surface
+// → lighten" would drag it up through the accent and make it worse (4.45:1 →
+// 3.23:1, which is how this was found).
+// Walking both ways and keeping the better end also covers the colours that
+// can't move the "obvious" way at all — a white accent on a pale surface has to
+// go DOWN, and there's no lighter white to reach for.
+export function legible(hex, bg, target = 3.2) {
+  const start = toHex(parseHex(hex))
+  if (contrast(start, bg) >= target) return start
+  const walk = (step) => {
+    let c = start
+    for (let i = 0; i < 24 && contrast(c, bg) < target; i++) c = shade(c, step)
+    return c
+  }
+  const up = walk(1.12), down = walk(0.88)
+  return contrast(up, bg) >= contrast(down, bg) ? up : down
+}
+
+// Text drawn ON the accent (primary buttons, today's date). Take whichever ink
+// contrasts better and push it until it's comfortably readable — a luminance
+// cutoff alone gets this wrong in the middle of the range, where brass in light
+// mode landed at 3.75:1.
+export function onAccent(accent) {
+  const [dark, light] = ['#14100a', '#f7f5ef']
+  const pick = contrast(dark, accent) >= contrast(light, accent) ? dark : light
+  return legible(pick, accent, 4.5)
+}
+
 // ---- the scheme -------------------------------------------------------------
+
+export const CUSTOM = 'custom'
+// The colours a custom scheme owns. Everything else (the ink ramp, every
+// derived tone) still falls out of these.
+export const CUSTOM_KEYS = [
+  ['bg', 'Background'],
+  ['panel', 'Surface'],
+  ['accent', 'Accent'],
+  ['signal', 'Highlight'],
+]
+
+const isHex = (v) => typeof v === 'string' && /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(v)
 
 export function loadTheme() {
   let t
   try { t = JSON.parse(localStorage.getItem(KEY)) || {} } catch { t = {} }
-  if (!PRESETS[t.preset]) t.preset = DEFAULT_PRESET
-  if (typeof t.accent !== 'string' || !/^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(t.accent)) t.accent = null
+  // Earlier shape: a preset plus a single accent override. Fold it into a
+  // custom scheme so nobody's colour survives as a key nothing reads.
+  if (isHex(t.accent) && !t.custom) {
+    t.custom = { ...customFrom(PRESETS[t.preset] || PRESETS[DEFAULT_PRESET]), accent: t.accent }
+    t.preset = CUSTOM
+  }
+  delete t.accent
+  if (t.preset !== CUSTOM && !PRESETS[t.preset]) t.preset = DEFAULT_PRESET
+  if (!MODES[t.mode]) t.mode = DEFAULT_MODE
+  t.custom = normaliseCustom(t.custom)
   return t
 }
 export function saveTheme(t) { localStorage.setItem(KEY, JSON.stringify(t)) }
 
-// The resolved palette: a preset, with the custom accent (if any) on top.
+const customFrom = (p) => Object.fromEntries(CUSTOM_KEYS.map(([k]) => [k, p[k]]))
+
+// A custom scheme is only as trustworthy as what was typed into it: any key
+// that isn't a colour falls back to the default scheme's, so a half-written
+// one still renders.
+function normaliseCustom(c) {
+  const base = PRESETS[DEFAULT_PRESET]
+  return Object.fromEntries(CUSTOM_KEYS.map(([k]) => [k, toHex(parseHex(isHex(c?.[k]) ? c[k] : base[k]))]))
+}
+
+// Seed a custom scheme from whatever is on screen, so picking "Custom" starts
+// where the user already is rather than from an arbitrary palette.
+export const customSeed = (t = loadTheme()) => customFrom(resolve(t))
+
 export function resolve(t = loadTheme()) {
-  const p = PRESETS[t.preset] || PRESETS[DEFAULT_PRESET]
-  const accent = t.accent ? toHex(parseHex(t.accent)) : p.accent
-  return { ...p, accent, accentDeep: shade(accent, 0.72) }
+  const p = t.preset === CUSTOM ? { label: 'Custom', ...normaliseCustom(t.custom) } : (PRESETS[t.preset] || PRESETS[DEFAULT_PRESET])
+  const m = MODES[t.mode] || MODES[DEFAULT_MODE]
+  const bg = m.bg || p.bg
+  const accent = legible(p.accent, bg)
+  const signal = legible(p.signal, bg)
+  return {
+    ...p,
+    mode: MODES[t.mode] ? t.mode : DEFAULT_MODE,
+    bg,
+    panel: m.panel || p.panel,
+    ink: m.ink, inkDim: m.inkDim, inkFaint: m.inkFaint, inkRgb: m.rgb,
+    accent, signal, accentDeep: shade(accent, 0.72),
+  }
 }
 
 // Every custom property the stylesheet reads. The -rgb triplets exist because
@@ -75,15 +185,16 @@ export function themeVars(t = loadTheme()) {
   return {
     '--bg': c.bg,
     '--panel': c.panel,
-    '--ink': INK,
-    '--ink-dim': INK_DIM,
-    '--ink-faint': INK_FAINT,
+    '--ink': c.ink,
+    '--ink-dim': c.inkDim,
+    '--ink-faint': c.inkFaint,
     '--brass': c.accent,
     '--brass-deep': c.accentDeep,
     '--signal': c.signal,
     '--brass-rgb': triplet(c.accent),
-    '--ink-rgb': '202, 214, 242',
+    '--ink-rgb': c.inkRgb,
     '--signal-rgb': triplet(c.signal),
+    '--on-accent': onAccent(c.accent),
     // --line/--line-2 are left to the stylesheet: they derive from --ink-rgb,
     // which is set here, so they follow without being restated.
   }
@@ -98,29 +209,25 @@ export function logoSVG(t = loadTheme()) {
   const c = resolve(t)
   const hi = shade(c.accent, 1.14)
   const low = shade(c.accent, 0.62)
-  const plateTop = shade(c.panel, 1.75)
-  const hub = shade(c.bg, 1.9)
+  const plate = c.bg // flat, and exactly --bg: the icon reads as the app's own surface
+  const light = c.mode === 'light'
+  // The hub is a hole punched in the plate, so it steps away from it — down on
+  // a light plate, up on a dark one.
+  const hub = shade(c.bg, light ? 0.9 : 1.9)
+  const edge = light ? '#000000' : '#ffffff'
+  const edgeOpacity = light ? 0.10 : 0.06
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${plateTop}"/>
-      <stop offset="1" stop-color="${c.bg}"/>
-    </linearGradient>
     <linearGradient id="brass" gradientUnits="userSpaceOnUse" x1="512" y1="200" x2="512" y2="824">
       <stop offset="0" stop-color="${hi}"/>
       <stop offset="0.55" stop-color="${c.accent}"/>
       <stop offset="1" stop-color="${c.accentDeep}"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
-      <stop offset="0" stop-color="${c.accent}" stop-opacity="0.30"/>
-      <stop offset="1" stop-color="${c.accent}" stop-opacity="0"/>
-    </radialGradient>
     <path id="ray" d="M 0 -400 57.6 -57.6 400 0 57.6 57.6 0 400 -57.6 57.6 -400 0 -57.6 -57.6 Z"/>
   </defs>
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#glow)"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="${plate}"/>
   <rect x="66.5" y="66.5" width="891" height="891" rx="198" fill="none"
-        stroke="#ffffff" stroke-opacity="0.06" stroke-width="5"/>
+        stroke="${edge}" stroke-opacity="${edgeOpacity}" stroke-width="5"/>
   <g transform="translate(512 512)" fill="none" stroke="url(#brass)" stroke-linejoin="round">
     <circle r="312" stroke-width="9" opacity="0.30"/>
     <circle r="232" stroke-width="7" opacity="0.20"/>
@@ -172,6 +279,11 @@ export async function pushAppIcon(t = loadTheme()) {
 export function applyTheme(t = loadTheme(), { icon = true } = {}) {
   const root = document.documentElement
   for (const [k, v] of Object.entries(themeVars(t))) root.style.setProperty(k, v)
+  // Native controls (selects, checkboxes, scrollbars, date pickers) follow this
+  // and nothing else — without it a light app keeps dark dropdowns.
+  const { mode } = resolve(t)
+  root.style.colorScheme = mode
+  root.dataset.mode = mode
   const url = logoDataURL(t)
   for (const el of document.querySelectorAll('link[rel="icon"]')) el.href = url
   for (const el of document.querySelectorAll('.brand__img, .auth-card__logo, .set-theme__logo')) el.src = url

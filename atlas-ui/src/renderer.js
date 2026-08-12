@@ -23,7 +23,7 @@ import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/
 import { renderNotesPage } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus } from './page/email.js'
-import { PRESETS, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
+import { PRESETS, CUSTOM, CUSTOM_KEYS, customSeed, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
 
 // Widgetless plugins that own the whole content area (registry: full:true).
 const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, graph: renderGraphPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage }
@@ -148,29 +148,43 @@ const emptyDash = (def) => `
 const themeSettingsHTML = () => {
   const t = loadTheme()
   const c = resolve(t)
+  // The scheme's own surface is previewed inside the swatch, never behind the
+  // label — the label has to stay readable in whatever mode is current.
   const swatch = (id, p) => `
     <button type="button" class="set-theme__preset${t.preset === id ? ' is-on' : ''}"
-            data-act="theme-preset" data-preset="${esc(id)}" title="${esc(p.label)}"
-            style="background:${esc(p.panel)}">
-      <span class="set-theme__dot" style="background:${esc(p.accent)}"></span>
-      <span class="set-theme__dot set-theme__dot--sm" style="background:${esc(p.signal)}"></span>
+            data-act="theme-preset" data-preset="${esc(id)}" title="${esc(p.label)}">
+      <span class="set-theme__chip" style="background:${esc(p.panel)}">
+        <span class="set-theme__dot" style="background:${esc(p.accent)}"></span>
+        <span class="set-theme__dot set-theme__dot--sm" style="background:${esc(p.signal)}"></span>
+      </span>
       <span class="set-theme__label">${esc(p.label)}</span>
     </button>`
+  const isCustom = t.preset === CUSTOM
+  const picker = ([key, label]) => `
+    <label class="set-theme__pick">
+      <input type="color" data-theme-key="${key}" value="${esc(t.custom[key])}" aria-label="${label}">
+      <span>${label}</span>
+    </label>`
+  const mode = (id, label) => `
+    <button type="button" class="set-theme__mode${t.mode === id ? ' is-on' : ''}" data-act="theme-mode" data-mode="${id}">${label}</button>`
   return `<div class="set-row">
     <div class="set-row__meta">
       <span class="set-row__name">Colour scheme</span>
-      <span class="set-row__sub">Applies everywhere — pages, widgets, the logo, and the app icon. Pick a scheme, or set your own accent on top of one.</span>
+      <span class="set-row__sub">Applies everywhere — pages, widgets, the logo, and the app icon. Custom sets the scheme's own colours; light mode uses its own surfaces and keeps the accent.</span>
     </div>
     <div class="set-theme">
-      <div class="set-theme__row">${Object.entries(PRESETS).map(([id, p]) => swatch(id, p)).join('')}</div>
-      <div class="set-theme__row set-theme__custom">
-        <label class="set-theme__accent">
-          <input type="color" id="theme-accent" value="${esc(c.accent)}" aria-label="Accent colour">
-          <span>${t.accent ? 'Custom accent' : 'Accent'}</span>
-        </label>
-        <img class="set-theme__logo" src="${esc(logoDataURL(t))}" alt="" width="44" height="44">
-        ${t.accent ? `<button type="button" class="gym-btn gym-btn--ghost" data-act="theme-reset">Use the scheme's accent</button>` : ''}
+      <div class="set-theme__row">
+        <span class="set-theme__modes">${mode('dark', 'Dark')}${mode('light', 'Light')}</span>
+        <img class="set-theme__logo" src="${esc(logoDataURL(t))}" alt="" width="40" height="40">
       </div>
+      <div class="set-theme__row">
+        ${Object.entries(PRESETS).map(([id, p]) => swatch(id, p)).join('')}
+        ${swatch(CUSTOM, { label: 'Custom', panel: t.custom.panel, accent: t.custom.accent, signal: t.custom.signal })}
+      </div>
+      ${isCustom ? `<div class="set-theme__row set-theme__picks">
+        ${CUSTOM_KEYS.map(picker).join('')}
+      </div>
+      ${t.mode === 'light' ? `<span class="set-row__sub set-theme__note">Background and Surface apply to dark mode — light mode has its own.</span>` : ''}` : ''}
     </div>
   </div>`
 }
@@ -349,17 +363,15 @@ document.body.addEventListener('click', (e) => {
       return
     }
     if (act.dataset.act === 'gmail-disconnect') { disconnectGmail(act.dataset.account || undefined); render(); return }
-    if (act.dataset.act === 'theme-preset') {
+    if (act.dataset.act === 'theme-preset' || act.dataset.act === 'theme-mode') {
       const t = loadTheme()
-      t.preset = act.dataset.preset
-      saveTheme(t)
-      applyTheme(t)
-      render()
-      return
-    }
-    if (act.dataset.act === 'theme-reset') {
-      const t = loadTheme()
-      t.accent = null
+      if (act.dataset.mode) t.mode = act.dataset.mode
+      else {
+        // Choosing Custom starts from what's on screen, so the pickers open on
+        // the current colours instead of resetting the app to a default.
+        if (act.dataset.preset === CUSTOM && t.preset !== CUSTOM) t.custom = customSeed(t)
+        t.preset = act.dataset.preset
+      }
       saveTheme(t)
       applyTheme(t)
       render()
@@ -382,17 +394,21 @@ document.body.addEventListener('click', (e) => {
 // Live accent preview: the picker fires this continuously while dragging, so
 // apply without saving or re-rendering — a rerender would close the picker.
 document.body.addEventListener('input', (e) => {
-  if (e.target.id !== 'theme-accent') return
+  const key = e.target.dataset?.themeKey
+  if (!key) return
   const t = loadTheme()
-  t.accent = e.target.value
+  t.custom = { ...t.custom, [key]: e.target.value }
+  t.preset = CUSTOM
   applyTheme(t, { icon: false })
 })
 
 // The backup file picker (change bubbles, so this catches the re-rendered input).
 document.body.addEventListener('change', (e) => {
-  if (e.target.id === 'theme-accent') {
+  const themeKey = e.target.dataset?.themeKey
+  if (themeKey) {
     const t = loadTheme()
-    t.accent = e.target.value
+    t.custom = { ...t.custom, [themeKey]: e.target.value }
+    t.preset = CUSTOM
     saveTheme(t)
     applyTheme(t) // commit: this is the one that repaints the app icon
     render()
