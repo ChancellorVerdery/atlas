@@ -84,6 +84,22 @@ assert.ok(blocks[0].includes('mail-folder is-active'), 'All inboxes / Inbox shou
 assert.ok(navHTML([A, B], B, 'INBOX', labels).split('mail-nav__sub')[3].includes('mail-folder is-active'))
 assert.equal((navHTML([A, B], B, 'INBOX', labels).match(/mail-nav__acct is-active/g) || []).length, 1)
 
+// --- collapsing hides a section's folders without losing the active row -----
+const open3 = [...nav.matchAll(/<details[^>]*\sopen[^>]*>/g)].length
+assert.equal(open3, 3) // nothing collapsed by default
+
+const shut = navHTML([A, B], 'all', 'INBOX', labels, [A])
+const grp = (html, acct) => html.match(new RegExp(`<details[^>]*data-mail-group="${acct}"[^>]*>`))[0]
+assert.ok(!/\sopen/.test(grp(shut, A)), 'collapsed account should render closed')
+assert.ok(/\sopen/.test(grp(shut, 'all')) && /\sopen/.test(grp(shut, B)), 'other sections stay open')
+assert.equal(activeCount(shut), 1) // the active row still exists, just hidden
+assert.equal([...shut.matchAll(/<details/g)].length, 3)
+
+// An address in the collapsed list that is no longer connected is simply not
+// rendered — no stale <details>, and it must not close anything else.
+const gone = navHTML([A, B], 'all', 'INBOX', labels, ['c@z.com'])
+assert.equal([...gone.matchAll(/<details[^>]*\sopen/g)].length, 3)
+
 // --- one account: the plain folder list it always had, no headings ----------
 const solo = navHTML([A], A, 'INBOX', labels)
 assert.equal([...solo.matchAll(/mail-nav__acct/g)].length, 0)

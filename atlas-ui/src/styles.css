@@ -1111,12 +1111,37 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
   font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.04em;
   color: var(--ink-faint); padding: 7px 11px 5px; margin-top: 10px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  list-style: none; /* the default disclosure triangle, replaced by the caret below */
 }
-.mail-nav__acct:first-child { margin-top: 0; }
+.mail-nav__acct::-webkit-details-marker { display: none; }
+.mail-nav__acct::before {
+  content: "›"; display: inline-block; width: 9px; margin-right: 5px;
+  transition: transform 0.12s ease; transform-origin: 45% 50%;
+}
+.mail-nav__grp[open] > .mail-nav__acct::before { transform: rotate(90deg); }
+.mail-nav__grp:first-child > .mail-nav__acct { margin-top: 0; }
 .mail-nav__acct:hover { color: var(--ink); }
 .mail-nav__acct.is-active { color: var(--brass); }
 .mail-nav__sub { padding-left: 9px; border-left: 1px solid var(--line); margin: 0 0 2px 12px; }
 .mail-nav__sub .mail-nav__head { margin: 9px 9px 4px; }
+
+/* bulk-selection bar — appears under the header once a row is ticked */
+.mail-selbar {
+  display: flex; align-items: center; gap: 8px; position: relative; flex: none;
+  padding: 7px 14px; border-bottom: 1px solid var(--line);
+  background: rgba(224, 177, 92, 0.06);
+}
+.mail-selbar[hidden] { display: none; }
+.mail-selbar__n {
+  font-family: "IBM Plex Mono", monospace; font-size: 11.5px;
+  letter-spacing: 0.04em; color: var(--brass); margin-right: 2px;
+}
+.mail-selbar .mail-btn { display: inline-flex; align-items: center; gap: 5px; }
+.mail-selbar .mail-btn svg { width: 13px; height: 13px; }
+.mail-row__check {
+  flex: 0 0 auto; margin: 0 2px 0 0; accent-color: var(--brass); cursor: pointer;
+}
+.mail-row.is-sel { background: rgba(224, 177, 92, 0.09); }
 
 /* thread list */
 .mail-list { flex: 0 0 42%; min-width: 230px; overflow-y: auto; }

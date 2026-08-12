@@ -9,7 +9,7 @@ import {
   listThreads, listDrafts, getThread, getThreadSummary, listLabels,
   archiveThread, unarchiveThread, spamThread, unspamThread, setStarred,
   markRead, trashThread, untrashThread, deleteThreadForever,
-  moveThread, createLabel, createFilter,
+  moveThread, modifyThread, createLabel, createFilter,
   getDraft, saveDraft, deleteDraft, sendDraft, sendMessage, buildMime,
   togglePin, pinnedIds, isPinned,
 } from './email.js'
@@ -50,6 +50,7 @@ const st = {
   folder: 'INBOX', account: 'all', threads: [], nextPageToken: null, loadingList: false,
   openId: null, open: null, loadingView: false,
   labels: {}, seq: 0, viewSeq: 0, // labels: the user labels of each account, by address
+  sel: new Map(), // selected thread id -> the account it lives in
 }
 
 // The account a thread belongs to (merged "all" view mixes accounts per row).
@@ -108,6 +109,7 @@ export function renderEmailPage(root, rerender) {
         <span class="mail-top__addr" title="${esc(st.account)}">${esc(st.account === 'all' ? 'All inboxes' : st.account)}</span>
         <button type="button" class="mail-btn mail-btn--primary" data-mail="compose">Compose</button>
       </div>
+      <div class="mail-selbar" id="mail-selbar" hidden></div>
       <div class="mail-body${s.navHidden ? ' nav-hidden' : ''}">
         <aside class="mail-nav" id="mail-nav"></aside>
         <section class="mail-list" id="mail-list" style="flex-basis:${s.splitPct}%"></section>
@@ -160,7 +162,7 @@ function renderConnect(s) {
 // The nav IS the account switcher: each connected address is a heading with its
 // own folders and labels beneath it, and "All inboxes" leads with what they
 // share. One account keeps the plain folder list it always had.
-export function navHTML(accts, account = st.account, folder = st.folder, labels = st.labels) {
+export function navHTML(accts, account = st.account, folder = st.folder, labels = st.labels, collapsed = collapsedAccts()) {
   const item = (f, acct) => `
     <button type="button" class="mail-folder${account === acct && folder === f.id ? ' is-active' : ''}" data-mail-folder="${esc(f.id)}" data-mail-account="${esc(acct)}">
       ${ICON[f.icon] || ICON.label}<span>${esc(f.name)}</span>
@@ -172,17 +174,40 @@ export function navHTML(accts, account = st.account, folder = st.folder, labels 
     return i < 0 ? list.map(cell).join('')
       : list.slice(0, i).map(cell).join('') + `<p class="mail-nav__head">Labels</p>` + list.slice(i).map(cell).join('')
   }
+  // <details> gives collapsing for free — no open/closed state to track in JS,
+  // and the summary is keyboard-operable without any ARIA of our own.
   const group = (acct, name) => `
-    <button type="button" class="mail-nav__acct${account === acct ? ' is-active' : ''}" data-mail-folder="INBOX" data-mail-account="${esc(acct)}" title="${esc(name)}">${esc(name)}</button>
-    <div class="mail-nav__sub">${rows(acct)}</div>`
+    <details class="mail-nav__grp" data-mail-group="${esc(acct)}"${collapsed.includes(acct) ? '' : ' open'}>
+      <summary class="mail-nav__acct${account === acct ? ' is-active' : ''}" title="${esc(name)}">${esc(name)}</summary>
+      <div class="mail-nav__sub">${rows(acct)}</div>
+    </details>`
   return accts.length < 2
     ? rows(account)
     : group('all', 'All inboxes') + accts.map((a) => group(a, a)).join('')
 }
 
+// Which account sections are collapsed. Kept in atlas.email.v1 beside the other
+// mail UI prefs, so it survives a relaunch and follows the user to any device.
+const collapsedAccts = () => {
+  const c = loadEmail().navCollapsed
+  return Array.isArray(c) ? c : []
+}
+function setCollapsed(acct, closed) {
+  const set = new Set(collapsedAccts())
+  set[closed ? 'add' : 'delete'](acct)
+  const s = loadEmail()
+  s.navCollapsed = [...set]
+  saveEmail(s)
+}
+
 function renderNav() {
   const el = q('#mail-nav')
-  if (el) el.innerHTML = navHTML(connectedAccounts())
+  if (!el) return
+  el.innerHTML = navHTML(connectedAccounts())
+  // 'toggle' doesn't bubble, so it can't be delegated from the page root.
+  el.querySelectorAll('[data-mail-group]').forEach((d) => {
+    d.ontoggle = () => setCollapsed(d.dataset.mailGroup, !d.open)
+  })
 }
 
 const decodeEnt = (s) => { const t = document.createElement('textarea'); t.innerHTML = s; return t.value }
@@ -206,6 +231,115 @@ function rowActs(t, pinned) {
     `<button type="button" class="mail-iconbtn${act === 'pin' && pinned ? ' is-on' : ''}${act === 'star' && t.starred ? ' is-on' : ''}" data-mail-act="${act}" data-id="${esc(t.id)}" title="${title}" aria-label="${title}">${icon}</button>`).join('')
 }
 
+// ---- multi-select + bulk labelling -----------------------------------------
+
+// A row's mailbox. The merged view tags every row; a single-account view has
+// nothing to tag, so the view's own account is the answer.
+const rowAcct = (t) => t._account || (st.account === 'all' ? '' : st.account)
+
+// Which label names the bulk menu offers: those of the accounts actually in the
+// selection, by NAME — a label id belongs to one mailbox, a name travels.
+export function selNames(sel, labels = {}) {
+  const accts = [...new Set(sel.values())]
+  return [...new Set(accts.flatMap((a) => (labels[a] || []).map((l) => l.name)))].sort()
+}
+
+// Resolve one label name to a per-account label id. Accounts that don't have a
+// label by that name yet come back in `missing` for the caller to create.
+export function labelPlan(sel, labels, name) {
+  const found = new Map(), missing = []
+  for (const a of new Set(sel.values())) {
+    const hit = (labels[a] || []).find((l) => l.name.toLowerCase() === name.trim().toLowerCase())
+    if (hit) found.set(a, hit.id)
+    else missing.push(a)
+  }
+  return { found, missing }
+}
+
+function clearSel() { st.sel.clear(); renderSelBar() }
+
+function renderSelBar() {
+  const el = q('#mail-selbar')
+  if (!el) return
+  const n = st.sel.size
+  el.hidden = !n
+  if (!n) { el.innerHTML = ''; return }
+  // ponytail: "Select all" takes the loaded page, not every match server-side.
+  const all = st.threads.length && st.threads.every((t) => st.sel.has(t.id))
+  el.innerHTML = `
+    <span class="mail-selbar__n">${n} selected</span>
+    <button type="button" class="mail-btn mail-btn--ghost" data-mail="label-open">${ICON.label}<span>Label</span></button>
+    ${all ? '' : `<button type="button" class="mail-btn mail-btn--ghost" data-mail="sel-all">Select all ${st.threads.length}</button>`}
+    <button type="button" class="mail-btn mail-btn--ghost" data-mail="sel-clear">Clear</button>`
+}
+
+function toggleSel(id, account, on) {
+  if (on) st.sel.set(id, account || '')
+  else st.sel.delete(id)
+  renderSelBar()
+}
+
+function selectAllLoaded() {
+  for (const t of st.threads) st.sel.set(t.id, rowAcct(t))
+  renderList()
+  renderSelBar()
+}
+
+function openLabelMenu() {
+  if (rootEl?.querySelector('.mail-movemenu')) { closeMoveMenu(); return }
+  const bar = q('#mail-selbar')
+  if (!bar) return
+  const menu = document.createElement('div')
+  menu.className = 'mail-movemenu mail-movemenu--sel'
+  menu.innerHTML = `
+    <div class="mail-movemenu__head">Label ${st.sel.size} conversation${st.sel.size > 1 ? 's' : ''}</div>
+    <div class="mail-movemenu__list">
+      ${selNames(st.sel, st.labels).map((n) =>
+        `<button type="button" class="mail-movemenu__item" data-bulk-label="${esc(n)}">${ICON.label}<span>${esc(n)}</span></button>`).join('')}
+      <button type="button" class="mail-movemenu__item mail-movemenu__new" data-bulk-label="__new__">+ New label…</button>
+    </div>`
+  menu.onclick = (e) => {
+    const item = e.target.closest('[data-bulk-label]')
+    if (!item) return
+    let name = item.dataset.bulkLabel
+    if (name === '__new__') {
+      name = prompt('New label name:')?.trim()
+      if (!name) return
+    }
+    labelSelected(name)
+  }
+  bar.appendChild(menu)
+}
+
+// Apply one label, by name, to every selected conversation — in its own
+// mailbox. The threads stay where they are: this categorises, it doesn't file
+// (the per-thread "Move to folder" is what archives out of the inbox).
+function labelSelected(name) {
+  const picked = [...st.sel]
+  guard(async () => {
+    const { found, missing } = labelPlan(st.sel, st.labels, name)
+    for (const a of missing) {
+      const lbl = await createLabel(name, a || undefined)
+      found.set(a, lbl.id)
+      ;(st.labels[a] ||= []).push({ id: lbl.id, name: lbl.name })
+    }
+    if (missing.length) renderNav()
+    const res = await Promise.allSettled(
+      picked.map(([id, a]) => modifyThread(id, [found.get(a)], [], a || undefined)))
+    // allSettled swallows the auth failure guard() exists to handle — re-throw
+    // it so a lapsed token still triggers the reconnect splash.
+    const auth = res.find((r) => r.status === 'rejected' && r.reason instanceof AuthError)
+    if (auth) throw auth.reason
+    const failed = res.filter((r) => r.status === 'rejected').length
+    closeMoveMenu()
+    clearSel()
+    renderList()
+    toast(failed
+      ? `Labelled ${picked.length - failed} of ${picked.length} — ${failed} failed.`
+      : `Labelled ${picked.length} as “${name}”.`, !failed)
+  })
+}
+
 function renderList() {
   const el = q('#mail-list')
   if (!el) return
@@ -218,8 +352,9 @@ function renderList() {
   el.innerHTML = ordered.map((t) => {
     const p = isPinned(t.id, t._account)
     return `
-    <article class="mail-row${t.unread ? ' is-unread' : ''}${st.openId === t.id ? ' is-open' : ''}" data-thread-id="${esc(t.id)}"${t._account ? ` data-account="${esc(t._account)}"` : ''}${t.draftId ? ` data-draft-id="${esc(t.draftId)}"` : ''}>
+    <article class="mail-row${t.unread ? ' is-unread' : ''}${st.openId === t.id ? ' is-open' : ''}${st.sel.has(t.id) ? ' is-sel' : ''}" data-thread-id="${esc(t.id)}"${t._account ? ` data-account="${esc(t._account)}"` : ''}${t.draftId ? ` data-draft-id="${esc(t.draftId)}"` : ''}>
       <div class="mail-row__top">
+        <input type="checkbox" class="mail-row__check" data-mail-sel="${esc(t.id)}" data-account="${esc(rowAcct(t))}"${st.sel.has(t.id) ? ' checked' : ''} aria-label="Select this conversation">
         <span class="mail-row__from">${esc(t.from || '(draft)')}</span>
         ${showAcct && t._account ? `<span class="mail-row__acct" title="${esc(t._account)}">${esc(shortAddr(t._account))}</span>` : ''}
         <span class="mail-row__date">${fmtDate(t.date)}</span>
@@ -376,6 +511,7 @@ function loadFolder(fid) {
   st.openId = null
   st.open = null
   st.loadingList = true
+  clearSel() // the selection belonged to the folder we just left
   const seq = ++st.seq
   // Last launch's copy of this exact mailbox, painted while the fetch runs.
   const cached = cachedValue(threadCacheKey(st.account, fid))
@@ -791,13 +927,23 @@ function onClick(e) {
   if (e.target.closest('.mail-compose')) return // compose handles its own clicks
   if (e.target.closest('.mail-movemenu')) return // the menu handles its own clicks
   // Any click outside an open move-menu (except its trigger) dismisses it.
-  if (!e.target.closest('[data-mail="move-open"]')) closeMoveMenu()
+  if (!e.target.closest('[data-mail="move-open"],[data-mail="label-open"]')) closeMoveMenu()
+  // Before the row branch: ticking a box must never open the conversation.
+  const box = e.target.closest('[data-mail-sel]')
+  if (box) {
+    toggleSel(box.dataset.mailSel, box.dataset.account, box.checked)
+    box.closest('.mail-row')?.classList.toggle('is-sel', box.checked)
+    return
+  }
   const act = e.target.closest('[data-mail-act]')
   if (act) { doAct(act.dataset.mailAct, act.dataset.id); return }
   const mail = e.target.closest('[data-mail]')
   if (mail) {
     const m = mail.dataset.mail
     if (m === 'move-open') { openMoveMenu(mail.dataset.id); return }
+    if (m === 'label-open') { openLabelMenu(); return }
+    if (m === 'sel-all') { selectAllLoaded(); return }
+    if (m === 'sel-clear') { clearSel(); renderList(); return }
     if (m === 'toggle-nav') {
       const s = loadEmail()
       s.navHidden = !s.navHidden
