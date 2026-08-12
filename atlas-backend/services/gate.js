@@ -12,6 +12,7 @@ import net from 'node:net'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { verifySignature, parseSignature, issueToken, tokenValid } from '../lib/sshsig.js'
+import { startPortainerAuth } from './portainer-auth.js'
 
 const PORT = Number(process.env.GATE_PORT || 8099)
 const NAMESPACE = 'atlas-gate' // baked into the signature; ties it to this use
@@ -30,6 +31,10 @@ const SECRET = process.env.GATE_SECRET || crypto.randomBytes(32).toString('hex')
 const UPSTREAM = {
   'dev.myatlasapp.net': { host: '127.0.0.1', port: 5173, name: 'the dev server' },
   'console.myatlasapp.net': { host: '127.0.0.1', port: 80, name: 'the console' },
+  // Was routed straight to caddy:9001 by cloudflared, which meant Portainer —
+  // and so the Docker socket — was reachable from the open internet behind
+  // nothing but its own login. It now sits behind this gate like the rest.
+  'portainer.myatlasapp.net': { host: '127.0.0.1', port: 9001, name: 'Portainer' },
 }
 
 const allowedKeys = () => {
@@ -197,3 +202,7 @@ server.on('upgrade', (req, socket, head) => {
 server.listen(PORT, '127.0.0.1', () =>
   console.log(`gate up on 127.0.0.1:${PORT} for ${Object.keys(UPSTREAM).join(', ')}` +
     (process.env.GATE_SECRET ? '' : ' (no GATE_SECRET set — tokens die on restart)')))
+
+// Same process, separate listener: caddy's :9001 block sends Portainer traffic
+// here so the Docker tab arrives already signed in.
+startPortainerAuth()

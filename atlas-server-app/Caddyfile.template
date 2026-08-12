@@ -26,9 +26,20 @@
 
 # Portainer refuses to be iframed (CSP frame-ancestors 'none') and cannot live
 # under a subpath, so it gets its own port with that one header stripped.
-# Its own login still gates it; direct :9000 is loopback-only now.
+# Direct :9000 is loopback-only.
+#
+# This used to proxy straight to Portainer with no basic_auth, leaning entirely
+# on Portainer's own login — and cloudflared published it, so the Docker socket
+# was one password away from the open internet. Now: the same basic auth as the
+# console, and the port goes to the auto-login proxy (127.0.0.1:9002) so the
+# Docker tab doesn't ask for a third set of credentials. Because that proxy
+# removes Portainer's own login, this basic_auth block is load-bearing — do not
+# drop it. Public traffic additionally passes the SSH-key gate first.
 :9001 {
-	reverse_proxy 127.0.0.1:9000 {
+	basic_auth {
+		chancellor __HASH__
+	}
+	reverse_proxy 127.0.0.1:9002 {
 		header_down -Content-Security-Policy
 	}
 }
