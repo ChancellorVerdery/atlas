@@ -90,8 +90,20 @@ function serveStatic(req, res) {
 // would mean a new, unregistered origin on every launch.
 const PORT = 5180
 
-export function startHost() {
+export function startHost({ onIcon } = {}) {
   const handle = (req, res) => {
+    // The page owns the colour scheme, and the logo is drawn from it — so the
+    // app icon can only come from the page. It rasterises the themed logo and
+    // posts the PNG here; main.js puts it on the dock.
+    if (req.url === '/local/icon' && req.method === 'POST') {
+      let body = ''
+      req.on('data', (c) => { body += c; if (body.length > 4_000_000) req.destroy() })
+      req.on('end', () => {
+        try { onIcon?.(JSON.parse(body).png) } catch { /* malformed — keep the old icon */ }
+        res.writeHead(204).end()
+      })
+      return
+    }
     // The page hands its Atlas session token down so proxied prefixes can
     // authenticate to the server. It lives in localStorage, which this Node
     // process cannot read; kept in memory only, never written to disk.

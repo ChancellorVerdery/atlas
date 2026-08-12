@@ -6,7 +6,13 @@ import { sync } from './sync.js'
 import { seedFreshPluginState } from './page/plugins.js'
 import { clearCache } from './page/datacache.js'
 import './auth.css'
-import logoUrl from './assets/atlas-logo.svg'
+import { applyTheme, loadTheme, logoDataURL, pushAppIcon } from './page/theme.js'
+
+// Before anything paints: the scheme is cached locally, so the first frame is
+// already the user's colours rather than the default ones swapped out a beat
+// later. ponytail: a fresh device still flashes Brass until the pull lands.
+applyTheme()
+const logoUrl = logoDataURL()
 
 const AUTH_KEY = 'atlas.auth.v1'
 const SKIP_KEYS = [AUTH_KEY, 'atlas.devMode', 'atlas.backend']
@@ -65,6 +71,11 @@ sync.onUpdate((key, value) => {
   origSetItem(key, asRaw(value))
   window.dispatchEvent(new CustomEvent('atlas:sync-update', { detail: { key, value } }))
 })
+
+// Same idea as atlasLogout: a handle on the scheme from the console (and what
+// the desktop smoke run drives to prove a scheme change reaches the dock icon —
+// pushAppIcon takes a scheme without storing it, so nothing syncs).
+window.atlasTheme = { applyTheme, loadTheme, logoDataURL, pushAppIcon }
 
 window.atlasLogout = async () => {
   try { await sync.request('auth.logout', {}) } catch {}
@@ -373,5 +384,6 @@ async function hydrateInBackground(auth) {
   } catch {
     return // pull failed; the cache stands
   }
+  applyTheme() // the pull may have brought a scheme set on another device
   window.dispatchEvent(new CustomEvent('atlas:hydrated'))
 }

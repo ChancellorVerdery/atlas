@@ -23,6 +23,7 @@ import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/
 import { renderNotesPage } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus } from './page/email.js'
+import { PRESETS, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
 
 // Widgetless plugins that own the whole content area (registry: full:true).
 const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, graph: renderGraphPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage }
@@ -142,6 +143,38 @@ const emptyDash = (def) => `
     <span class="empty__tag">${esc(def.id)}</span>
   </div>`
 
+// One scheme drives the whole app: every rule reads the custom properties this
+// writes, and the logo (hence the app icon) is drawn from the same values.
+const themeSettingsHTML = () => {
+  const t = loadTheme()
+  const c = resolve(t)
+  const swatch = (id, p) => `
+    <button type="button" class="set-theme__preset${t.preset === id ? ' is-on' : ''}"
+            data-act="theme-preset" data-preset="${esc(id)}" title="${esc(p.label)}"
+            style="background:${esc(p.panel)}">
+      <span class="set-theme__dot" style="background:${esc(p.accent)}"></span>
+      <span class="set-theme__dot set-theme__dot--sm" style="background:${esc(p.signal)}"></span>
+      <span class="set-theme__label">${esc(p.label)}</span>
+    </button>`
+  return `<div class="set-row">
+    <div class="set-row__meta">
+      <span class="set-row__name">Colour scheme</span>
+      <span class="set-row__sub">Applies everywhere — pages, widgets, the logo, and the app icon. Pick a scheme, or set your own accent on top of one.</span>
+    </div>
+    <div class="set-theme">
+      <div class="set-theme__row">${Object.entries(PRESETS).map(([id, p]) => swatch(id, p)).join('')}</div>
+      <div class="set-theme__row set-theme__custom">
+        <label class="set-theme__accent">
+          <input type="color" id="theme-accent" value="${esc(c.accent)}" aria-label="Accent colour">
+          <span>${t.accent ? 'Custom accent' : 'Accent'}</span>
+        </label>
+        <img class="set-theme__logo" src="${esc(logoDataURL(t))}" alt="" width="44" height="44">
+        ${t.accent ? `<button type="button" class="gym-btn gym-btn--ghost" data-act="theme-reset">Use the scheme's accent</button>` : ''}
+      </div>
+    </div>
+  </div>`
+}
+
 const settingsHTML = () => {
   const auth = authState()
   const em = loadEmail()
@@ -166,6 +199,7 @@ const settingsHTML = () => {
       </div>
       <div class="set-gmail">${gmail}</div>
     </div>
+    ${themeSettingsHTML()}
     ${pluginsSettingsHTML()}
     <div class="set-row">
       <div class="set-row__meta">
@@ -315,6 +349,22 @@ document.body.addEventListener('click', (e) => {
       return
     }
     if (act.dataset.act === 'gmail-disconnect') { disconnectGmail(act.dataset.account || undefined); render(); return }
+    if (act.dataset.act === 'theme-preset') {
+      const t = loadTheme()
+      t.preset = act.dataset.preset
+      saveTheme(t)
+      applyTheme(t)
+      render()
+      return
+    }
+    if (act.dataset.act === 'theme-reset') {
+      const t = loadTheme()
+      t.accent = null
+      saveTheme(t)
+      applyTheme(t)
+      render()
+      return
+    }
     if (act.dataset.act === 'export-data') { exportData(); return }
     if (act.dataset.act === 'import-data') { document.getElementById('import-file')?.click(); return }
   }
@@ -329,8 +379,25 @@ document.body.addEventListener('click', (e) => {
   else openModal(f.widget.title, esc(f.widget.text))
 })
 
+// Live accent preview: the picker fires this continuously while dragging, so
+// apply without saving or re-rendering — a rerender would close the picker.
+document.body.addEventListener('input', (e) => {
+  if (e.target.id !== 'theme-accent') return
+  const t = loadTheme()
+  t.accent = e.target.value
+  applyTheme(t, { icon: false })
+})
+
 // The backup file picker (change bubbles, so this catches the re-rendered input).
 document.body.addEventListener('change', (e) => {
+  if (e.target.id === 'theme-accent') {
+    const t = loadTheme()
+    t.accent = e.target.value
+    saveTheme(t)
+    applyTheme(t) // commit: this is the one that repaints the app icon
+    render()
+    return
+  }
   if (e.target.id !== 'import-file' || !e.target.files?.length) return
   importData(e.target.files[0])
   e.target.value = '' // let the same file be re-picked if the user retries

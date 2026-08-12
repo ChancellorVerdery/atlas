@@ -5,7 +5,7 @@
 // existing WebSocket sync client. localStorage is this device's cache of that
 // database — writes go through the hooked setItem and push to the server, so
 // edits made here land in the database like they do in the browser.
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell, nativeImage } from 'electron'
 import { startHost, distExists } from './host.js'
 
 // --smoke boots everything without showing a window, prints a report and exits.
@@ -16,6 +16,17 @@ const HOLD = process.argv.includes('--smoke-hold')
 const HEADLESS = SMOKE || HOLD
 
 let host = null
+let lastIcon = null // the applied icon, so the smoke run can prove it landed
+
+// The colour scheme lives in the page, so the icon is drawn there and sent
+// down. macOS takes it on the dock; elsewhere it's the window icon.
+function setAppIcon(dataUrl, win) {
+  const img = nativeImage.createFromDataURL(String(dataUrl || ''))
+  if (img.isEmpty()) return
+  if (app.dock) app.dock.setIcon(img)
+  else win?.setIcon(img)
+  lastIcon = img
+}
 
 async function createWindow() {
   if (!distExists()) {
@@ -23,9 +34,10 @@ async function createWindow() {
     app.exit(1)
     return
   }
-  host = await startHost()
+  let win // assigned below; the icon can arrive before the page finishes loading
+  host = await startHost({ onIcon: (png) => setAppIcon(png, win) })
 
-  const win = new BrowserWindow({
+  win = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 960,
@@ -74,8 +86,17 @@ async function runSmoke(win) {
     out.checks.push(`${pass ? 'PASS' : 'FAIL'} ${name}${detail ? ' - ' + detail : ''}`)
     if (!pass) out.ok = false
   }
+  // Poll rather than sample once: a signed-in boot waits on the sync connect
+  // before the shell renders, so the first frame can be legitimately empty.
+  const waitFor = async (js, ms = 10_000) => {
+    for (const t0 = Date.now(); Date.now() - t0 < ms;) {
+      if (await win.webContents.executeJavaScript(js)) return true
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    return false
+  }
   try {
-    const booted = await win.webContents.executeJavaScript(
+    const booted = await waitFor(
       `!!(document.querySelector('.auth-card') || document.querySelector('#nav a'))`)
     check('app boots from the local host', booted)
 
@@ -85,7 +106,10 @@ async function runSmoke(win) {
     // The page's origin is what Google matches against the OAuth client's
     // authorized JavaScript origins, so a drifting port breaks sign-in.
     const origin = await win.webContents.executeJavaScript(`location.origin`)
-    check('page origin is the registered one', origin === 'http://127.0.0.1:5180', origin)
+    check(host.port === 5180
+      ? 'page origin is the registered one'
+      : 'page origin matches this host (5180 was busy — another Atlas is up)',
+    origin === host.origin, origin)
 
     const jobs = await win.webContents.executeJavaScript(
       `fetch('/study-api/jobs').then(r => r.status)`)
@@ -94,6 +118,31 @@ async function runSmoke(win) {
     const proxied = await win.webContents.executeJavaScript(
       `fetch('/graph-api/nope').then(r => r.status).catch(() => 'threw')`)
     check('unknown local API route answers', proxied !== 'threw', `status=${proxied}`)
+
+    // The colour scheme reaches the dock: the page rasterises its themed logo
+    // and posts the PNG here. Canvas would refuse a tainted image, so this also
+    // proves the SVG data URL is origin-clean.
+    await new Promise((done) => {
+      const t0 = Date.now()
+      const tick = () => (lastIcon || Date.now() - t0 > 5000 ? done() : setTimeout(tick, 100))
+      tick()
+    })
+    check('themed app icon reached the shell', !!lastIcon && lastIcon.getSize().width === 512,
+      lastIcon ? `${lastIcon.getSize().width}px` : 'never arrived')
+
+    // …and a different scheme produces a different icon. pushAppIcon takes a
+    // scheme without storing it, so this proves the path without touching the
+    // user's saved colours.
+    const before = lastIcon?.toDataURL()
+    await win.webContents.executeJavaScript(
+      `window.atlasTheme.pushAppIcon({ preset: 'rose', accent: '#22ff88' })`)
+    let repainted = false
+    for (const t0 = Date.now(); Date.now() - t0 < 5000 && !repainted;) {
+      repainted = !!lastIcon && lastIcon.toDataURL() !== before
+      if (!repainted) await new Promise((r) => setTimeout(r, 100))
+    }
+    check('a scheme change repaints the icon', repainted)
+    await win.webContents.executeJavaScript(`window.atlasTheme.pushAppIcon()`) // back to theirs
   } catch (e) {
     check('smoke run', false, e.message)
   }
