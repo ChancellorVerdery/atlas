@@ -82,6 +82,11 @@ async function runSmoke(win) {
     const title = await win.webContents.executeJavaScript(`document.title`)
     check('bundle served by the electron host', !!title, `title=${JSON.stringify(title)}`)
 
+    // The page's origin is what Google matches against the OAuth client's
+    // authorized JavaScript origins, so a drifting port breaks sign-in.
+    const origin = await win.webContents.executeJavaScript(`location.origin`)
+    check('page origin is the registered one', origin === 'http://127.0.0.1:5180', origin)
+
     const jobs = await win.webContents.executeJavaScript(
       `fetch('/study-api/jobs').then(r => r.status)`)
     check('local API mounted (/study-api/jobs)', jobs === 200, `status=${jobs}`)

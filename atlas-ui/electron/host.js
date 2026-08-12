@@ -80,11 +80,18 @@ function serveStatic(req, res) {
   })
 }
 
-// Binds to a random free port on the loopback interface only — these handlers
-// have no authentication and can read local files and run the claude CLI, so
-// they must never be reachable from the network.
+// Binds to the loopback interface only — these handlers have no authentication
+// and can read local files and run the claude CLI, so they must never be
+// reachable from the network.
+//
+// The port is FIXED because it is part of the app's origin, and Google checks
+// that origin against the OAuth client's authorized JavaScript origins list
+// (the sign-in popup posts the auth code back to this page). A random port
+// would mean a new, unregistered origin on every launch.
+const PORT = 5180
+
 export function startHost() {
-  const server = http.createServer((req, res) => {
+  const handle = (req, res) => {
     // The page hands its Atlas session token down so proxied prefixes can
     // authenticate to the server. It lives in localStorage, which this Node
     // process cannot read; kept in memory only, never written to disk.
@@ -108,12 +115,25 @@ export function startHost() {
       return
     }
     serveStatic(req, res)
-  })
-  return new Promise((resolve, reject) => {
+  }
+
+  // A fresh server per attempt: a failed listen() leaves its 'listening'
+  // callback attached, so retrying on the same server resolves twice.
+  const listen = (port) => new Promise((resolve, reject) => {
+    const server = http.createServer(handle)
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      resolve({ server, port: server.address().port, origin: `http://127.0.0.1:${server.address().port}` })
+    server.listen(port, '127.0.0.1', () => {
+      const p = server.address().port
+      resolve({ server, port: p, origin: `http://127.0.0.1:${p}` })
     })
+  })
+
+  // ponytail: a second Atlas instance holds the port — fall back to any free
+  // one so the app still runs; only Google sign-in breaks (unknown origin).
+  return listen(PORT).catch((err) => {
+    if (err.code !== 'EADDRINUSE') throw err
+    console.warn(`atlas: port ${PORT} is busy — Google sign-in will be rejected on this launch`)
+    return listen(0)
   })
 }
 
