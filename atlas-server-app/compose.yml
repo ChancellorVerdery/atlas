@@ -25,6 +25,14 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8082:8080"
+    environment:
+      # Feeds the auto-login plugin so the Database tab does not ask for the
+      # Postgres password behind two layers of auth that already identified you.
+      ATLAS_DB_HOST: ${ATLAS_DB_HOST:-postgres}
+      ATLAS_DB_USER: ${ATLAS_DB_USER:-postgres}
+      ATLAS_DB_PASS: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./adminer-plugins/atlas-autologin.php:/var/www/html/plugins-enabled/atlas-autologin.php:ro
   caddy:
     image: caddy:2
     restart: unless-stopped

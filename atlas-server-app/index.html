@@ -28,13 +28,23 @@
   <button data-t="git">Git</button>
 </nav>
 <main>
-  <iframe id="shell" class="on" src="/shell/"></iframe>
+  <iframe id="shell" class="on" src="/shell/" data-loaded="1"></iframe>
   <!-- same origin now: portainer is mounted at /docker/ rather than on its own
        port and tunnel hostname, so there is one way in and one login -->
   <iframe id="docker" data-src="/docker/"></iframe>
-  <!-- pgsql param prefills driver+server; adding username= would make adminer
-       attempt a passwordless login and 403 -->
-  <iframe id="db" data-src="/db/?pgsql=postgres"></iframe>
+  <iframe id="db" name="db"></iframe>
+  <!-- Adminer only attempts a connection once a password has been submitted
+       (it guards on is_string(get_password())), so the tab posts this form on
+       first open. The password below is a placeholder and is NOT a credential:
+       the atlas-autologin plugin's login() accepts anything and its
+       credentials() supplies the real host/user/password from the server's
+       environment, so this value never reaches postgres. -->
+  <form id="dbauth" method="post" action="/db/" target="db" hidden>
+    <input type="hidden" name="auth[driver]" value="pgsql">
+    <input type="hidden" name="auth[server]" value="postgres">
+    <input type="hidden" name="auth[username]" value="postgres">
+    <input type="hidden" name="auth[password]" value="placeholder-not-a-credential">
+  </form>
   <!-- trailing slash matters: the board's fetches are relative to /git/ -->
   <iframe id="git" data-src="/git/"></iframe>
 </main>
@@ -44,7 +54,13 @@
     tabs.forEach(x => x.classList.toggle("on", x === b));
     frames.forEach(f => {
       const on = f.id === b.dataset.t;
-      if (on && !f.src && f.dataset.src) f.src = f.dataset.src; // lazy-load on first visit
+      // lazy-load on first visit only — the db tab logs itself in with a POST,
+      // and re-posting on every tab switch would throw away where you were
+      if (on && !f.dataset.loaded) {
+        f.dataset.loaded = "1";
+        if (f.id === "db") document.getElementById("dbauth").submit();
+        else if (f.dataset.src) f.src = f.dataset.src;
+      }
       f.classList.toggle("on", on);
       if (on) f.contentWindow && f.contentWindow.focus();
     });

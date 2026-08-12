@@ -21,6 +21,20 @@ say "shipping the console page and the template"
 scp -q "$TPL" "$HOST:/tmp/Caddyfile.new.tpl"
 scp -q atlas-server-app/index.html "$HOST:/tmp/console-index.html"
 
+# The console password, for the post-reload probes only. Pulled from the local
+# credentials file and written 0600 on the server; the remote script deletes it
+# as soon as it has read it.
+PWFILE=$(mktemp); chmod 600 "$PWFILE"
+awk '/Console browser login/{f=1} f&&/^[ \t]*password:/{sub(/^[ \t]*password:[ \t]*/,"");print;exit}' \
+  "$HOME/Desktop/credentials/atlas-credentials.txt" > "$PWFILE" 2>/dev/null || true
+if [ -s "$PWFILE" ]; then
+  scp -q "$PWFILE" "$HOST:/tmp/.console_probe_pw"
+  ssh "$HOST" 'chmod 600 /tmp/.console_probe_pw'
+else
+  echo "  (no console password found — probes will be skipped)"
+fi
+rm -f "$PWFILE"
+
 say "rendering, validating, reloading (auto-rollback on failure)"
 ssh "$HOST" 'bash -s' <<'REMOTE'
 set -euo pipefail
@@ -58,6 +72,9 @@ probe() { # path expected-code label
   printf '  %-28s %s (want %s)\n' "$3" "$c" "$2"
   [ "$c" = "$2" ] || fail=1
 }
+# Shipped by the caller as a 0600 file so it never appears in argv or in ps.
+CONSOLE_PW=$(cat /tmp/.console_probe_pw 2>/dev/null || true)
+rm -f /tmp/.console_probe_pw
 if [ -n "${CONSOLE_PW:-}" ]; then
   probe /            200 "console page"
   probe /docker/     200 "docker tab"
