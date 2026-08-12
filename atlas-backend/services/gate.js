@@ -11,12 +11,16 @@ import http from 'node:http'
 import net from 'node:net'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
-import { verifySignature, issueToken, tokenValid } from '../lib/sshsig.js'
+import { verifySignature, parseSignature, issueToken, tokenValid } from '../lib/sshsig.js'
 
 const PORT = Number(process.env.GATE_PORT || 8099)
 const NAMESPACE = 'atlas-gate' // baked into the signature; ties it to this use
 const COOKIE = 'atlas_gate'
 const KEYS_FILE = process.env.GATE_KEYS || '/keys/authorized_keys'
+// Only affects the example command shown on the page — the gate accepts any key
+// in KEYS_FILE regardless. Named for the key that actually exists on the Mac;
+// `id_ed25519` was a wrong guess that made the printed command fail outright.
+const KEY_HINT = process.env.GATE_KEY_HINT || '~/.ssh/homeserver'
 // A restart invalidates outstanding tokens unless a secret is supplied. That is
 // the safe default: better a re-sign than a token signed with a key nobody set.
 const SECRET = process.env.GATE_SECRET || crypto.randomBytes(32).toString('hex')
@@ -40,9 +44,14 @@ setInterval(() => {
   for (const [n, exp] of nonces) if (exp < now) nonces.delete(n)
 }, 60_000).unref()
 
+// An hour, not ten minutes: the flow is "read the page, switch to a terminal,
+// maybe go find the right machine", and a challenge going stale mid-task is
+// indistinguishable from the signature being rejected.
+const NONCE_TTL_MS = 60 * 60_000
+
 const newNonce = () => {
   const n = crypto.randomBytes(18).toString('base64url')
-  nonces.set(n, Date.now() + 10 * 60_000)
+  nonces.set(n, Date.now() + NONCE_TTL_MS)
   return n
 }
 
@@ -69,18 +78,38 @@ const page = (nonce, err) => `<!doctype html><meta charset="utf-8">
   button { margin-top:12px; background:linear-gradient(180deg,#e0b15c,#b9863a); color:#14100a; border:0;
            border-radius:10px; padding:10px 18px; font-weight:600; font-size:14px; cursor:pointer }
   .err { color:#e08c8c; min-height:1.4em; margin:10px 0 0; font-size:13px }
+  .hint { font-size:12.5px; color:#7d8494; margin:-6px 0 12px }
+  .hint code { color:#9aa0ad }
+  #copy { margin:0 8px 0 0; padding:3px 10px; font-size:12px; font-weight:500; background:none;
+          color:#9aa0ad; border:1px solid rgba(202,214,242,.22); border-radius:7px; vertical-align:baseline }
+  #copy:hover { color:#e9e7df; border-color:rgba(202,214,242,.4) }
 </style>
 <div class="card">
   <h1>Sign in with your SSH key</h1>
   <p>Run this on a machine whose key can already reach the Atlas server, then paste what it prints. The token it gives your browser lasts 24 hours.</p>
-  <pre>printf %s '${nonce}' | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n ${NAMESPACE} -</pre>
+  <pre id="cmd">printf %s '${nonce}' | ssh-keygen -Y sign -f ${KEY_HINT} -n ${NAMESPACE} -</pre>
+  <p class="hint"><button type="button" id="copy">Copy command</button>
+  Any key this server already trusts works — change the <code>-f</code> path if you use a different one.
+  Nothing secret leaves your machine: this prints a signature, not your key.</p>
+  <p class="hint">Paste the whole block it prints, <code>-----BEGIN</code> and <code>-----END</code> lines included.
+  Each challenge is good once — if you get an error, re-run the command with the
+  <em>new</em> value shown above rather than pasting the previous signature again.</p>
   <form method="POST" action="/_gate/verify">
     <input type="hidden" name="nonce" value="${nonce}">
     <textarea name="sig" placeholder="-----BEGIN SSH SIGNATURE-----" spellcheck="false" autofocus></textarea>
     <p class="err">${err || ''}</p>
     <button type="submit">Unlock for 24 hours</button>
   </form>
-</div>`
+</div>
+<script>
+  document.getElementById('copy').onclick = async (e) => {
+    try {
+      await navigator.clipboard.writeText(document.getElementById('cmd').textContent)
+      e.target.textContent = 'Copied'
+      setTimeout(() => { e.target.textContent = 'Copy command' }, 1500)
+    } catch { e.target.textContent = 'Select it manually' }
+  }
+</script>`
 
 const challenge = (res, err) => {
   res.writeHead(err ? 401 : 200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
@@ -116,9 +145,20 @@ const server = http.createServer((req, res) => {
       const sig = form.get('sig') || ''
       // one shot: consumed whether or not it verifies
       const known = nonces.delete(nonce)
-      if (!known) { challenge(res, 'That challenge expired — here is a fresh one.'); return }
+      if (!known) {
+        challenge(res, 'That challenge was already used, expired, or predates a gate restart. '
+          + 'Re-run the command with the new value above — pasting the same signature again will not work.')
+        return
+      }
       if (!verifySignature(sig, nonce, NAMESPACE, allowedKeys())) {
-        challenge(res, 'That signature was not made by a key this server trusts.')
+        // Separate the "you pasted something that is not a signature" case from
+        // "you signed with the wrong key": they need completely different fixes.
+        const parsed = parseSignature(sig)
+        challenge(res, !parsed
+          ? 'That does not look like an SSH signature. Paste the whole block, including the BEGIN and END lines.'
+          : parsed.namespace !== NAMESPACE
+            ? `That signature was made for "${parsed.namespace}", not "${NAMESPACE}" — check the -n flag.`
+            : 'That signature is valid, but it was made by a key this server does not trust.')
         return
       }
       res.writeHead(302, {
