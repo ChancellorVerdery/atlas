@@ -29,7 +29,9 @@
 </nav>
 <main>
   <iframe id="shell" class="on" src="/shell/"></iframe>
-  <iframe id="docker"></iframe>
+  <!-- same origin now: portainer is mounted at /docker/ rather than on its own
+       port and tunnel hostname, so there is one way in and one login -->
+  <iframe id="docker" data-src="/docker/"></iframe>
   <!-- pgsql param prefills driver+server; adding username= would make adminer
        attempt a passwordless login and 403 -->
   <iframe id="db" data-src="/db/?pgsql=postgres"></iframe>
@@ -37,14 +39,6 @@
   <iframe id="git" data-src="/git/"></iframe>
 </main>
 <script>
-  // Portainer cannot live under a subpath; :9001 is caddy stripping its
-  // frame-ancestors CSP so the iframe is allowed. Direct :9000 is loopback-only.
-  // Via the Cloudflare tunnel (console.<domain>) there is no :9001 — portainer
-  // rides its own tunnel hostname on the same domain instead.
-  var h = location.hostname;
-  document.getElementById("docker").dataset.src = /^[\d.]+$/.test(h)
-    ? "http://" + h + ":9001/"
-    : "https://portainer." + h.split(".").slice(1).join(".") + "/";
   const tabs = document.querySelectorAll("nav button"), frames = document.querySelectorAll("iframe");
   tabs.forEach(b => b.addEventListener("click", () => {
     tabs.forEach(x => x.classList.toggle("on", x === b));

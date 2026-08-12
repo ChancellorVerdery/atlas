@@ -18,31 +18,48 @@
 	handle_path /git* {
 		reverse_proxy 127.0.0.1:7682
 	}
-	handle {
+
+	# Docker tab. Portainer cannot be told to live under a sub-path — it serves
+	# its SPA from / with absolute asset and API URLs — so it gets mounted at
+	# /docker/ and everything it then asks for at the top level falls through to
+	# it via the catch-all below. That is why the console's own static file
+	# server is pinned to exactly "/" rather than being the fallback: the
+	# fallback has to belong to Portainer.
+	# inside a handle so it is mutually exclusive with the blocks below rather
+	# than depending on where caddy sorts a bare redir
+	handle /docker {
+		redir * /docker/
+	}
+	handle_path /docker/* {
+		reverse_proxy 127.0.0.1:9002 {
+			header_down -Content-Security-Policy
+		}
+	}
+
+	handle / {
 		root * /srv
 		file_server
 	}
+
+	# Portainer's absolute paths (/api/*, /assets/*, …). Unmatched paths reaching
+	# Portainer is fine; it serves its own SPA fallback.
+	handle {
+		reverse_proxy 127.0.0.1:9002 {
+			header_down -Content-Security-Policy
+		}
+	}
 }
 
-# Portainer refuses to be iframed (CSP frame-ancestors 'none') and cannot live
-# under a subpath, so it gets its own port with that one header stripped.
-# Direct :9000 is loopback-only.
+# The :9001 listener is gone. It proxied straight to Portainer with no
+# basic_auth, bound to every interface, and cloudflared published it as
+# portainer.<domain> — so the Docker socket, which is root on this box, sat on
+# the open internet behind nothing but Portainer's own login. Portainer is now
+# reachable only as /docker/ on the console above, behind the console's basic
+# auth and the SSH-key gate, with 127.0.0.1:9002 supplying the session.
 #
-# This used to proxy straight to Portainer with no basic_auth, leaning entirely
-# on Portainer's own login — and cloudflared published it, so the Docker socket
-# was one password away from the open internet. Now: the same basic auth as the
-# console, and the port goes to the auto-login proxy (127.0.0.1:9002) so the
-# Docker tab doesn't ask for a third set of credentials. Because that proxy
-# removes Portainer's own login, this basic_auth block is load-bearing — do not
-# drop it. Public traffic additionally passes the SSH-key gate first.
-:9001 {
-	basic_auth {
-		chancellor __HASH__
-	}
-	reverse_proxy 127.0.0.1:9002 {
-		header_down -Content-Security-Policy
-	}
-}
+# Nothing else may expose 9000 or 9002. The auto-login proxy answers every
+# request as an authenticated admin, so an unauthenticated route to it is a
+# full compromise, not a degraded one.
 
 # Atlas sync WebSockets — public via cloudflared (sync.myatlasapp.net -> here).
 # No basic_auth: the services behind this block authenticate every request
@@ -59,6 +76,9 @@
 	}
 	handle_path /outbox {
 		reverse_proxy 127.0.0.1:8101
+	}
+	handle_path /uiapi* {
+		reverse_proxy 127.0.0.1:8102
 	}
 	respond 404
 }

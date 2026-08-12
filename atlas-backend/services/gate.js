@@ -30,11 +30,11 @@ const SECRET = process.env.GATE_SECRET || crypto.randomBytes(32).toString('hex')
 // DNS record can't turn the gate into an open proxy.
 const UPSTREAM = {
   'dev.myatlasapp.net': { host: '127.0.0.1', port: 5173, name: 'the dev server' },
+  // Portainer, Adminer, the git board and the terminal all live under this one
+  // host as paths (/docker, /db, /git, /shell). portainer.myatlasapp.net used
+  // to be a second way in, published straight to caddy with no basic auth; it
+  // has been removed from cloudflared rather than gated, so there is one door.
   'console.myatlasapp.net': { host: '127.0.0.1', port: 80, name: 'the console' },
-  // Was routed straight to caddy:9001 by cloudflared, which meant Portainer —
-  // and so the Docker socket — was reachable from the open internet behind
-  // nothing but its own login. It now sits behind this gate like the rest.
-  'portainer.myatlasapp.net': { host: '127.0.0.1', port: 9001, name: 'Portainer' },
 }
 
 const allowedKeys = () => {

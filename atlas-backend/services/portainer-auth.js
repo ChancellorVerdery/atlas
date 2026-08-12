@@ -8,9 +8,10 @@
 // anyway — a big part of why the Docker tab asked for a login again.
 //
 // SAFE ONLY BEHIND THE OUTER LAYERS. This removes Portainer's own login, so
-// whatever can reach this port has full control of the Docker socket. It must
-// stay bound to loopback, with caddy's basic auth and the SSH-key gate in
-// front. See the :9001 block in Caddyfile.template.
+// whatever can reach this port has full control of the Docker socket — which is
+// root on the box. It must stay bound to loopback, reachable only as /docker/
+// on the console, behind caddy's basic auth and the SSH-key gate. See the :80
+// block in Caddyfile.template; never publish 9002 by any other route.
 import http from 'node:http'
 import net from 'node:net'
 
