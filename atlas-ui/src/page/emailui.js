@@ -5,7 +5,7 @@
 
 import {
   loadEmail, saveEmail, isConnected, connectGmail, AuthError,
-  connectedAccounts, setActiveAccount,
+  connectedAccounts, setActiveAccount, refreshGoogleStatus,
   listThreads, listDrafts, getThread, getThreadSummary, listLabels,
   archiveThread, unarchiveThread, spamThread, unspamThread, setStarred,
   markRead, trashThread, untrashThread, deleteThreadForever,
@@ -453,12 +453,17 @@ function renderView() {
 async function guard(fn) {
   try { await fn() } catch (err) {
     if (err instanceof AuthError) {
-      // Server-side token lapsed/revoked: flip the local cache to disconnected
-      // (keep address for the "session expired for <address>" splash).
-      const s = loadEmail()
-      s.connected = false
-      saveEmail(s)
-      rerenderApp()
+      // One account's token can lapse while the others are fine — and in the
+      // merged view the failing call may not even be the account on screen. Ask
+      // the server, which drops only the dead account, instead of assuming the
+      // whole connection died. Splash only when nothing is left connected.
+      const before = connectedAccounts().length
+      const d = await refreshGoogleStatus()
+      if (d && !d.connected) { rerenderApp(); return }
+      // An account really did drop out: redraw first, then say so — the toast
+      // lives in the subtree a rerender replaces.
+      if (d && (d.accounts || []).length !== before) rerenderApp()
+      toast(err.message || 'Reconnect that account in Settings.')
       return
     }
     toast(err.message || String(err))

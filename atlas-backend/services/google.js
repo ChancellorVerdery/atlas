@@ -23,6 +23,7 @@
 
 import { applyDdl, serveHttp, deliver } from '../lib/runner.js'
 import { pool } from '../lib/db.js'
+import { fetchRetry } from '../lib/http.js'
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || ''
@@ -72,7 +73,7 @@ class AuthErr extends Error {}
 const authErr = (m) => new AuthErr('auth: ' + m)
 
 async function tokenPost(params) {
-  const r = await fetch(TOKEN_URL, {
+  const r = await fetchRetry(TOKEN_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params),
@@ -116,17 +117,22 @@ function refreshToken(userId, address, row) {
     refreshing.set(key, (async () => {
       try {
         if (!row.refresh_token) throw authErr('Not connected to Google.')
-        const { ok, t } = await tokenPost({
+        const { ok, t, status } = await tokenPost({
           client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
           refresh_token: row.refresh_token, grant_type: 'refresh_token',
         })
         if (!ok || !t.access_token) {
-          // invalid_grant = the refresh token was revoked/expired: drop just
-          // this account so the user is cleanly prompted to reconnect it.
+          // invalid_grant is the ONLY answer that means the grant itself is
+          // dead (revoked, expired, password changed): drop just this account
+          // so the user is cleanly prompted to reconnect it.
           if (t.error === 'invalid_grant') {
             await pool.query('DELETE FROM google.tokens WHERE user_id = $1 AND address = $2', [userId, address])
+            throw authErr('Google session expired — reconnect.')
           }
-          throw authErr('Google session expired — reconnect.')
+          // Anything else — a bad client config, a garbled body, Google having
+          // a moment — is not evidence the connection is gone. Reporting it as
+          // an auth failure would drop a working account.
+          throw new Error(`Google refused the token refresh (${status}${t.error ? ': ' + t.error : ''}).`)
         }
         const expires_at = Date.now() + (Number(t.expires_in) || 3600) * 1000
         await upsert(userId, address, { access_token: t.access_token, expires_at })
@@ -150,11 +156,13 @@ async function accessTokenFor(userId, address, { force = false } = {}) {
 // on 401. Returns parsed JSON (null on 204). Throws AuthErr on auth/scope loss.
 async function googleApi(userId, address, { method = 'GET', url, body }, retried = false) {
   const token = await accessTokenFor(userId, address, { force: retried })
-  const r = await fetch(url, {
+  const r = await fetchRetry(url, {
     method,
     headers: { Authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
-  })
+    // Reads retry; writes get one shot. A send that Google accepted but whose
+    // response we lost would go out twice on a retry.
+  }, { tries: method === 'GET' ? 2 : 1 })
   if (r.status === 401) {
     if (!retried) return googleApi(userId, address, { method, url, body }, true)
     throw authErr('Google session expired — reconnect.')
