@@ -33,6 +33,7 @@ const ICON = {
   panel: I('<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/>'),
   refresh: I('<path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/>'),
   mail: I('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2.5 6.5 9.5 7 9.5-7"/>'),
+  select: I('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>'),
 }
 
 const FOLDERS = [
@@ -51,6 +52,7 @@ const st = {
   openId: null, open: null, loadingView: false,
   labels: {}, seq: 0, viewSeq: 0, // labels: the user labels of each account, by address
   sel: new Map(), // selected thread id -> the account it lives in
+  selMode: false, // checkboxes are only rendered while this is on
 }
 
 // The account a thread belongs to (merged "all" view mixes accounts per row).
@@ -106,6 +108,7 @@ export function renderEmailPage(root, rerender) {
         <button type="button" class="mail-iconbtn" data-mail="toggle-nav" title="Show or hide folders" aria-label="Show or hide folders">${ICON.panel}</button>
         <span class="mail-top__folder" id="mail-folder-name">${esc(folderDef(st.folder).name)}</span>
         <button type="button" class="mail-iconbtn" data-mail="refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
+        <button type="button" class="mail-iconbtn" data-mail="sel-mode" title="Select conversations (or ⌘-click one)" aria-label="Select conversations">${ICON.select}</button>
         <span class="mail-top__addr" title="${esc(st.account)}">${esc(st.account === 'all' ? 'All inboxes' : st.account)}</span>
         <button type="button" class="mail-btn mail-btn--primary" data-mail="compose">Compose</button>
       </div>
@@ -256,21 +259,31 @@ export function labelPlan(sel, labels, name) {
   return { found, missing }
 }
 
+// Selection is a mode you enter — via Select, or by ⌘-clicking a row. The
+// checkboxes only exist while it's on, so the list stays clean the rest of the
+// time.
+function setSelMode(on) {
+  if (st.selMode === on) return
+  st.selMode = on
+  if (!on) st.sel.clear()
+  renderList()
+  renderSelBar()
+}
 function clearSel() { st.sel.clear(); renderSelBar() }
 
 function renderSelBar() {
   const el = q('#mail-selbar')
   if (!el) return
   const n = st.sel.size
-  el.hidden = !n
-  if (!n) { el.innerHTML = ''; return }
+  el.hidden = !st.selMode
+  if (!st.selMode) { el.innerHTML = ''; return }
   // ponytail: "Select all" takes the loaded page, not every match server-side.
   const all = st.threads.length && st.threads.every((t) => st.sel.has(t.id))
   el.innerHTML = `
-    <span class="mail-selbar__n">${n} selected</span>
-    <button type="button" class="mail-btn mail-btn--ghost" data-mail="label-open">${ICON.label}<span>Label</span></button>
-    ${all ? '' : `<button type="button" class="mail-btn mail-btn--ghost" data-mail="sel-all">Select all ${st.threads.length}</button>`}
-    <button type="button" class="mail-btn mail-btn--ghost" data-mail="sel-clear">Clear</button>`
+    <span class="mail-selbar__n">${n ? `${n} selected` : 'Select conversations'}</span>
+    ${n ? `<button type="button" class="mail-btn mail-btn--ghost" data-mail="label-open">${ICON.label}<span>Label</span></button>` : ''}
+    ${all || !st.threads.length ? '' : `<button type="button" class="mail-btn mail-btn--ghost" data-mail="sel-all">Select all ${st.threads.length}</button>`}
+    <button type="button" class="mail-btn mail-btn--ghost" data-mail="sel-done">${n ? 'Clear' : 'Done'}</button>`
 }
 
 function toggleSel(id, account, on) {
@@ -354,7 +367,7 @@ function renderList() {
     return `
     <article class="mail-row${t.unread ? ' is-unread' : ''}${st.openId === t.id ? ' is-open' : ''}${st.sel.has(t.id) ? ' is-sel' : ''}" data-thread-id="${esc(t.id)}"${t._account ? ` data-account="${esc(t._account)}"` : ''}${t.draftId ? ` data-draft-id="${esc(t.draftId)}"` : ''}>
       <div class="mail-row__top">
-        <input type="checkbox" class="mail-row__check" data-mail-sel="${esc(t.id)}" data-account="${esc(rowAcct(t))}"${st.sel.has(t.id) ? ' checked' : ''} aria-label="Select this conversation">
+        ${st.selMode ? `<input type="checkbox" class="mail-row__check" data-mail-sel="${esc(t.id)}" data-account="${esc(rowAcct(t))}"${st.sel.has(t.id) ? ' checked' : ''} aria-label="Select this conversation">` : ''}
         <span class="mail-row__from">${esc(t.from || '(draft)')}</span>
         ${showAcct && t._account ? `<span class="mail-row__acct" title="${esc(t._account)}">${esc(shortAddr(t._account))}</span>` : ''}
         <span class="mail-row__date">${fmtDate(t.date)}</span>
@@ -516,7 +529,7 @@ function loadFolder(fid) {
   st.openId = null
   st.open = null
   st.loadingList = true
-  clearSel() // the selection belonged to the folder we just left
+  setSelMode(false) // the selection, and the mode, belonged to the folder we left
   const seq = ++st.seq
   // Last launch's copy of this exact mailbox, painted while the fetch runs.
   const cached = cachedValue(threadCacheKey(st.account, fid))
@@ -947,8 +960,10 @@ function onClick(e) {
     const m = mail.dataset.mail
     if (m === 'move-open') { openMoveMenu(mail.dataset.id); return }
     if (m === 'label-open') { openLabelMenu(); return }
+    if (m === 'sel-mode') { setSelMode(!st.selMode); return }
     if (m === 'sel-all') { selectAllLoaded(); return }
-    if (m === 'sel-clear') { clearSel(); renderList(); return }
+    // Clear when something is selected, otherwise it's the way out of the mode.
+    if (m === 'sel-done') { st.sel.size ? (clearSel(), renderList()) : setSelMode(false); return }
     if (m === 'toggle-nav') {
       const s = loadEmail()
       s.navHidden = !s.navHidden
@@ -964,6 +979,19 @@ function onClick(e) {
   if (folder) { selectFolder(folder.dataset.mailFolder, folder.dataset.mailAccount); return }
   const row = e.target.closest('.mail-row')
   if (row) {
+    // ⌘-click (ctrl elsewhere) starts a selection without opening anything —
+    // the same gesture that picks multiple files in a file manager.
+    if (e.metaKey || e.ctrlKey) {
+      const id = row.dataset.threadId
+      if (!st.selMode) { st.selMode = true; renderSelBar() }
+      // rowAcct, not the row's data attribute: a single-account view tags no
+      // rows, and defaulting to the server's primary would label the wrong
+      // mailbox when you're looking at the other account.
+      const t = st.threads.find((x) => x.id === id)
+      toggleSel(id, t ? rowAcct(t) : '', !st.sel.has(id))
+      renderList()
+      return
+    }
     if (row.dataset.draftId) openDraftCompose(row.dataset.draftId, row.dataset.account || null)
     else openThread(row.dataset.threadId)
   }

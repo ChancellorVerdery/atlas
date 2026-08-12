@@ -1186,7 +1186,8 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 .mail-selbar .mail-btn { display: inline-flex; align-items: center; gap: 5px; }
 .mail-selbar .mail-btn svg { width: 13px; height: 13px; }
 .mail-row__check {
-  flex: 0 0 auto; margin: 0 2px 0 0; accent-color: var(--brass); cursor: pointer;
+  flex: 0 0 auto; width: 14px; height: 14px; margin: 0 3px 0 0;
+  accent-color: var(--brass); cursor: pointer;
 }
 .mail-row.is-sel { background: rgba(var(--brass-rgb), 0.09); }
 
