@@ -19,6 +19,10 @@
   --brass-deep: #b9863a;
   --signal: #74d6c4;
   --on-accent: #14100a; /* text drawn on the accent; theme.js flips it per scheme */
+  --pos: #5fd08a;  /* money in, ahead, streaks — theme.js sets these per scheme */
+  --neg: #e08c8c;  /* money out, late, behind */
+  --pos-rgb: 95, 208, 138;
+  --neg-rgb: 224, 140, 140;
   --brass-rgb: 224, 177, 92;
   --ink-rgb: 202, 214, 242;
   --signal-rgb: 116, 214, 196;
@@ -874,6 +878,37 @@ body.eq-reordering .pw-eq-grip { cursor: grabbing; }
 }
 .ML__keyboard .MLK__toolbar { cursor: grab; }
 
+/* MathLive ships its own palette; these are the hooks it exposes, so the
+   equation keyboard (and the little keyboard glyph that opens it) belongs to
+   the colour scheme like everything else. */
+.ML__keyboard {
+  --keyboard-background: var(--panel);
+  --keyboard-text: var(--ink);
+  --keyboard-text-active: var(--on-accent);
+  --keyboard-accent-color: var(--brass);
+  --keycap-background: rgba(var(--ink-rgb), 0.05);
+  --keycap-background-hover: rgba(var(--ink-rgb), 0.11);
+  --keycap-background-active: var(--brass);
+  --keycap-background-pressed: var(--brass);
+  --keycap-text: var(--ink);
+  --keycap-text-active: var(--on-accent);
+  --keycap-text-hover: var(--ink);
+  --keycap-text-pressed: var(--on-accent);
+  --keycap-secondary-background: rgba(var(--ink-rgb), 0.03);
+  --keycap-secondary-background-hover: rgba(var(--ink-rgb), 0.09);
+  --keycap-secondary-text: var(--ink-dim);
+  --keycap-border: var(--line-2);
+  --keycap-border-bottom: var(--line-2);
+  --keycap-shift-color: var(--brass);
+  --keyboard-toolbar-text: var(--ink-dim);
+  --keyboard-toolbar-text-active: var(--brass);
+  --keyboard-toolbar-background-hover: rgba(var(--ink-rgb), 0.07);
+}
+/* the keyboard glyph on a math field */
+math-field::part(virtual-keyboard-toggle), .ML__virtual-keyboard-toggle { color: var(--ink-faint); }
+math-field::part(virtual-keyboard-toggle):hover, .ML__virtual-keyboard-toggle:hover { color: var(--brass); }
+math-field { --caret-color: var(--brass); --selection-background-color: rgba(var(--brass-rgb), 0.22); --contains-highlight-background-color: rgba(var(--brass-rgb), 0.12); }
+
 /* ---- gym plugin ----------------------------------------------------------- */
 
 .gym-head {
@@ -1155,13 +1190,39 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 }
 .set-theme__dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
 .set-theme__dot--sm { width: 8px; height: 8px; opacity: 0.8; }
-.set-theme__picks { gap: 14px; }
-.set-theme__pick { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-dim); }
-.set-theme__pick input[type="color"] {
-  width: 32px; height: 25px; padding: 0; cursor: pointer;
-  background: none; border: 1px solid var(--line-2); border-radius: 7px;
+/* custom scheme editor (modal) */
+.tm { display: flex; flex-direction: column; gap: 16px; }
+.tm__slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.tm__slot {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left;
+  background: none; border: 1px solid var(--line-2); border-radius: 10px; padding: 7px 10px;
+  color: var(--ink-dim); font-family: inherit; font-size: 12.5px;
 }
-.set-theme__note { max-width: 320px; text-align: right; }
+.tm__slot:hover { border-color: var(--ink-faint); color: var(--ink); }
+.tm__slot.is-on { border-color: var(--brass); color: var(--ink); background: rgba(var(--brass-rgb), 0.07); }
+.tm__chip { width: 18px; height: 18px; border-radius: 6px; flex: none; border: 1px solid var(--line-2); }
+.tm__slotname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tm__slothex { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-faint); }
+.tm__pick { display: flex; gap: 20px; align-items: flex-start; }
+.tm__wheel { border-radius: 50%; cursor: crosshair; touch-action: none; flex: none; }
+.tm__pick > :first-child { position: relative; }
+.tm__dot {
+  position: absolute; width: 14px; height: 14px; border-radius: 50%; pointer-events: none;
+  transform: translate(-50%, -50%); border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.tm__controls { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.tm__slider { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-faint); }
+.tm__slider input { flex: 1; accent-color: var(--brass); }
+.tm__inputs { display: flex; gap: 8px; align-items: center; }
+.tm__inputs input[type="color"] {
+  width: 40px; height: 32px; padding: 0; cursor: pointer;
+  background: none; border: 1px solid var(--line-2); border-radius: 8px; flex: none;
+}
+.tm__inputs .pw-field { flex: 1; min-width: 0; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+.tm__note { margin: 0; font-size: 11.5px; color: var(--ink-faint); }
+.tm__note.is-bad { color: var(--neg); }
+.tm__foot { display: flex; align-items: center; gap: 10px; }
+.tm__hint { flex: 1; font-size: 11.5px; color: var(--ink-faint); }
 .set-theme__modes { display: inline-flex; border: 1px solid var(--line-2); border-radius: 9px; overflow: hidden; }
 .set-theme__mode {
   background: none; border: none; cursor: pointer; padding: 6px 14px;
@@ -1317,7 +1378,7 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 .mail-connect__title { font-family: "Instrument Serif", serif; font-size: 30px; font-weight: 400; margin: 14px 0 8px; }
 .mail-connect__text { font-size: 13.5px; color: var(--ink-dim); line-height: 1.6; margin: 0 0 20px; }
 .mail-connect__text a { color: var(--brass); }
-.mail-connect__err { font-size: 12.5px; color: #e08c8c; margin-top: 14px; min-height: 1em; }
+.mail-connect__err { font-size: 12.5px; color: var(--neg); margin-top: 14px; min-height: 1em; }
 
 /* toast */
 .mail-toast {
@@ -1475,8 +1536,8 @@ html[data-page="calendar"] .content { padding: 0; overflow: hidden; display: fle
    lay them out on one line (time, then the title ellipsizing) instead. */
 .cal-block--tight { flex-direction: row; align-items: baseline; gap: 4px; }
 .cal-block--tight .cal-block__t { min-width: 0; }
-.cal-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid #e46962; z-index: 4; pointer-events: none; }
-.cal-now::before { content: ''; position: absolute; left: -1px; top: -5px; width: 8px; height: 8px; border-radius: 99px; background: #e46962; }
+.cal-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--neg); z-index: 4; pointer-events: none; }
+.cal-now::before { content: ''; position: absolute; left: -1px; top: -5px; width: 8px; height: 8px; border-radius: 99px; background: var(--neg); }
 
 /* event panel + editor */
 .cal-overlay {
@@ -1503,7 +1564,7 @@ html[data-page="calendar"] .content { padding: 0; overflow: hidden; display: fle
 .cal-guest { display: flex; align-items: center; gap: 7px; margin: 2px 0; }
 .cal-guest__dot { width: 8px; height: 8px; border-radius: 99px; flex: none; background: var(--ink-faint); }
 .cal-guest__dot--accepted { background: var(--signal); }
-.cal-guest__dot--declined { background: #e46962; }
+.cal-guest__dot--declined { background: var(--neg); }
 .cal-guest__dot--tentative { background: var(--brass); }
 .cal-guest__st { font-size: 11px; color: var(--ink-faint); }
 .cal-rsvp { display: flex; gap: 7px; align-items: center; margin: 12px 0 2px; }
@@ -1582,7 +1643,7 @@ input[type="date"].pw-field, input[type="time"].pw-field { color-scheme: dark; }
 .cv-dim { color: var(--ink-faint); }
 .cv-trend { font-family: "IBM Plex Mono", monospace; font-size: 9.5px; flex: none; border-radius: 99px; padding: 1px 6px; }
 .cv-up { color: var(--signal); background: rgba(var(--signal-rgb), 0.12); }
-.cv-down { color: #e08c8c; background: rgba(228, 105, 98, 0.12); }
+.cv-down { color: var(--neg); background: rgba(var(--neg-rgb), 0.12); }
 .cv-ctag {
   font-family: "IBM Plex Mono", monospace; font-size: 9.5px; flex: none; max-width: 220px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; justify-self: start;
@@ -1617,7 +1678,7 @@ input[type="date"].pw-field, input[type="time"].pw-field { color-scheme: dark; }
 .cv-rows .cv-ctag { max-width: 100%; min-width: 0; }
 .cv-rows .cv-due { text-align: left; justify-self: end; }
 .cv-due { font-family: "IBM Plex Mono", monospace; font-size: 10px; color: var(--ink-faint); flex: none; }
-.cv-late { color: #e08c8c; }
+.cv-late { color: var(--neg); }
 .cv-done { color: var(--signal); }
 .cv-filter { max-width: 200px; margin-bottom: 7px; }
 .cv-note { font-size: 11.5px; color: var(--ink-faint); margin: 2px 0 6px; }
@@ -1627,7 +1688,7 @@ input[type="date"].pw-field, input[type="time"].pw-field { color-scheme: dark; }
   font: inherit; font-size: 14px; line-height: 1; color: var(--ink-faint); cursor: pointer;
   background: none; border: none; border-radius: 6px; padding: 2px 6px; flex: none;
 }
-.cv-x:hover { color: #e08c8c; background: rgba(228, 105, 98, 0.12); }
+.cv-x:hover { color: var(--neg); background: rgba(var(--neg-rgb), 0.12); }
 .cv-unhide {
   font: inherit; font-size: 11px; color: var(--ink-faint); cursor: pointer;
   background: none; border: none; padding: 5px 0 0; text-decoration: underline dotted;
@@ -1643,7 +1704,7 @@ input[type="date"].pw-field, input[type="time"].pw-field { color-scheme: dark; }
 .cv-ann:hover { background: rgba(var(--ink-rgb), 0.05); }
 .cv-status { font-size: 12.5px; font-weight: 600; margin: 2px 0 0; color: var(--ink-dim); }
 .cv-status.cv-up { color: var(--signal); }
-.cv-status.cv-down { color: #e08c8c; }
+.cv-status.cv-down { color: var(--neg); }
 .cv-annbody { font-size: 13.5px; line-height: 1.6; color: var(--ink); margin-top: 8px; word-break: break-word; }
 .cv-annbody img { max-width: 100%; height: auto; }
 .cv-annbody a { color: var(--brass); }
@@ -1674,7 +1735,7 @@ input[type="date"].pw-field, input[type="time"].pw-field { color-scheme: dark; }
 .cv-tone-a { color: var(--signal); }
 .cv-tone-b { color: var(--brass); }
 .cv-tone-c { color: #d9a05c; }
-.cv-tone-d { color: #e08c8c; }
+.cv-tone-d { color: var(--neg); }
 
 /* settings tab */
 .cv-conn { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
@@ -1826,8 +1887,8 @@ html[data-page="graph"] .content { padding: 0; overflow: hidden; display: flex; 
 .fin-label { display: flex; flex-direction: column; gap: 1px; }
 .fin-cat { font-size: 10.5px; color: var(--ink-faint); }
 .fin-amt { font-family: "IBM Plex Mono", monospace; font-size: 13px; justify-self: end; }
-.fin-amt--out { color: #e08c8c; }
-.fin-amt--in { color: var(--signal); }
+.fin-amt--out { color: var(--neg); }
+.fin-amt--in { color: var(--pos); }
 .fin-rows--subs .wk-row { grid-template-columns: minmax(0, 1fr) max-content max-content max-content; column-gap: 10px; }
 
 .fin-accts { display: flex; flex-direction: column; }
@@ -1843,7 +1904,7 @@ html[data-page="graph"] .content { padding: 0; overflow: hidden; display: flex; 
 .fin-budget-nums { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-dim); }
 .fin-budget-bar { height: 6px; border-radius: 99px; background: rgba(var(--ink-rgb), 0.08); overflow: hidden; }
 .fin-budget-fill { height: 100%; background: linear-gradient(90deg, var(--brass), var(--brass-deep)); }
-.fin-budget-fill--over { background: linear-gradient(90deg, #e08c8c, #c96565); }
+.fin-budget-fill--over { background: linear-gradient(90deg, var(--neg), var(--neg-deep)); }
 
 /* settings tab */
 .fin-conn-fields { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
@@ -1954,11 +2015,11 @@ html[data-page="ladder"] .content { padding: 0; overflow: hidden; display: flex;
 .lad-card__title { font-size: 12.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lad-card__time { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-dim); }
 .lad-card__loc { font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lad-card__loc--bad { color: #e08c8c; }
+.lad-card__loc--bad { color: var(--neg); }
 .lad-card__x { position: absolute; top: 4px; right: 4px; z-index: 3; }
 .lad-card--cal { border-left: 3px solid #7986cb; }
 .lad-card--shift { border-left: 3px solid #e67c73; }
-.lad-card--gym { border-left: 3px solid #33b679; }
+.lad-card--gym { border-left: 3px solid var(--pos); }
 .lad-card--meal { border-left: 3px solid #f6bf26; }
 .lad-card--flex { border-left: 3px solid var(--brass); background: color-mix(in srgb, var(--brass) 8%, var(--panel)); }
 /* set (fixed) events read as commitments, like calendar events — solid rail,
@@ -1974,8 +2035,8 @@ html[data-page="ladder"] .content { padding: 0; overflow: hidden; display: flex;
   border: 1px solid var(--line-2); background: var(--bg); color: var(--ink-dim);
 }
 .lad-daybtn:hover { color: var(--ink); border-color: var(--brass); }
-.lad-daybtn.is-pushed { color: #7fca9b; border-color: color-mix(in srgb, #33b679 45%, var(--line-2)); }
-.lad-daybtn--rm:hover { color: #e08c8c; border-color: #c0564b; }
+.lad-daybtn.is-pushed { color: #7fca9b; border-color: color-mix(in srgb, var(--pos) 45%, var(--line-2)); }
+.lad-daybtn--rm:hover { color: var(--neg); border-color: #c0564b; }
 .lad-push-all { margin-left: 4px; }
 
 /* A drive is an INDEPENDENT block: its own full card (all four borders,
@@ -1996,7 +2057,7 @@ html[data-page="ladder"] .content { padding: 0; overflow: hidden; display: flex;
 .lad-card--drive .lad-card__title { font-size: 10.5px; font-weight: 500; color: var(--ink-dim); }
 .lad-drive--to-cal { border-left-color: #7986cb; }
 .lad-drive--to-shift { border-left-color: #e67c73; }
-.lad-drive--to-gym { border-left-color: #33b679; }
+.lad-drive--to-gym { border-left-color: var(--pos); }
 .lad-drive--to-meal { border-left-color: #f6bf26; }
 .lad-drive--to-flex { border-left-color: var(--brass); }
 
@@ -2058,7 +2119,7 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 .cp-term__name { padding: 3px 4px 3px 11px; font-size: 12px; color: var(--ink-dim); cursor: pointer; }
 .cp-term.is-current .cp-term__name { color: var(--brass); }
 .cp-term__x { padding: 3px 9px 3px 4px; color: var(--ink-faint); cursor: pointer; }
-.cp-term__x:hover { color: #e08c8c; }
+.cp-term__x:hover { color: var(--neg); }
 .cp-addterm { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
 .cp-addterm select { width: 120px; flex: none; }
 .cp-addterm .wk-num { width: 86px; }
@@ -2100,7 +2161,7 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 .cp-col__sub { fill: var(--ink-faint); font-size: 10px; }
 .cp-ribbon { fill: none; stroke-width: 2; opacity: 0.5; }
 .cp-ribbon--prereq { stroke: #7986cb; }
-.cp-ribbon--coreq { stroke: #33b679; stroke-dasharray: 4 3; }
+.cp-ribbon--coreq { stroke: var(--pos); stroke-dasharray: 4 3; }
 .cp-box { cursor: pointer; }
 .cp-box__bg { fill: var(--panel); stroke: var(--line-2); stroke-width: 1.2; }
 .cp-box--past .cp-box__bg { fill: var(--bg); }
@@ -2173,7 +2234,7 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 .nt-fname { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-dim); }
 .nt-acts { display: flex; gap: 8px; justify-content: flex-end; }
 .nt-prevmd { max-height: 46vh; overflow-y: auto; border: 1px solid var(--line-2); border-radius: 10px; padding: 12px 16px; }
-.nt-error { margin: 0; font-size: 12.5px; color: #e15759; }
+.nt-error { margin: 0; font-size: 12.5px; color: var(--neg); }
 
 /* ---- formal (housing planner) ------------------------------------------- */
 
@@ -2209,7 +2270,7 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 .fm-rname:focus { outline: none; border-bottom-color: var(--brass); }
 .fm-roombeds { display: flex; flex-wrap: wrap; gap: 4px; align-items: flex-end; min-height: 52px; flex: 1; }
 .fm-roombeds .fm-bi { cursor: pointer; }
-.fm-roombeds .fm-bi:hover { border-color: #e15759; color: #e15759; }
+.fm-roombeds .fm-bi:hover { border-color: var(--neg); color: var(--neg); }
 .fm-drophint { font-size: 11px; color: var(--ink-faint); font-style: italic; align-self: center; padding: 0 4px; }
 .fm-rasg { font-size: 11.5px; color: var(--ink-dim); }
 .fm-rasg--c { color: var(--brass); }

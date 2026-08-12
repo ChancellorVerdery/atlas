@@ -23,7 +23,8 @@ import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/
 import { renderNotesPage } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus } from './page/email.js'
-import { PRESETS, CUSTOM, CUSTOM_KEYS, customSeed, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
+import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
+import { openThemeModal } from './page/themeui.js'
 
 // Widgetless plugins that own the whole content area (registry: full:true).
 const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, graph: renderGraphPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage }
@@ -159,12 +160,6 @@ const themeSettingsHTML = () => {
       </span>
       <span class="set-theme__label">${esc(p.label)}</span>
     </button>`
-  const isCustom = t.preset === CUSTOM
-  const picker = ([key, label]) => `
-    <label class="set-theme__pick">
-      <input type="color" data-theme-key="${key}" value="${esc(t.custom[key])}" aria-label="${label}">
-      <span>${label}</span>
-    </label>`
   const mode = (id, label) => `
     <button type="button" class="set-theme__mode${t.mode === id ? ' is-on' : ''}" data-act="theme-mode" data-mode="${id}">${label}</button>`
   return `<div class="set-row">
@@ -179,12 +174,12 @@ const themeSettingsHTML = () => {
       </div>
       <div class="set-theme__row">
         ${Object.entries(PRESETS).map(([id, p]) => swatch(id, p)).join('')}
-        ${swatch(CUSTOM, { label: 'Custom', panel: t.custom.panel, accent: t.custom.accent, signal: t.custom.signal })}
+        ${swatch(CUSTOM, {
+          label: 'Custom…',
+          panel: t.custom[t.mode === 'light' ? 'lightPanel' : 'darkPanel'],
+          accent: t.custom.accent, signal: t.custom.signal,
+        })}
       </div>
-      ${isCustom ? `<div class="set-theme__row set-theme__picks">
-        ${CUSTOM_KEYS.map(picker).join('')}
-      </div>
-      ${t.mode === 'light' ? `<span class="set-row__sub set-theme__note">Background and Surface apply to dark mode — light mode has its own.</span>` : ''}` : ''}
     </div>
   </div>`
 }
@@ -363,15 +358,16 @@ document.body.addEventListener('click', (e) => {
       return
     }
     if (act.dataset.act === 'gmail-disconnect') { disconnectGmail(act.dataset.account || undefined); render(); return }
+    // Custom is a workspace, not a setting — eight colours, a wheel and a
+    // slider don't belong in a settings row.
+    if (act.dataset.act === 'theme-preset' && act.dataset.preset === CUSTOM) {
+      openThemeModal(openModal, closeModal, render)
+      return
+    }
     if (act.dataset.act === 'theme-preset' || act.dataset.act === 'theme-mode') {
       const t = loadTheme()
       if (act.dataset.mode) t.mode = act.dataset.mode
-      else {
-        // Choosing Custom starts from what's on screen, so the pickers open on
-        // the current colours instead of resetting the app to a default.
-        if (act.dataset.preset === CUSTOM && t.preset !== CUSTOM) t.custom = customSeed(t)
-        t.preset = act.dataset.preset
-      }
+      else t.preset = act.dataset.preset
       saveTheme(t)
       applyTheme(t)
       render()
@@ -393,27 +389,8 @@ document.body.addEventListener('click', (e) => {
 
 // Live accent preview: the picker fires this continuously while dragging, so
 // apply without saving or re-rendering — a rerender would close the picker.
-document.body.addEventListener('input', (e) => {
-  const key = e.target.dataset?.themeKey
-  if (!key) return
-  const t = loadTheme()
-  t.custom = { ...t.custom, [key]: e.target.value }
-  t.preset = CUSTOM
-  applyTheme(t, { icon: false })
-})
-
 // The backup file picker (change bubbles, so this catches the re-rendered input).
 document.body.addEventListener('change', (e) => {
-  const themeKey = e.target.dataset?.themeKey
-  if (themeKey) {
-    const t = loadTheme()
-    t.custom = { ...t.custom, [themeKey]: e.target.value }
-    t.preset = CUSTOM
-    saveTheme(t)
-    applyTheme(t) // commit: this is the one that repaints the app icon
-    render()
-    return
-  }
   if (e.target.id !== 'import-file' || !e.target.files?.length) return
   importData(e.target.files[0])
   e.target.value = '' // let the same file be re-picked if the user retries

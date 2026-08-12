@@ -19,27 +19,52 @@ const KEY = 'atlas.theme.v1'
 // rows). Flipping that triplet is what makes those rules darken on a light
 // surface instead of vanishing — one variable instead of ~90 rewritten rules.
 const MODES = {
-  dark: {
-    ink: '#e9e7df', inkDim: '#9aa0ad', inkFaint: '#5c616e',
-    rgb: '202, 214, 242',
-  },
-  light: {
-    // Surfaces come from the mode, not the scheme: a scheme's dark background
-    // is meaningless here, and the accent is what carries its identity.
-    bg: '#f4f3ef', panel: '#ffffff',
-    ink: '#161a21', inkDim: '#535a68', inkFaint: '#858c9b',
-    rgb: '22, 26, 33',
-  },
+  dark: { ink: '#e9e7df', inkDim: '#9aa0ad', inkFaint: '#5c616e', rgb: '202, 214, 242' },
+  light: { ink: '#161a21', inkDim: '#535a68', inkFaint: '#858c9b', rgb: '22, 26, 33' },
 }
 export const DEFAULT_MODE = 'dark'
 
+// Each scheme brings its own surfaces for BOTH modes — a light mode doesn't
+// have to be white any more than a dark one has to be black, and a tinted
+// ground (Rose's papyrus, Moss's raw linen) is what stops eight schemes from
+// collapsing into one off-white page with different buttons on it.
+//
+// pos/neg are the money colours (and every other up/down in the app). They stay
+// opposed — one cool, one warm — but not always green/red: on Rose, red reads as
+// part of the palette rather than as a loss, so it shifts to teal vs deep coral.
 export const PRESETS = {
-  brass: { label: 'Brass', bg: '#090b11', panel: '#0e1219', accent: '#e0b15c', signal: '#74d6c4' },
-  cobalt: { label: 'Cobalt', bg: '#080b14', panel: '#0d1220', accent: '#6aa8ff', signal: '#7de0c8' },
-  emerald: { label: 'Emerald', bg: '#08110d', panel: '#0d1a14', accent: '#5fd08a', signal: '#8ec9f0' },
-  rose: { label: 'Rose', bg: '#110a0e', panel: '#1a1016', accent: '#f08a9b', signal: '#8ab6f0' },
-  violet: { label: 'Violet', bg: '#0c0912', panel: '#13101f', accent: '#b28cf0', signal: '#7de0c8' },
-  slate: { label: 'Slate', bg: '#0a0c10', panel: '#10141b', accent: '#cad6f2', signal: '#9fb3d9' },
+  brass: {
+    label: 'Brass', accent: '#e0b15c', signal: '#74d6c4', pos: '#5fd08a', neg: '#e08c8c',
+    dark: { bg: '#090b11', panel: '#0e1219' }, light: { bg: '#f6f2e8', panel: '#fffdf7' },
+  },
+  cobalt: {
+    label: 'Cobalt', accent: '#6aa8ff', signal: '#7de0c8', pos: '#5fd08a', neg: '#ef7d7d',
+    dark: { bg: '#080b14', panel: '#0d1220' }, light: { bg: '#eef2f8', panel: '#ffffff' },
+  },
+  emerald: {
+    label: 'Emerald', accent: '#5fd08a', signal: '#8ec9f0', pos: '#7ad6a0', neg: '#e58f7d',
+    dark: { bg: '#08110d', panel: '#0d1a14' }, light: { bg: '#edf3ee', panel: '#fbfffb' },
+  },
+  rose: {
+    label: 'Rose', accent: '#f08a9b', signal: '#8ab6f0', pos: '#6fc3b8', neg: '#c4566b',
+    dark: { bg: '#110a0e', panel: '#1a1016' }, light: { bg: '#f7efe6', panel: '#fffaf3' },
+  },
+  violet: {
+    label: 'Violet', accent: '#b28cf0', signal: '#7de0c8', pos: '#79d0b0', neg: '#e0708f',
+    dark: { bg: '#0c0912', panel: '#13101f' }, light: { bg: '#f2eff7', panel: '#fdfbff' },
+  },
+  slate: {
+    label: 'Slate', accent: '#cad6f2', signal: '#9fb3d9', pos: '#86c9a4', neg: '#d98f92',
+    dark: { bg: '#0a0c10', panel: '#10141b' }, light: { bg: '#f1f2f4', panel: '#ffffff' },
+  },
+  ember: {
+    label: 'Ember', accent: '#f0894f', signal: '#f0c463', pos: '#8fc98a', neg: '#d95f5f',
+    dark: { bg: '#120b08', panel: '#1b110c' }, light: { bg: '#f8efe6', panel: '#fffaf4' },
+  },
+  moss: {
+    label: 'Moss', accent: '#a8c060', signal: '#7fc9a8', pos: '#86c060', neg: '#d98a6a',
+    dark: { bg: '#0d1008', panel: '#141810' }, light: { bg: '#f2f2e4', panel: '#fbfcf2' },
+  },
 }
 export const DEFAULT_PRESET = 'brass'
 
@@ -119,13 +144,19 @@ export function onAccent(accent) {
 // ---- the scheme -------------------------------------------------------------
 
 export const CUSTOM = 'custom'
-// The colours a custom scheme owns. Everything else (the ink ramp, every
-// derived tone) still falls out of these.
+// The colours a custom scheme owns — both modes' surfaces, so a custom scheme
+// is a real scheme rather than an accent sitting on someone else's. Everything
+// else (deep tones, text-on-accent, the ink ramp, hairlines) stays derived and
+// contrast-checked, which is what keeps a hand-picked palette usable.
 export const CUSTOM_KEYS = [
-  ['bg', 'Background'],
-  ['panel', 'Surface'],
-  ['accent', 'Accent'],
-  ['signal', 'Highlight'],
+  ['accent', 'Accent', 'Buttons, links, the logo'],
+  ['signal', 'Highlight', 'Secondary emphasis'],
+  ['pos', 'Gain', 'Money in, streaks, ahead'],
+  ['neg', 'Loss', 'Money out, late, behind'],
+  ['darkBg', 'Dark background', 'The page in dark mode'],
+  ['darkPanel', 'Dark surface', 'Cards and panels'],
+  ['lightBg', 'Light background', 'The page in light mode'],
+  ['lightPanel', 'Light surface', 'Cards and panels'],
 ]
 
 const isHex = (v) => typeof v === 'string' && /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(v)
@@ -147,33 +178,52 @@ export function loadTheme() {
 }
 export function saveTheme(t) { localStorage.setItem(KEY, JSON.stringify(t)) }
 
-const customFrom = (p) => Object.fromEntries(CUSTOM_KEYS.map(([k]) => [k, p[k]]))
+// A scheme (preset shape) flattened into the custom shape, and back again.
+const customFrom = (p) => ({
+  accent: p.accent, signal: p.signal, pos: p.pos, neg: p.neg,
+  darkBg: p.dark.bg, darkPanel: p.dark.panel,
+  lightBg: p.light.bg, lightPanel: p.light.panel,
+})
+const schemeFromCustom = (c) => ({
+  label: 'Custom', accent: c.accent, signal: c.signal, pos: c.pos, neg: c.neg,
+  dark: { bg: c.darkBg, panel: c.darkPanel },
+  light: { bg: c.lightBg, panel: c.lightPanel },
+})
 
 // A custom scheme is only as trustworthy as what was typed into it: any key
 // that isn't a colour falls back to the default scheme's, so a half-written
 // one still renders.
 function normaliseCustom(c) {
-  const base = PRESETS[DEFAULT_PRESET]
+  const base = customFrom(PRESETS[DEFAULT_PRESET])
   return Object.fromEntries(CUSTOM_KEYS.map(([k]) => [k, toHex(parseHex(isHex(c?.[k]) ? c[k] : base[k]))]))
 }
 
-// Seed a custom scheme from whatever is on screen, so picking "Custom" starts
-// where the user already is rather than from an arbitrary palette.
-export const customSeed = (t = loadTheme()) => customFrom(resolve(t))
+// Seed a custom scheme from the scheme in use — both modes, so opening Custom
+// from Rose starts on papyrus, not on some default white.
+export const customSeed = (t = loadTheme()) =>
+  customFrom(t.preset === CUSTOM ? schemeFromCustom(normaliseCustom(t.custom)) : (PRESETS[t.preset] || PRESETS[DEFAULT_PRESET]))
 
 export function resolve(t = loadTheme()) {
-  const p = t.preset === CUSTOM ? { label: 'Custom', ...normaliseCustom(t.custom) } : (PRESETS[t.preset] || PRESETS[DEFAULT_PRESET])
-  const m = MODES[t.mode] || MODES[DEFAULT_MODE]
-  const bg = m.bg || p.bg
-  const accent = legible(p.accent, bg)
-  const signal = legible(p.signal, bg)
+  const p = t.preset === CUSTOM ? schemeFromCustom(normaliseCustom(t.custom)) : (PRESETS[t.preset] || PRESETS[DEFAULT_PRESET])
+  const mode = MODES[t.mode] ? t.mode : DEFAULT_MODE
+  const m = MODES[mode]
+  const { bg, panel } = p[mode]
   return {
-    ...p,
-    mode: MODES[t.mode] ? t.mode : DEFAULT_MODE,
-    bg,
-    panel: m.panel || p.panel,
-    ink: m.ink, inkDim: m.inkDim, inkFaint: m.inkFaint, inkRgb: m.rgb,
-    accent, signal, accentDeep: shade(accent, 0.72),
+    label: p.label,
+    mode, bg, panel,
+    // The ink ramp is checked against THIS scheme's ground, not a nominal one:
+    // a fixed faint tone tuned for #f4f3ef drops to 2.96:1 on Rose's papyrus.
+    ink: legible(m.ink, bg, 7),
+    inkDim: legible(m.inkDim, bg, 4.5),
+    inkFaint: legible(m.inkFaint, bg, 3.2),
+    inkRgb: m.rgb,
+    // Every colour that lands on the background is checked against it — a
+    // scheme the user chose shouldn't be able to hide its own text.
+    accent: legible(p.accent, bg),
+    signal: legible(p.signal, bg),
+    pos: legible(p.pos, bg),
+    neg: legible(p.neg, bg),
+    accentDeep: shade(legible(p.accent, bg), 0.72),
   }
 }
 
@@ -195,9 +245,79 @@ export function themeVars(t = loadTheme()) {
     '--ink-rgb': c.inkRgb,
     '--signal-rgb': triplet(c.signal),
     '--on-accent': onAccent(c.accent),
+    // Semantic up/down. Every plugin reads these — finance amounts, Canvas
+    // late/dropped, the calendar's now-line — so they move with the scheme
+    // instead of each page hardcoding its own red.
+    '--pos': c.pos,
+    '--neg': c.neg,
+    '--pos-rgb': triplet(c.pos),
+    '--neg-rgb': triplet(c.neg),
     // --line/--line-2 are left to the stylesheet: they derive from --ink-rgb,
     // which is set here, so they follow without being restated.
   }
+}
+
+// ---- reading and picking colours -------------------------------------------
+
+// hsl -> hex. Also the wheel's model: angle is hue, radius is saturation.
+export function hslToHex(h, s, l) {
+  const H = ((h % 360) + 360) % 360, S = Math.max(0, Math.min(1, s)), L = Math.max(0, Math.min(1, l))
+  const c = (1 - Math.abs(2 * L - 1)) * S
+  const x = c * (1 - Math.abs(((H / 60) % 2) - 1))
+  const m = L - c / 2
+  const seg = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.floor(H / 60) % 6]
+  return toHex(seg.map((v) => (v + m) * 255))
+}
+
+export function hexToHsl(hex) {
+  const [r, g, b] = parseHex(hex).map((v) => v / 255)
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+  const l = (max + min) / 2
+  if (!d) return { h: 0, s: 0, l }
+  const s = d / (1 - Math.abs(2 * l - 1))
+  const h = max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4)
+  return { h: ((h % 360) + 360) % 360, s, l }
+}
+
+// The tint/shade slider: -1 is fully shaded (black), +1 fully tinted (white),
+// 0 is the colour as picked off the wheel.
+export const tintShade = (hex, t) => {
+  const rgb = parseHex(hex)
+  const k = Math.abs(t)
+  return toHex(rgb.map((c) => (t >= 0 ? c + (255 - c) * k : c * (1 - k))))
+}
+
+// Accept whatever the user pastes. The three formats worth parsing by hand are
+// handled here so this stays testable without a DOM; anything else valid CSS
+// (named colours, oklch, color()) is handed to the browser, which already has a
+// complete parser — no point shipping a second one.
+export function parseColor(input) {
+  const s = String(input ?? '').trim()
+  if (!s) return null
+  if (/^#?[0-9a-f]{3}$/i.test(s) || /^#?[0-9a-f]{6}$/i.test(s)) return toHex(parseHex(s))
+  if (/^#?[0-9a-f]{8}$/i.test(s)) return toHex(parseHex(s.replace(/^#/, '').slice(0, 6))) // drop alpha
+  const nums = (body) => body.split(/[,\s/]+/).filter(Boolean)
+  const rgbM = s.match(/^rgba?\(([^)]+)\)$/i)
+  if (rgbM) {
+    const p = nums(rgbM[1]).slice(0, 3)
+      .map((v) => (v.endsWith('%') ? (parseFloat(v) / 100) * 255 : parseFloat(v)))
+    if (p.length === 3 && p.every((n) => Number.isFinite(n))) return toHex(p)
+  }
+  const hslM = s.match(/^hsla?\(([^)]+)\)$/i)
+  if (hslM) {
+    const p = nums(hslM[1]).slice(0, 3).map(parseFloat)
+    if (p.length === 3 && p.every((n) => Number.isFinite(n))) return hslToHex(p[0], p[1] / 100, p[2] / 100)
+  }
+  if (typeof document === 'undefined') return null
+  const el = document.createElement('span')
+  el.style.color = ''
+  el.style.color = s
+  if (!el.style.color) return null // the browser rejected it — not a colour
+  document.body.appendChild(el)
+  const computed = getComputedStyle(el).color
+  el.remove()
+  const m = computed.match(/[\d.]+/g)
+  return m && m.length >= 3 ? toHex(m.slice(0, 3).map(Number)) : null
 }
 
 // ---- the logo ---------------------------------------------------------------

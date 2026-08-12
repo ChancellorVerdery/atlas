@@ -16,8 +16,15 @@ globalThis.localStorage = {
 const {
   PRESETS, DEFAULT_PRESET, DEFAULT_MODE, CUSTOM, CUSTOM_KEYS, customSeed,
   parseHex, toHex, triplet, shade,
+  parseColor, hexToHsl, hslToHex, tintShade,
   loadTheme, saveTheme, resolve, themeVars, logoSVG, logoDataURL,
 } = await import('../src/page/theme.js')
+
+// how far apart two colours are on the hue circle (0-180)
+const hueGap = (a, b) => {
+  const d = Math.abs(hexToHsl(a).h - hexToHsl(b).h) % 360
+  return d > 180 ? 360 - d : d
+}
 
 // --- colour maths -----------------------------------------------------------
 assert.deepEqual(parseHex('#e0b15c'), [224, 177, 92])
@@ -38,13 +45,21 @@ assert.ok(lit.every((v, i) => v > parseHex('#e0b15c')[i]), 'lightening must rais
 assert.equal(shade('#ffffff', 2), '#ffffff') // and stays in range
 
 // --- every preset is complete ----------------------------------------------
+assert.equal(Object.keys(PRESETS).length, 8) // eight schemes; Custom is the ninth choice
 for (const [id, p] of Object.entries(PRESETS)) {
-  for (const k of ['label', 'bg', 'panel', 'accent', 'signal']) {
-    assert.ok(p[k], `preset ${id} is missing ${k}`)
-  }
-  for (const k of ['bg', 'panel', 'accent', 'signal']) {
+  for (const k of ['label', 'accent', 'signal', 'pos', 'neg']) assert.ok(p[k], `preset ${id} is missing ${k}`)
+  for (const k of ['accent', 'signal', 'pos', 'neg']) {
     assert.match(p[k], /^#[0-9a-f]{6}$/, `preset ${id}.${k} should be a full hex`)
   }
+  // every scheme brings its own surfaces for BOTH modes
+  for (const mode of ['dark', 'light']) {
+    for (const k of ['bg', 'panel']) {
+      assert.match(p[mode][k], /^#[0-9a-f]{6}$/, `preset ${id}.${mode}.${k} should be a full hex`)
+    }
+  }
+  // a light mode that is merely white, or a dark one merely black, would make
+  // the eight schemes interchangeable
+  assert.notEqual(p.dark.bg, p.light.bg)
 }
 assert.ok(PRESETS[DEFAULT_PRESET])
 
@@ -69,27 +84,32 @@ assert.equal(resolve().mode, DEFAULT_MODE)
 const seeded = customSeed(loadTheme())
 assert.deepEqual(Object.keys(seeded).sort(), CUSTOM_KEYS.map(([k]) => k).sort())
 assert.equal(seeded.accent, PRESETS.cobalt.accent)
-assert.equal(seeded.bg, PRESETS.cobalt.bg)
+// seeded from BOTH modes, so opening Custom on Rose starts on papyrus
+assert.equal(seeded.darkBg, PRESETS.cobalt.dark.bg)
+assert.equal(seeded.lightBg, PRESETS.cobalt.light.bg)
+assert.equal(seeded.pos, PRESETS.cobalt.pos)
 
 saveTheme({ preset: CUSTOM, custom: { ...seeded, accent: '#ff0000' } })
 const custom = resolve()
 assert.equal(custom.accent, '#ff0000')
-assert.equal(custom.bg, PRESETS.cobalt.bg) // the seeded surfaces carried over
+assert.equal(custom.bg, PRESETS.cobalt.dark.bg) // the seeded surfaces carried over
 assert.equal(custom.accentDeep, shade('#ff0000', 0.72))
 assert.notEqual(custom.accentDeep, custom.accent)
 assert.equal(themeVars()['--brass-rgb'], '255, 0, 0')
+saveTheme({ preset: CUSTOM, mode: 'light', custom: { ...seeded, accent: '#ff0000' } })
+assert.equal(resolve().bg, PRESETS.cobalt.light.bg) // …in both modes
 
 // a half-written custom scheme still renders: bad keys fall back, not throw
-saveTheme({ preset: CUSTOM, custom: { accent: '#00ff00', bg: 'oops' } })
+saveTheme({ preset: CUSTOM, custom: { accent: '#00ff00', darkBg: 'oops' } })
 assert.equal(resolve().accent, '#00ff00')
-assert.equal(resolve().bg, PRESETS[DEFAULT_PRESET].bg)
+assert.equal(resolve().bg, PRESETS[DEFAULT_PRESET].dark.bg)
 
 // the old shape (a preset + a lone accent) becomes a custom scheme
 store.set('atlas.theme.v1', JSON.stringify({ preset: 'emerald', accent: '#123456' }))
 const migrated = loadTheme()
 assert.equal(migrated.preset, CUSTOM)
 assert.equal(migrated.custom.accent, '#123456')
-assert.equal(migrated.custom.bg, PRESETS.emerald.bg)
+assert.equal(migrated.custom.darkBg, PRESETS.emerald.dark.bg)
 assert.equal(migrated.accent, undefined) // the dead key is gone, not just ignored
 
 // --- light mode: its own surfaces and ink, the scheme's accent --------------
@@ -116,8 +136,17 @@ for (const id of Object.keys(PRESETS)) {
     assert.equal(c.mode, mode)
     assert.ok(contrast(c.ink, c.bg) >= 4.5, `${id}/${mode}: body text is ${contrast(c.ink, c.bg).toFixed(2)}:1`)
     assert.ok(contrast(c.ink, c.panel) >= 4.5, `${id}/${mode}: text on panels is too low`)
-    assert.ok(contrast(c.inkDim, c.bg) >= 3, `${id}/${mode}: dimmed text is too low`)
+    assert.ok(contrast(c.inkDim, c.bg) >= 4.5, `${id}/${mode}: dimmed text is ${contrast(c.inkDim, c.bg).toFixed(2)}:1`)
+    // the faint tone is real UI text (hints, drop zones, the mode chips), and a
+    // ramp fixed for one ground dips below on a tinted one
+    assert.ok(contrast(c.inkFaint, c.bg) >= 3, `${id}/${mode}: faint text is ${contrast(c.inkFaint, c.bg).toFixed(2)}:1`)
     assert.ok(contrast(c.accent, c.bg) >= 3, `${id}/${mode}: the accent is ${contrast(c.accent, c.bg).toFixed(2)}:1`)
+    // the money colours have to read on the scheme's own ground, and stay
+    // distinguishable from each other — a scheme where gain and loss look alike
+    // is worse than one that just kept green and red
+    assert.ok(contrast(c.pos, c.bg) >= 3, `${id}/${mode}: gain is ${contrast(c.pos, c.bg).toFixed(2)}:1`)
+    assert.ok(contrast(c.neg, c.bg) >= 3, `${id}/${mode}: loss is ${contrast(c.neg, c.bg).toFixed(2)}:1`)
+    assert.ok(hueGap(c.pos, c.neg) >= 45, `${id}/${mode}: gain and loss are only ${hueGap(c.pos, c.neg).toFixed(0)}° apart`)
     // primary buttons: the label sits on the accent itself
     const onAccent = themeVars()['--on-accent']
     assert.ok(contrast(onAccent, c.accent) >= 4.5,
@@ -128,7 +157,7 @@ for (const id of Object.keys(PRESETS)) {
 // …and for an arbitrary custom accent, not just the six we chose
 for (const accent of ['#ffffff', '#000000', '#ff0000', '#0000ff', '#ffff00', '#7a7a7a']) {
   for (const mode of ['dark', 'light']) {
-    saveTheme({ preset: CUSTOM, mode, custom: { bg: '#090b11', panel: '#0e1219', accent, signal: accent } })
+    saveTheme({ preset: CUSTOM, mode, custom: { accent, signal: accent, pos: accent, neg: accent } })
     const c = resolve()
     assert.ok(contrast(c.accent, c.bg) >= 3, `custom ${accent}/${mode}: accent only ${contrast(c.accent, c.bg).toFixed(2)}:1`)
     assert.ok(contrast(themeVars()['--on-accent'], c.accent) >= 4.5, `custom ${accent}/${mode}: unreadable button text`)
@@ -156,7 +185,7 @@ const REQUIRED = [
 ]
 saveTheme({ // this block owns its state — the mode sweep above changed it
   preset: CUSTOM, mode: 'dark',
-  custom: { bg: PRESETS.cobalt.bg, panel: PRESETS.cobalt.panel, accent: '#ff0000', signal: PRESETS.cobalt.signal },
+  custom: { ...customSeed({ preset: 'cobalt', mode: 'dark' }), accent: '#ff0000' },
 })
 const vars = themeVars()
 for (const k of REQUIRED) assert.ok(vars[k], `themeVars is missing ${k}`)
@@ -170,7 +199,7 @@ assert.ok(svg.includes('#ff0000'), 'the logo should use the custom accent')
 
 // The plate is flat and exactly the app background — no gradient, no glow, so
 // the icon reads as the same surface the app is painted on.
-assert.match(svg, new RegExp(`<rect[^>]*rx="200" fill="${PRESETS.cobalt.bg}"`))
+assert.match(svg, new RegExp(`<rect[^>]*rx="200" fill="${PRESETS.cobalt.dark.bg}"`))
 assert.ok(!/<linearGradient id="bg"/.test(svg), 'the plate must not be a gradient')
 assert.ok(!/radialGradient|id="glow"/.test(svg), 'no glow wash over the plate')
 assert.equal((svg.match(/<linearGradient/g) || []).length, 1) // only the mark's own shading remains
@@ -191,3 +220,52 @@ assert.equal(decodeURIComponent(url.slice(url.indexOf(',') + 1)), brassSvg)
 assert.ok(!/[<>"#]/.test(url.slice(url.indexOf(',') + 1)), 'raw #/<> would break the data URL')
 
 console.log('theme.check: all assertions passed')
+
+// --- reading a colour the user typed ----------------------------------------
+// The formats worth parsing by hand, so this works with no DOM at all.
+assert.equal(parseColor('#e0b15c'), '#e0b15c')
+assert.equal(parseColor('e0b15c'), '#e0b15c')
+assert.equal(parseColor('  #ABC  '), '#aabbcc')
+assert.equal(parseColor('#e0b15cff'), '#e0b15c') // alpha dropped, not rejected
+assert.equal(parseColor('rgb(224, 177, 92)'), '#e0b15c')
+assert.equal(parseColor('rgb(224 177 92)'), '#e0b15c') // modern space syntax
+assert.equal(parseColor('rgba(224, 177, 92, 0.5)'), '#e0b15c')
+assert.equal(parseColor('RGB(100%, 0%, 0%)'), '#ff0000')
+assert.equal(parseColor('hsl(0, 100%, 50%)'), '#ff0000')
+assert.equal(parseColor('hsl(120 100% 25%)'), '#008000')
+assert.equal(parseColor('hsla(240, 100%, 50%, .3)'), '#0000ff')
+assert.equal(parseColor(''), null)
+assert.equal(parseColor('   '), null)
+assert.equal(parseColor(null), null)
+assert.equal(parseColor('#ff00'), null) // not a hex length that means anything
+assert.equal(parseColor('rgb(1, 2)'), null) // too few channels
+// named colours need the browser's parser; with no DOM this reports "unknown"
+// rather than guessing, which is what the modal's message keys off
+assert.equal(parseColor('rebeccapurple'), null)
+
+// --- hue/lightness maths the wheel and slider run on ------------------------
+assert.equal(hslToHex(0, 1, 0.5), '#ff0000')
+assert.equal(hslToHex(120, 1, 0.25), '#008000')
+assert.equal(hslToHex(0, 0, 1), '#ffffff')
+assert.equal(hslToHex(-40, 1, 0.5), hslToHex(320, 1, 0.5)) // angles wrap
+for (const hex of ['#e0b15c', '#6aa8ff', '#123456', '#ffffff', '#000000', '#7f7f7f']) {
+  const { h, s, l } = hexToHsl(hex)
+  assert.equal(hslToHex(h, s, l), hex, `${hex} should survive a hsl round trip`)
+}
+
+// tint/shade: 0 is untouched, the ends are white and black
+assert.equal(tintShade('#e0b15c', 0), '#e0b15c')
+assert.equal(tintShade('#e0b15c', 1), '#ffffff')
+assert.equal(tintShade('#e0b15c', -1), '#000000')
+assert.ok(lum(tintShade('#e0b15c', 0.4)) > lum('#e0b15c'))
+assert.ok(lum(tintShade('#e0b15c', -0.4)) < lum('#e0b15c'))
+
+// --- the semantic pair is exposed to the stylesheet -------------------------
+saveTheme({ preset: 'rose', mode: 'light' })
+const rose = themeVars()
+for (const k of ['--pos', '--neg', '--pos-rgb', '--neg-rgb']) assert.ok(rose[k], `themeVars is missing ${k}`)
+assert.equal(rose['--pos-rgb'], triplet(rose['--pos']))
+// Rose's money colours are its own, not the default green/red
+assert.notEqual(rose['--neg'], PRESETS.brass.neg)
+
+console.log('theme.check: colour parsing, wheel maths and semantics all covered')
