@@ -6,33 +6,39 @@ import { PLUGIN_DEFS, loadPlugins, setPluginEnabled, removeInstalled, installPlu
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
+// A card per plugin, on a grid that fits the page rather than a list you scroll
+// past. The whole card is the switch — at this size a separate toggle is a
+// smaller target than the thing containing it.
 export function pluginsSettingsHTML() {
   const s = loadPlugins()
-  const rows = PLUGIN_DEFS.map((p) => {
+  const cards = PLUGIN_DEFS.map((p) => {
     const on = !!s.enabled[p.id]
     const inst = s.installed[p.id]
-    return `<div class="set-row plug-row">
-      <div class="set-row__meta">
-        <span class="set-row__name">${esc(p.name)}${inst ? ` <span class="plug-badge" title="Installed from a zip">zip · v${esc(inst.version)}</span>` : ''}</span>
-        <span class="set-row__sub">${esc(p.description)}</span>
-      </div>
-      ${inst ? `<button type="button" class="gym-btn gym-btn--ghost gym-btn--sm" data-plug-remove="${p.id}" title="Remove the installed zip (your data stays)">Remove</button>` : ''}
-      <button type="button" class="switch${on ? ' is-on' : ''}" role="switch" aria-checked="${on}" data-plug-toggle="${p.id}" aria-label="${esc(p.name)}">
-        <span class="switch__dot"></span>
-      </button>
-    </div>`
+    return `<button type="button" class="plug-card${on ? ' is-on' : ''}" data-plug-toggle="${p.id}"
+            role="switch" aria-checked="${on}" aria-label="${esc(p.name)}">
+      <span class="plug-card__top">
+        <span class="plug-card__name">${esc(p.name)}</span>
+        <span class="switch${on ? ' is-on' : ''}" aria-hidden="true"><span class="switch__dot"></span></span>
+      </span>
+      <span class="plug-card__desc">${esc(p.description)}</span>
+      <span class="plug-card__foot">
+        ${inst ? `<span class="plug-badge" title="Installed from a zip">zip · v${esc(inst.version)}</span>` : ''}
+        ${inst ? `<span class="plug-card__rm" data-plug-remove="${p.id}" role="button" tabindex="0"
+                   title="Remove the installed zip (your data stays)">Remove</span>` : ''}
+      </span>
+    </button>`
   }).join('')
-  return `<div class="set-row plug-head">
-    <div class="set-row__meta">
-      <span class="set-row__name">Plugins</span>
-      <span class="set-row__sub">Turn Atlas features on or off. Disabling hides a plugin's pages and widgets — its data stays and comes back when re-enabled.</span>
-    </div>
+  return `<div class="plug-head">
+    <span class="set-row__name">Plugins</span>
+    <span class="set-row__sub">Turn Atlas features on or off. Disabling hides a plugin's pages and widgets — its data stays and comes back when re-enabled.</span>
   </div>
-  ${rows}
-  <div class="plug-drop" id="plugin-drop" role="button" tabindex="0"
-    title="Install a plugin from a .zip">
-    <span class="plug-drop__big">Drop a plugin .zip here</span>
-    <span class="plug-drop__sub">or click to browse — custom plugins install alongside the built-in ones</span>
+  <div class="plug-grid">
+    ${cards}
+    <div class="plug-drop plug-drop--card" id="plugin-drop" role="button" tabindex="0"
+      title="Install a plugin from a .zip">
+      <span class="plug-drop__big">Drop a plugin .zip</span>
+      <span class="plug-drop__sub">or click to browse</span>
+    </div>
   </div>
   <input type="file" id="plugin-file" accept=".zip,application/zip" hidden>
   <p class="set-row__sub plug-status" id="plugin-status" role="status"></p>`
@@ -63,19 +69,22 @@ export function bindPlugins(rerender, onEnable) {
   onEnableCb = onEnable
 
   document.body.addEventListener('click', (e) => {
+    // Remove sits INSIDE the card, and the card is the toggle — so it has to be
+    // checked first or removing would also flip the plugin.
+    const rm = e.target.closest('[data-plug-remove]')
+    if (rm) {
+      e.stopPropagation()
+      removeInstalled(rm.dataset.plugRemove)
+      rerenderApp?.()
+      status('Removed. Its data is still on this device — re-enable any time.')
+      return
+    }
     const t = e.target.closest('[data-plug-toggle]')
     if (t) {
       const on = !loadPlugins().enabled[t.dataset.plugToggle]
       setPluginEnabled(t.dataset.plugToggle, on)
       if (on) onEnableCb?.()
       rerenderApp?.()
-      return
-    }
-    const rm = e.target.closest('[data-plug-remove]')
-    if (rm) {
-      removeInstalled(rm.dataset.plugRemove)
-      rerenderApp?.()
-      status('Removed. Its data is still on this device — re-enable any time.')
       return
     }
     if (e.target.closest('#plugin-drop')) document.getElementById('plugin-file')?.click()

@@ -56,10 +56,16 @@ const ICONS = {
   settings: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="8.5" x2="20" y2="8.5"/><line x1="4" y1="15.5" x2="20" y2="15.5"/><circle cx="9" cy="8.5" r="2.4"/><circle cx="15" cy="15.5" r="2.4"/></svg>',
 }
 
+// Settings is three pages, not one long scroll: who you are, how it looks,
+// what's turned on.
+const SETTINGS_TABS = [['accounts', 'Accounts'], ['customize', 'Customize'], ['plugins', 'Plugins']]
+
 function route() {
   const h = location.hash.replace(/^#\/?/, '')
-  if (h === 'settings') return { name: 'settings' }
   const [id, sub] = h.split('/')
+  if (id === 'settings') {
+    return { name: 'settings', tab: SETTINGS_TABS.some(([t]) => t === sub) ? sub : 'accounts' }
+  }
   let def = pageById(id) || PAGES[0]
   // A disabled plugin's page routes to the dashboard (stale link, synced
   // hash, or the plugin was just toggled off while open). Rewrite the hash
@@ -172,7 +178,7 @@ const themeSettingsHTML = () => {
         <span class="set-theme__modes">${mode('dark', 'Dark')}${mode('light', 'Light')}</span>
         <img class="set-theme__logo" src="${esc(logoDataURL(t))}" alt="" width="40" height="40">
       </div>
-      <div class="set-theme__row">
+      <div class="set-theme__presets">
         ${Object.entries(PRESETS).map(([id, p]) => swatch(id, p)).join('')}
         ${swatch(CUSTOM, {
           label: 'Custom…',
@@ -184,7 +190,8 @@ const themeSettingsHTML = () => {
   </div>`
 }
 
-const settingsHTML = () => {
+// Accounts: the identities Atlas talks to, and the data that belongs to them.
+const accountsHTML = () => {
   const auth = authState()
   const em = loadEmail()
   const accounts = em.accounts?.length ? em.accounts : (em.address ? [em.address] : [])
@@ -208,8 +215,6 @@ const settingsHTML = () => {
       </div>
       <div class="set-gmail">${gmail}</div>
     </div>
-    ${themeSettingsHTML()}
-    ${pluginsSettingsHTML()}
     <div class="set-row">
       <div class="set-row__meta">
         <span class="set-row__name">Backup &amp; restore</span>
@@ -291,6 +296,11 @@ function setHead(title, crumb) {
 function renderPageTabs(r) {
   const el = document.getElementById('page-tabs')
   if (!el) return
+  if (r.name === 'settings') {
+    el.innerHTML = SETTINGS_TABS.map(([id, label]) =>
+      `<a class="page-tab${r.tab === id ? ' is-active' : ''}" href="#/settings/${id}">${label}</a>`).join('')
+    return
+  }
   if (r.name !== 'page' || (!r.def.settings && !r.def.explore)) { el.innerHTML = ''; return }
   el.innerHTML = `
     <a class="page-tab${!r.sub ? ' is-active' : ''}" href="#/${r.def.id}">${r.def.full ? esc(r.def.label) : 'Board'}</a>
@@ -309,8 +319,11 @@ function render() {
   renderPageTabs(r)
   const content = document.getElementById('content')
   if (r.name === 'settings') {
-    setHead('Settings', 'Atlas / Settings')
-    content.innerHTML = settingsHTML()
+    const label = SETTINGS_TABS.find(([t]) => t === r.tab)[1]
+    setHead('Settings', `Atlas / Settings / ${label}`)
+    content.innerHTML = r.tab === 'customize' ? `<div class="page">${themeSettingsHTML()}</div>`
+      : r.tab === 'plugins' ? `<div class="page page--plugins">${pluginsSettingsHTML()}</div>`
+      : accountsHTML()
     observeCharts(content) // drops stale chart-mount observations
   } else if (r.sub === 'settings') {
     setHead(r.def.label, `${r.def.crumb} / Settings`)

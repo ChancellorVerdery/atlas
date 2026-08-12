@@ -1175,13 +1175,18 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 /* colour scheme picker (Settings) */
 .set-theme { display: flex; flex-direction: column; gap: 12px; align-items: flex-end; }
 .set-theme__row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+/* One size for every scheme: a grid of equal columns, so "Emerald" and "Rose"
+   make the same button and the row reads as a set of options rather than a
+   ragged line of words. */
+.set-theme__presets { display: grid; grid-template-columns: repeat(3, 132px); gap: 8px; }
 .set-theme__preset {
-  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0;
   background: none; /* without this a <button> keeps the platform's grey chrome */
-  padding: 7px 11px 7px 9px; border-radius: 10px;
+  padding: 7px 10px 7px 9px; border-radius: 10px;
   border: 1px solid var(--line-2); color: var(--ink-dim);
   font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.03em;
 }
+.set-theme__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-theme__preset:hover { border-color: var(--ink-faint); color: var(--ink); }
 .set-theme__preset.is-on { border-color: var(--brass); color: var(--ink); }
 .set-theme__chip {
@@ -1397,21 +1402,46 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 .set-gmail__who { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-dim); }
 
 /* settings → plugins */
-.plug-head { border-bottom: none; padding-bottom: 2px; }
-.plug-row { padding-left: 14px; gap: 10px; }
-/* meta takes the slack so Remove docks beside the switch instead of floating
-   mid-row (.set-row is justify-content:space-between) */
-.plug-row .set-row__meta { flex: 1; }
+.plug-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+.plug-head .set-row__sub { max-width: 62ch; }
+
+/* Plugins as a grid of cards that fits the page. auto-fill + minmax means the
+   column count follows the window instead of a breakpoint guess. */
+.page--plugins { display: flex; flex-direction: column; min-height: 0; }
+.plug-grid {
+  display: grid; gap: 10px; align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+.plug-card {
+  display: flex; flex-direction: column; gap: 6px; text-align: left; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 13px;
+  padding: 13px 14px 11px; font-family: inherit; color: var(--ink-dim);
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.plug-card:hover { border-color: var(--ink-faint); transform: translateY(-1px); }
+.plug-card.is-on { border-color: rgba(var(--brass-rgb), 0.45); background: rgba(var(--brass-rgb), 0.06); }
+.plug-card__top { display: flex; align-items: center; gap: 10px; }
+.plug-card__name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.plug-card__desc { font-size: 12px; line-height: 1.45; color: var(--ink-faint); }
+.plug-card__foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; }
+.plug-card__foot:empty { display: none; }
+.plug-card__rm {
+  margin-left: auto; font-size: 11.5px; color: var(--ink-faint);
+  border-bottom: 1px solid transparent; cursor: pointer;
+}
+.plug-card__rm:hover { color: var(--neg); border-bottom-color: currentColor; }
 
 /* customize-mode stub for a disabled plugin's widget */
 .pwidget--off { opacity: 0.55; border-style: dashed; }
 .pwidget--off .pw-off__name { font-size: 13px; font-weight: 600; }
 .pwidget--off .pw-off__sub { margin-top: 2px; font-size: 11.5px; color: var(--ink-faint); }
+.plug-card .plug-badge { margin-left: 0; }
 .plug-badge {
   font-family: "IBM Plex Mono", monospace; font-size: 10px; font-weight: 400;
   border: 1px solid var(--line-2); border-radius: 99px; padding: 1px 7px;
   color: var(--ink-faint); margin-left: 6px; vertical-align: 1px;
 }
+.plug-drop--card { margin: 0; padding: 16px 12px; justify-content: center; }
 .plug-drop {
   margin: 14px 0 6px; padding: 22px 16px; text-align: center; cursor: pointer;
   border: 1.5px dashed var(--line-2); border-radius: 12px; color: var(--ink-dim);
@@ -1421,7 +1451,7 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 .plug-drop__big { font-size: 13.5px; font-weight: 600; }
 .plug-drop__sub { font-size: 12px; color: var(--ink-faint); }
 .plug-status { text-align: right; color: var(--signal); min-height: 1em; }
-.plug-status.is-err { color: #f0b9b9; }
+.plug-status.is-err { color: var(--neg); }
 
 /* ---- calendar plugin ------------------------------------------------------ */
 
