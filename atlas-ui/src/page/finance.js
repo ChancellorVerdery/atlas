@@ -9,6 +9,10 @@
 
 const KEY = 'atlas.finance.v1'
 
+// Dollar amount at or above which a transaction is worth surfacing. Settable in
+// Finance → Settings.
+export const DEFAULT_LARGE_THRESHOLD = 200
+
 export function loadFinance() {
   let s
   try { s = JSON.parse(localStorage.getItem(KEY)) || {} } catch { s = {} }
@@ -23,7 +27,8 @@ export function loadFinance() {
   if (!Array.isArray(s.customCategories)) s.customCategories = [] // {key, label, color}
   if (!s.budgets || typeof s.budgets !== 'object') s.budgets = {} // categoryKey -> monthly limit
   if (!Array.isArray(s.netWorthHistory)) s.netWorthHistory = [] // {date, netWorth}, one entry per sync
-  if (!Array.isArray(s.dismissedAnomalies)) s.dismissedAnomalies = []
+  if (!Array.isArray(s.dismissedAnomalies)) s.dismissedAnomalies = [] // storage key predates the "large transactions" rename; kept so existing dismissals survive
+  if (typeof s.largeThreshold !== 'number' || !(s.largeThreshold > 0)) s.largeThreshold = DEFAULT_LARGE_THRESHOLD
   if (!Array.isArray(s.dismissedSubscriptions)) s.dismissedSubscriptions = [] // normMerchant keys marked "not a subscription"
   if (!s.ranges || typeof s.ranges !== 'object') s.ranges = {} // widgetId -> period, persisted
   if (!s.categoryView || typeof s.categoryView !== 'object') s.categoryView = {} // widgetId -> 'breakdown'|'trend'
@@ -383,12 +388,51 @@ export function monthlyTrend(s, months = 6) {
   return out
 }
 
-// ---- subscriptions: recurring same-merchant, similar-amount, ~monthly ------
-// cadence. ponytail: monthly-only heuristic — weekly/annual cadences are a
-// clear upgrade path (Plaid's own /transactions/recurring/get product is a
-// higher-quality alternative if that product gets enabled on the account).
+// ---- subscriptions: same merchant, similar amount, on a strict calendar -----
+// cadence — the same date every month (±1 day), or the same weekday every week.
+// The previous rule accepted any average gap of 20–40 days, which swept in
+// vendors merely visited about monthly. Real subscriptions bill on a calendar
+// schedule, so requiring one is what separates them from habits.
+// ponytail: annual cadences aren't detected. Plaid's own
+// /transactions/recurring/get is the upgrade path if that product gets enabled.
 
 const normMerchant = (t) => (t.merchant_name || t.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
+const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate()
+// Local-noon parse: 'YYYY-MM-DD' through `new Date()` is UTC, which shifts the
+// day backwards for anyone west of Greenwich — and the day is the whole point.
+const parseDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d, 12) }
+
+// Every charge lands on the anchor day-of-month (±1) and consecutive charges
+// are exactly one month apart. A month too short for the anchor day — a 31st
+// subscription in February — bills on its last day, so the expected day is
+// clamped per month rather than counted as a miss.
+// ponytail: a charge that slips across a month boundary (Jan 31 → Mar 1 after a
+// skipped February) reads as a 2-month gap and is rejected. Strictness is the
+// point here; loosen only if real statements show it happening.
+function monthlyCadence(dates) {
+  const anchor = dates[0].getDate()
+  for (const d of dates) {
+    const expected = Math.min(anchor, daysInMonth(d.getFullYear(), d.getMonth()))
+    if (Math.abs(d.getDate() - expected) > 1) return false
+  }
+  for (let i = 1; i < dates.length; i++) {
+    const months = (dates[i].getFullYear() - dates[i - 1].getFullYear()) * 12
+      + (dates[i].getMonth() - dates[i - 1].getMonth())
+    if (months !== 1) return false
+  }
+  return true
+}
+
+// Same weekday, exactly seven days apart.
+function weeklyCadence(dates) {
+  const dow = dates[0].getDay()
+  if (!dates.every((d) => d.getDay() === dow)) return false
+  for (let i = 1; i < dates.length; i++) {
+    if (Math.round((dates[i] - dates[i - 1]) / 86400000) !== 7) return false
+  }
+  return true
+}
 
 export function detectSubscriptions(s) {
   const groups = new Map()
@@ -405,14 +449,21 @@ export function detectSubscriptions(s) {
     const sorted = [...txns].sort((a, b) => (a.date < b.date ? -1 : 1))
     const mean = sorted.reduce((t, x) => t + x.amount, 0) / sorted.length
     if (!sorted.every((x) => Math.abs(x.amount - mean) <= mean * 0.08 + 0.5)) continue
-    const gaps = []
-    for (let i = 1; i < sorted.length; i++) gaps.push((new Date(sorted[i].date) - new Date(sorted[i - 1].date)) / 86400000)
-    const avgGap = gaps.reduce((t, g) => t + g, 0) / gaps.length
-    if (avgGap < 20 || avgGap > 40) continue
-    const last = sorted[sorted.length - 1]
-    const next = new Date(last.date)
-    next.setDate(next.getDate() + Math.round(avgGap))
-    out.push({ key, label: label(last), amount: Math.round(mean * 100) / 100, nextDate: todayKey(next) })
+    const dates = sorted.map((x) => parseDay(x.date))
+    const cadence = monthlyCadence(dates) ? 'monthly' : weeklyCadence(dates) ? 'weekly' : null
+    if (!cadence) continue
+    const next = new Date(dates[dates.length - 1])
+    if (cadence === 'weekly') next.setDate(next.getDate() + 7)
+    else {
+      // set day 1 first: Jan 31 + 1 month would otherwise overflow into March
+      const anchor = dates[0].getDate()
+      next.setMonth(next.getMonth() + 1, 1)
+      next.setDate(Math.min(anchor, daysInMonth(next.getFullYear(), next.getMonth())))
+    }
+    out.push({
+      key, label: label(sorted[sorted.length - 1]), cadence,
+      amount: Math.round(mean * 100) / 100, nextDate: todayKey(next),
+    })
   }
   return out.sort((a, b) => (a.nextDate < b.nextDate ? -1 : 1))
 }
@@ -445,35 +496,34 @@ export function budgetProgress(s) {
   }).sort((a, b) => b.pct - a.pct)
 }
 
-// ---- anomalies: category spend well outside its own recent norm -----------
+// ---- large transactions: anything at or above a threshold you set ----------
+// This replaced a mean+2σ-per-category outlier test. That version flagged
+// unpredictably — a $60 grocery run was "unusual" if groceries were usually
+// $20, while a genuinely big one-off slid through whenever the category
+// happened to be noisy. A flat threshold is predictable and explainable, which
+// is what you actually want from something that nags you.
 
-export function anomalies(s) {
-  const now = new Date()
-  const d90 = todayKey(new Date(now - 90 * 86400000))
-  const d30 = todayKey(new Date(now - 30 * 86400000))
-  const byCat = new Map()
-  for (const t of s.transactions) {
-    if (t.date < d90 || isTransfer(t, s) || t.amount <= 0) continue
-    const k = categoryKey(t, s)
-    if (!byCat.has(k)) byCat.set(k, [])
-    byCat.get(k).push(t.amount)
-  }
-  const flagged = []
-  for (const t of s.transactions) {
-    if (t.date < d30 || isTransfer(t, s) || t.amount <= 0) continue
-    if (s.dismissedAnomalies.includes(t.transaction_id)) continue
-    const k = categoryKey(t, s)
-    const amounts = byCat.get(k) || []
-    if (amounts.length < 5) continue
-    const mean = amounts.reduce((a, b) => a + b, 0) / amounts.length
-    const variance = amounts.reduce((a, b) => a + (b - mean) ** 2, 0) / amounts.length
-    const stdev = Math.sqrt(variance)
-    if (t.amount > mean + 2 * stdev && t.amount > 50) flagged.push({ ...t, mean, stdev })
-  }
-  return flagged.sort((a, b) => b.amount - a.amount)
+export const LARGE_WINDOW_DAYS = 30
+
+export const largeThresholdOf = (s) =>
+  (typeof s.largeThreshold === 'number' && s.largeThreshold > 0 ? s.largeThreshold : DEFAULT_LARGE_THRESHOLD)
+
+export function largeTransactions(s, now = new Date()) {
+  const min = largeThresholdOf(s)
+  const from = todayKey(new Date(now - LARGE_WINDOW_DAYS * 86400000))
+  return s.transactions
+    .filter((t) => t.date >= from && t.amount >= min && !isTransfer(t, s)
+      && !s.dismissedAnomalies.includes(t.transaction_id))
+    .sort((a, b) => b.amount - a.amount)
 }
 
-export function dismissAnomaly(s, transactionId) {
+export function setLargeThreshold(s, n) {
+  const v = Number(n)
+  s.largeThreshold = v > 0 ? v : DEFAULT_LARGE_THRESHOLD
+  saveFinance(s)
+}
+
+export function dismissLargeTxn(s, transactionId) {
   if (!s.dismissedAnomalies.includes(transactionId)) s.dismissedAnomalies.push(transactionId)
   saveFinance(s)
 }

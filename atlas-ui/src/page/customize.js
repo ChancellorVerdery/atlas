@@ -54,7 +54,7 @@ const KIND_META = {
   finincexp: { label: 'Income vs. expenses', hint: 'Transfers between your own accounts excluded', plugin: 'Finances' },
   finbudget: { label: 'Budgets', hint: 'Progress against monthly limits', plugin: 'Finances' },
   finnetworth: { label: 'Net worth', hint: 'Accounts minus credit card debt, over time', plugin: 'Finances' },
-  finanomaly: { label: 'Unusual transactions', hint: 'Flagged, dismissible', plugin: 'Finances' },
+  finanomaly: { label: 'Large transactions', hint: 'Above your threshold, dismissible', plugin: 'Finances' },
   slbedtime: { label: 'Tonight\'s bedtime', hint: 'Bedtime + wake time, debt-adjusted', plugin: 'Sleep' },
   sllog: { label: 'Sleep log', hint: 'Log nights and naps, with quality', plugin: 'Sleep' },
   slhours: { label: 'Hours per night', hint: 'Night sleep vs your goal, charted', plugin: 'Sleep' },

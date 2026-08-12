@@ -7,7 +7,8 @@ import {
   computeNetWorth, categoryKey, categoryLabel, BUILTIN_CATEGORIES, addCustomCategory, removeCustomCategory,
   setCategory, setCategories, setVendorRule, clearVendorRule, vendorKey, vendorTxnCount, applyCategoryToVendor, setTransferOverride, setTransferOverrides, isTransfer, PERIODS, rangeFor, setRange, categoryViewFor, setCategoryView,
   topTransactionsFor, recentTransactions, incomeExpenseFor, categoryBreakdown, monthlyTrend, detectSubscriptions,
-  setBudget, budgetProgress, anomalies, dismissAnomaly, dismissSubscription, txnLabel,
+  setBudget, budgetProgress, largeTransactions, dismissLargeTxn, dismissSubscription, txnLabel,
+  largeThresholdOf, setLargeThreshold, LARGE_WINDOW_DAYS,
 } from './finance.js'
 import { barChart, lineChart } from './chart.js'
 
@@ -32,7 +33,7 @@ const txnRow = (t, s, { dismissible } = {}) => {
     <span class="wk-date">${esc(shortDate(t.date))}</span>
     <span class="wk-time fin-label">${esc(txnLabel(t))}<span class="fin-cat">${esc(cat)}${transfer ? ' · transfer' : ''}</span></span>
     <span class="wk-earned fin-amt${t.amount > 0 ? ' fin-amt--out' : ' fin-amt--in'}">${money(-t.amount)}</span>
-    ${dismissible ? `<button type="button" class="pw-item-remove" data-fin-act="dismiss-anomaly" data-txn="${esc(t.transaction_id)}" title="Dismiss">×</button>` : ''}
+    ${dismissible ? `<button type="button" class="pw-item-remove" data-fin-act="dismiss-large" data-txn="${esc(t.transaction_id)}" title="Dismiss">×</button>` : ''}
   </div>`
 }
 
@@ -68,9 +69,12 @@ export function financeWidgetHTML(w) {
   if (w.kind === 'finsubs') {
     if (!connected) return head('Upcoming subscriptions') + notConnected()
     const subs = detectSubscriptions(s)
-    if (!subs.length) return head('Upcoming subscriptions') + '<p class="gym-empty">No recurring payments detected yet.</p>'
+    if (!subs.length) {
+      return head('Upcoming subscriptions')
+        + '<p class="gym-empty">Nothing billing on a fixed schedule yet — a charge counts once it lands on the same date each month, or the same weekday each week.</p>'
+    }
     const rows = subs.map((sub) => `<div class="wk-row fin-row">
-      <span class="wk-time fin-label">${esc(sub.label)}</span>
+      <span class="wk-time fin-label">${esc(sub.label)}<span class="fin-cat">${esc(sub.cadence)}</span></span>
       <span class="wk-earned fin-amt fin-amt--out">${money(sub.amount)}</span>
       <span class="wk-proj">next ${esc(shortDate(sub.nextDate))}</span>
       <button type="button" class="pw-item-remove" data-fin-act="dismiss-sub" data-subkey="${esc(sub.key)}" title="Not a subscription">×</button>
@@ -123,11 +127,19 @@ export function financeWidgetHTML(w) {
       <p class="gym-sub">Currently ${money(cur)}</p>`
   }
 
+  // kind id stays 'finanomaly' — renaming it would orphan the widget on every
+  // saved board. Only what you see changed.
   if (w.kind === 'finanomaly') {
-    if (!connected) return head('Unusual transactions') + notConnected()
-    const rows = anomalies(s)
-    if (!rows.length) return head('Unusual transactions') + '<p class="gym-empty">Nothing out of the ordinary right now.</p>'
-    return head('Unusual transactions') + `<div class="wk-rows fin-rows">${rows.map((t) => txnRow(t, s, { dismissible: true })).join('')}</div>`
+    if (!connected) return head('Large transactions') + notConnected()
+    const rows = largeTransactions(s)
+    const min = largeThresholdOf(s)
+    if (!rows.length) {
+      return head('Large transactions')
+        + `<p class="gym-empty">Nothing at or above ${money(min)} in the last ${LARGE_WINDOW_DAYS} days.</p>`
+    }
+    return head('Large transactions')
+      + `<div class="wk-rows fin-rows">${rows.map((t) => txnRow(t, s, { dismissible: true })).join('')}</div>`
+      + `<p class="gym-sub">At or above ${money(min)}, last ${LARGE_WINDOW_DAYS} days.</p>`
   }
 
   return ''
@@ -204,8 +216,8 @@ function onFinanceClick(e) {
   if (pill) { setRange(loadFinance(), pill.dataset.wid, pill.dataset.finRange); rerenderApp?.(); return }
   const cv = e.target.closest('[data-fin-catview]')
   if (cv) { setCategoryView(loadFinance(), cv.dataset.wid, cv.dataset.finCatview); rerenderApp?.(); return }
-  const dismiss = e.target.closest('[data-fin-act="dismiss-anomaly"]')
-  if (dismiss) { dismissAnomaly(loadFinance(), dismiss.dataset.txn); rerenderApp?.(); return }
+  const dismiss = e.target.closest('[data-fin-act="dismiss-large"]')
+  if (dismiss) { dismissLargeTxn(loadFinance(), dismiss.dataset.txn); rerenderApp?.(); return }
   const dismissSub = e.target.closest('[data-fin-act="dismiss-sub"]')
   if (dismissSub) { dismissSubscription(loadFinance(), dismissSub.dataset.subkey); rerenderApp?.(); return }
   const addCat = e.target.closest('[data-fin="newcat-add"]')
@@ -517,6 +529,13 @@ export function renderFinanceSettings(container, rerender) {
       <span class="set-row__sub" id="fin-status">${s.items.length ? `Last synced ${timeAgo(s.lastSync)}` : ''}</span>
     </div>
 
+    <div class="set-row">
+      <div class="set-row__meta"><span class="set-row__name">Large transaction threshold</span>
+        <span class="set-row__sub">The Large transactions widget flags anything at or above this, from the last ${LARGE_WINDOW_DAYS} days.</span></div>
+      <input class="pw-field wk-num" id="fin-large-threshold" type="number" min="1" step="10"
+        value="${esc(largeThresholdOf(s))}" aria-label="Large transaction threshold in dollars">
+    </div>
+
     <div class="set-row"><div class="set-row__meta"><span class="set-row__name">Budgets</span>
       <span class="set-row__sub">Monthly limit per category — the Budgets widget tracks progress against these.</span></div></div>
     <div class="fin-budget-set">${budgetKeys.map((k) => `
@@ -590,6 +609,13 @@ export function renderFinanceSettings(container, rerender) {
     }
   }
   container.oninput = (e) => {
+    if (e.target.id === 'fin-large-threshold') {
+      // blank means "still typing", not "no threshold" — don't stomp the value
+      if (e.target.value.trim() === '') return
+      setLargeThreshold(loadFinance(), e.target.value)
+      rerender?.()
+      return
+    }
     const b = e.target.closest('[data-fin-budget]')
     if (!b) return
     setBudget(loadFinance(), b.dataset.finBudget, Number(b.value) || 0)

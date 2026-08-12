@@ -205,21 +205,21 @@ await page.waitForTimeout(300)
 const afterExpense = await page.locator('.pwidget--finincexp').innerText()
 ok(beforeExpense !== afterExpense, 'marking a transaction as a manual transfer changes the income/expense totals')
 const topAfter = await page.locator('.pwidget--fintopspend').innerText()
-ok(!topAfter.includes('Corner Diner') || true, 'anomaly no longer treated as a spend (sanity check ran)')
+ok(!topAfter.includes('Corner Diner') || true, 'large transaction no longer treated as a spend (sanity check ran)')
 
-// ---- A6. anomaly widget + dismiss ---------------------------------------------
-console.log('A6. anomaly detection + dismiss')
-// undo the manual transfer override from A5 so the anomaly test below sees it as a real anomaly again
+// ---- A6. large-transaction widget + dismiss -----------------------------------
+console.log('A6. large transactions + dismiss')
+// undo the manual transfer override from A5 so the $300 charge counts again
 await page.locator('[data-fin-txn="txn-food-anomaly"]').first().click()
 await page.waitForSelector('.fin-overlay .cal-panel__title')
 await page.uncheck('[data-fin="transfer-check"]')
 await page.click('[data-fin="overlay-close"]')
 await page.waitForSelector('.fin-overlay', { state: 'detached' })
 await page.waitForTimeout(300)
-ok(await page.locator('.pwidget--finanomaly [data-fin-txn="txn-food-anomaly"]').count() === 1, 'the $300 outlier at Corner Diner is flagged as unusual')
-await page.click('.pwidget--finanomaly [data-fin-act="dismiss-anomaly"]')
+ok(await page.locator('.pwidget--finanomaly [data-fin-txn="txn-food-anomaly"]').count() === 1, 'the $300 charge at Corner Diner is flagged as large (default threshold $200)')
+await page.click('.pwidget--finanomaly [data-fin-act="dismiss-large"]')
 await page.waitForTimeout(300)
-ok(await page.locator('.pwidget--finanomaly [data-fin-txn="txn-food-anomaly"]').count() === 0, 'dismissing an anomaly hides it')
+ok(await page.locator('.pwidget--finanomaly [data-fin-txn="txn-food-anomaly"]').count() === 0, 'dismissing a large transaction hides it')
 await page.reload()
 await page.waitForTimeout(600)
 ok(await page.locator('.pwidget--finanomaly [data-fin-txn="txn-food-anomaly"]').count() === 0, 'dismissal persists across reload')

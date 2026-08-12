@@ -1,12 +1,12 @@
-// Equations import self-check: the served formula sheet lands as a NEW ROW
-// directly under the row holding the anchor subject, and re-running after a
-// v1-style import replaces that column instead of duplicating it.
+// Equations import self-check: the served formula sheet lands as a COLUMN
+// directly beside the one holding the anchor subject, and re-running after an
+// earlier import replaces that column instead of duplicating it.
 // Needs the dev server on :5173. Run: node tests/eqimport.check.mjs
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 
 const PAGE_KEY = 'atlas.page.equations.v1'
-const FLAG = 'atlas.eqimport.v2'
+const FLAG = 'atlas.eqimport.v3' // must track EQ_IMPORT_FLAG in renderer.js
 const browser = await chromium.launch() // headless
 const ctx = await browser.newContext()
 const page = await ctx.newPage()
@@ -39,12 +39,16 @@ for (const extraCol of [false, true]) {
   const p = await run(extraCol)
   const at = p.rows.findIndex((r) => r.cols.some((c) => /physics i\b/i.test(title(c))))
   assert.ok(at > -1, 'anchor row survived')
-  const imported = p.rows[at + 1]
-  assert.ok(imported, 'a row exists directly under the physics row')
-  assert.equal(imported.cols.length, 1)
-  assert.equal(title(imported.cols[0]), 'Physics II formula sheet')
+  // Placement is "column beside the anchor", per EQ_IMPORT_FLAG's block in
+  // renderer.js. This check used to expect a whole new row underneath, which is
+  // what the import did before the v3 flag bump.
+  const row = p.rows[at]
+  const anchorAt = row.cols.findIndex((c) => /physics i\b/i.test(title(c)))
+  const imported = row.cols[anchorAt + 1]
+  assert.ok(imported, 'the sheet landed as a column directly beside the physics column')
+  assert.equal(title(imported), 'Physics II formula sheet')
   // sections became eqlist widgets, first one categorized from the raw sheet
-  const lines = imported.cols[0].sections[0].lines
+  const lines = imported.sections[0].lines
   assert.equal(lines[0].widgets[0].kind, 'eqlist')
   assert.equal(lines[0].widgets[0].title, 'Constants')
   assert.ok(lines.some((l) => l.widgets[0].title === 'Capacitor charging'))
