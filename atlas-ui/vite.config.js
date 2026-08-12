@@ -35,6 +35,17 @@ const sessionPlugin = {
 // base: './' keeps asset paths relative so the built dist loads from any path.
 export default defineConfig({
   base: './',
-  server: { port: 5173, strictPort: true },
+  // 127.0.0.1, not the default: Vite otherwise binds ::1 only, and the reverse
+  // SSH tunnel that publishes this at dev.myatlasapp.net forwards IPv4.
+  // allowedHosts is Vite's host-header check — the tunnel arrives as that name.
+  server: {
+    port: 5173,
+    strictPort: true,
+    host: '127.0.0.1',
+    allowedHosts: ['dev.myatlasapp.net'],
+    // the page is served over https through the tunnel, so HMR has to dial
+    // wss:443 rather than the local port it would guess
+    hmr: { clientPort: 443, protocol: 'wss', host: 'dev.myatlasapp.net' },
+  },
   plugins: [sessionPlugin, ...MIDDLEWARES.map(asPlugin)],
 })
