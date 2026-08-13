@@ -4,8 +4,8 @@
 
 import { loadPage, findWidget, uid } from './page/model.js'
 import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenAll } from './page/view.js'
-import { enterCustomize, exitCustomize } from './page/customize.js'
-import { PAGES, pageById, activePages } from './page/pages.js'
+import { enterCustomize, exitCustomize, paletteHTML } from './page/customize.js'
+import { PAGES, pageById, activePages, saveNavOrder } from './page/pages.js'
 import { isPluginEnabled } from './page/plugins.js'
 import { startPrefetch } from './page/prefetch.js'
 import { pluginsSettingsHTML, bindPlugins } from './page/pluginsui.js'
@@ -127,15 +127,72 @@ function closeModal() {
 }
 function onModalKeydown(e) { if (e.key === 'Escape') closeModal() }
 
-const navItem = (hash, label, icon, active) =>
-  `<a class="nav__item${active ? ' is-active' : ''}" href="#/${hash}">${icon}<span class="nav__label">${esc(label)}</span><span class="nav__dot"></span></a>`
+// `reorderable` marks the plugin-page rows draggable for nav reordering
+// (behavior: reorder plugins in the navigator) — Settings stays fixed, it's
+// not a plugin/page order concern.
+const navItem = (hash, label, icon, active, reorderable) =>
+  `<a class="nav__item${active ? ' is-active' : ''}" href="#/${hash}"${reorderable ? ` draggable="true" data-page-id="${esc(hash)}"` : ''}>${icon}<span class="nav__label">${esc(label)}</span><span class="nav__dot"></span></a>`
 
+// Customize hides the plugin list and shows the widget palette in its place
+// (in #nav) — exiting restores it, both driven by the same `customizing`
+// flag render() already tracks. Settings lives in its own fixed footer
+// (#sidebar-foot) instead, so it stays reachable in both modes without
+// duplicating its markup into the palette branch.
 function renderNav(r) {
-  document.getElementById('nav').innerHTML = `
-    <p class="nav__head">Navigate</p>
-    ${activePages().map((p) => navItem(p.id, p.label, ICONS[p.id] || ICONS.dashboard, r.def?.id === p.id)).join('')}
-    <div class="nav__spacer"></div>
-    ${navItem('settings', 'Settings', ICONS.settings, r.name === 'settings')}`
+  const head = document.getElementById('nav-head')
+  if (head) head.textContent = customizing ? 'Widgets' : 'Navigate'
+  document.getElementById('nav').innerHTML = customizing
+    ? paletteHTML(r.def)
+    : activePages().map((p) => navItem(p.id, p.label, ICONS[p.id] || ICONS.dashboard, r.def?.id === p.id, true)).join('')
+  const foot = document.getElementById('sidebar-foot')
+  if (foot) foot.innerHTML = navItem('settings', 'Settings', ICONS.settings, r.name === 'settings', false)
+}
+
+// ---- nav reorder (drag rows; persists to atlas.navOrder.v1, which syncs
+// automatically like any atlas.* key — see sync.js's encodePush) -----------
+// Wired once on #nav (the element itself is static across renders; only its
+// innerHTML changes) rather than Customize-gated: Customize hides #nav's row
+// markup entirely in favor of the widget palette (see renderNav), so there's
+// nothing to drag there anyway — the rows only exist while not customizing.
+let navDragId = null
+function onNavDragStart(e) {
+  const item = e.target.closest('.nav__item[data-page-id]')
+  if (!item) { navDragId = null; return }
+  navDragId = item.dataset.pageId
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', navDragId) // Firefox won't start a drag with an empty data store
+  requestAnimationFrame(() => item.classList.add('is-dragging'))
+}
+function onNavDragOver(e) {
+  if (!navDragId) return
+  const item = e.target.closest('.nav__item[data-page-id]')
+  if (!item || item.dataset.pageId === navDragId) return
+  e.preventDefault()
+  const nav = document.getElementById('nav')
+  const dragged = nav.querySelector(`.nav__item[data-page-id="${navDragId}"]`)
+  if (!dragged) return
+  const r = item.getBoundingClientRect()
+  const before = e.clientY < r.top + r.height / 2
+  nav.insertBefore(dragged, before ? item : item.nextElementSibling)
+}
+function onNavDrop(e) {
+  if (!navDragId) return
+  e.preventDefault()
+  const order = [...document.getElementById('nav').querySelectorAll('.nav__item[data-page-id]')].map((a) => a.dataset.pageId)
+  saveNavOrder(order)
+  navDragId = null
+  render()
+}
+function onNavDragEnd() {
+  document.getElementById('nav')?.querySelectorAll('.is-dragging').forEach((el) => el.classList.remove('is-dragging'))
+  navDragId = null
+}
+{
+  const nav = document.getElementById('nav')
+  nav.addEventListener('dragstart', onNavDragStart)
+  nav.addEventListener('dragover', onNavDragOver)
+  nav.addEventListener('drop', onNavDrop)
+  nav.addEventListener('dragend', onNavDragEnd)
 }
 
 const emptyDash = (def) => `
@@ -304,6 +361,35 @@ function renderPageTabs(r) {
     ${r.def.settings ? `<a class="page-tab${r.sub === 'settings' ? ' is-active' : ''}" href="#/${r.def.id}/settings">Settings</a>` : ''}`
 }
 
+// ---- scroll anchoring (Customize entry + every in-Customize rerender) -----
+// Entering Customize (and every in-Customize rerender — drag/drop, inline
+// edits all call ctx.rerender(), which is just render()) rebuilds #content
+// from scratch, and Customize renders MORE structure than view mode
+// (disabled-plugin stubs, kept for drag/drop DOM↔model index parity — see
+// view.js's widgetHTML). That extra structure above the fold pushes whatever
+// the user was looking at further down, reading as a jump. Fix: note which
+// widget currently sits at the content viewport's top edge and its pixel
+// offset from that edge, let the rebuild happen, then scroll so the SAME
+// widget (matched by data-widget-id) lands at that same offset again.
+// ponytail: captured fresh from the live DOM immediately before every
+// rebuild rather than cached across calls — so repeated rerenders (dragging)
+// each correct from truth instead of drifting or fighting a stale anchor.
+function captureScrollAnchor(contentEl) {
+  const top = contentEl.getBoundingClientRect().top
+  for (const el of contentEl.querySelectorAll('[data-widget-id]')) {
+    const r = el.getBoundingClientRect()
+    if (r.bottom >= top) return { id: el.dataset.widgetId, offset: r.top - top }
+  }
+  return null
+}
+function restoreScrollAnchor(contentEl, anchor) {
+  if (!anchor) return
+  const el = contentEl.querySelector(`[data-widget-id="${CSS.escape(anchor.id)}"]`)
+  if (!el) return
+  const top = contentEl.getBoundingClientRect().top
+  contentEl.scrollTop += (el.getBoundingClientRect().top - top) - anchor.offset
+}
+
 let currentPageId = null
 function render() {
   const r = route()
@@ -342,7 +428,11 @@ function render() {
     // Empty state also when every widget on the board belongs to a disabled
     // plugin — otherwise the page renders as unexplained blank space.
     if ((!page.rows.length || pageHasHiddenAll(page)) && !customizing) content.innerHTML = emptyDash(r.def)
-    else renderPageInto(content, page, customizing, r.def.storageKey)
+    else {
+      const anchor = captureScrollAnchor(content)
+      renderPageInto(content, page, customizing, r.def.storageKey)
+      restoreScrollAnchor(content, anchor)
+    }
   }
   const cbtn = document.getElementById('customize')
   if (cbtn) cbtn.style.display = r.name === 'page' && r.def.full ? 'none' : ''
@@ -587,11 +677,12 @@ if (isPluginEnabled('equations') && localStorage.getItem(EQ_IMPORT_FLAG) === nul
   }).catch(() => {})
 }
 window.addEventListener('hashchange', render)
-// A plugin toggled on another device syncs in live — re-render so the nav and
-// gates follow immediately. Scoped to the plugins key only: a blanket
-// re-render on every synced write would drop input focus mid-typing.
+// A plugin toggled, or the nav reordered, on another device syncs in live —
+// re-render so the nav and gates follow immediately. Scoped to these two
+// keys only: a blanket re-render on every synced write would drop input
+// focus mid-typing.
 window.addEventListener('atlas:sync-update', (e) => {
-  if (e.detail?.key === 'atlas.plugins.v1') render()
+  if (e.detail?.key === 'atlas.plugins.v1' || e.detail?.key === 'atlas.navOrder.v1') render()
 })
 // Warm-cache boot paints from the local copy, then the server's state lands a
 // moment later — re-render once so anything changed on another device appears

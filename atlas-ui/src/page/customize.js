@@ -9,10 +9,11 @@
 
 import { loadPage, savePage, newWidget, findWidget, findSection, insertWidget, moveWidget, moveRow, removeWidget, setColWidths, setRowWidth, setRowHeight } from './model.js'
 import { snapshotZones, toLayoutPoint, resolveTarget, resolveRowTarget } from './hitzones.js'
-import { isKindEnabled } from './plugins.js'
+import { isKindEnabled, KIND_PLUGIN } from './plugins.js'
+import { activePages } from './pages.js'
 import { drawChart, fixAccentSubscript } from './view.js'
 
-let ctx = null       // { rerender, contentEl, paletteEl }
+let ctx = null       // { rerender, contentEl, pageDef }
 let dragState = null // { source:'palette'|'widget'|'row', kind?, widgetId?, rowId?, snapshot, target, lastSig, rafPending }
 let ghost = null     // the single reused .drop-ghost element
 
@@ -54,31 +55,48 @@ const KIND_META = {
 // The page currently being customized (its storage, not the default's).
 const pageNow = () => loadPage(ctx.pageDef.storageKey)
 
-export function enterCustomize({ rerender, pageDef }) {
-  if (ctx) return
-  const contentEl = document.getElementById('content')
-  const paletteEl = document.createElement('div')
-  paletteEl.className = 'palette'
+// Widget palette markup for a page's customizable kinds — grouped by owning
+// plugin and ordered to match the navigator (activePages()), so behavior 4
+// ("Customize replaces the navigator with the widgets, in the same order")
+// is mechanical: one order (atlas.navOrder.v1, dragged in the nav — see
+// renderer.js) drives both, instead of a second ordering to keep in sync.
+// Rendered into #nav by renderer.js's renderNav() while customizing (in
+// place of the nav rows it hides), not appended as a sidebar sibling.
+// Dev-only kinds (card/list/graph) group under "Developer" and sort last —
+// they're a dev-mode affordance, not a real nav page, so they have no
+// navOrder position of their own.
+export function paletteHTML(pageDef) {
   // No Settings toggle for this since the Dev-mode row was removed — set
   // localStorage 'atlas.devMode' to '1' by hand to get the dev widgets back.
   const devMode = localStorage.getItem('atlas.devMode') === '1'
   // dev widgets need dev mode; plugin widgets need their plugin enabled
   const kinds = pageDef.kinds.filter((k) => (!KIND_META[k].dev || devMode) && isKindEnabled(k))
+  const navIds = activePages().map((p) => p.id)
   const groups = []
   for (const k of kinds) {
-    let g = groups.find((x) => x.name === KIND_META[k].plugin)
-    if (!g) groups.push(g = { name: KIND_META[k].plugin, kinds: [] })
+    const ownerId = KIND_PLUGIN[k] ?? null
+    let g = groups.find((x) => x.ownerId === ownerId)
+    if (!g) groups.push(g = { ownerId, name: KIND_META[k].plugin, kinds: [] })
     g.kinds.push(k)
   }
-  paletteEl.innerHTML = `<p class="palette__head">Widgets</p>` + groups.map((g) =>
+  groups.sort((a, b) => {
+    const ai = a.ownerId ? navIds.indexOf(a.ownerId) : Infinity
+    const bi = b.ownerId ? navIds.indexOf(b.ownerId) : Infinity
+    return ai - bi
+  })
+  return `<div class="palette"><p class="palette__head">Widgets</p>` + groups.map((g) =>
     `<p class="palette__cat">${g.name}</p>` + g.kinds.map((kind) =>
       `<div class="palette__item" draggable="true" data-kind="${kind}">
         <span class="palette__label">${KIND_META[kind].label}</span><span class="palette__hint">${KIND_META[kind].hint}</span>
       </div>`
     ).join('')
-  ).join('')
-  document.querySelector('.sidebar')?.appendChild(paletteEl)
-  ctx = { rerender, contentEl, paletteEl, pageDef }
+  ).join('') + `</div>`
+}
+
+export function enterCustomize({ rerender, pageDef }) {
+  if (ctx) return
+  const contentEl = document.getElementById('content')
+  ctx = { rerender, contentEl, pageDef }
 
   document.addEventListener('dragstart', onDragStart)
   document.addEventListener('dragend', onDragEnd)
@@ -110,7 +128,6 @@ export function exitCustomize() {
   document.removeEventListener('mouseup', onResizeUp)
   document.body.classList.remove('resizing-col', 'resizing-row', 'eq-reordering')
   eqDrag = null
-  ctx.paletteEl.remove()
   clearPreview()
   stopAutoScroll()
   dragState = null

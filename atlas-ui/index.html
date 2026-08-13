@@ -16,16 +16,23 @@
   <body>
     <div class="app">
       <aside class="sidebar">
-        <div class="brand">
-          <span class="brand__mark">
-            <img class="brand__img" src="/src/assets/atlas-logo.svg" alt="Atlas" />
-          </span>
-          <span class="brand__text">
-            <span class="brand__name">Atlas</span>
-          </span>
+        <div class="sidebar__head">
+          <div class="brand">
+            <span class="brand__mark">
+              <img class="brand__img" src="/src/assets/atlas-logo.svg" alt="Atlas" />
+            </span>
+            <span class="brand__text">
+              <span class="brand__name">Atlas</span>
+            </span>
+          </div>
+          <p class="nav__head" id="nav-head">Navigate</p>
         </div>
 
-        <nav class="nav" id="nav" aria-label="Primary"></nav>
+        <div class="sidebar__body">
+          <nav class="nav" id="nav" aria-label="Primary"></nav>
+        </div>
+
+        <div class="sidebar__foot" id="sidebar-foot"></div>
       </aside>
 
       <main class="main">

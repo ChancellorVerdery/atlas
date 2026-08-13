@@ -102,6 +102,37 @@ export const PAGES = [
 
 export const pageById = (id) => PAGES.find((p) => p.id === id)
 
-// Pages whose plugin is currently enabled — what the nav and router see.
+// ---- nav order ---------------------------------------------------------
+// Persisted, user-set order of pages in the left nav (dragged in renderer.js).
+// Rides the generic page.save sync path — any atlas.* key syncs automatically
+// (see sync.js's encodePush) — so reordering on one device carries to every
+// other device on the same account without a dedicated wire code.
+const NAV_ORDER_KEY = 'atlas.navOrder.v1'
+export function loadNavOrder() {
+  try { const a = JSON.parse(localStorage.getItem(NAV_ORDER_KEY)); return Array.isArray(a) ? a : [] } catch { return [] }
+}
+export function saveNavOrder(order) { localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(order)) }
+
+// Pure order-resolution — no localStorage, no DOM, unit-tested directly
+// (tests/navorder.check.mjs): registryIds filtered to enabledIds (disabled
+// pages excluded), then sorted by `order` — ids `order` lists sort first, in
+// that order; any id `order` doesn't mention (a new plugin, or navOrder
+// predates it) falls back to registry order, appended after the known ones.
+export function resolveNavOrder(registryIds, enabledIds, order) {
+  const enabledSet = new Set(enabledIds)
+  const ids = registryIds.filter((id) => enabledSet.has(id))
+  if (!Array.isArray(order) || !order.length) return ids
+  const idSet = new Set(ids)
+  const known = order.filter((id) => idSet.has(id))
+  const knownSet = new Set(known)
+  return [...known, ...ids.filter((id) => !knownSet.has(id))]
+}
+
+// Pages whose plugin is currently enabled — what the nav and router see —
+// sorted by the persisted nav order (registry order when none is set yet).
 // Dashboard is core; every other page's id doubles as its plugin id.
-export const activePages = () => PAGES.filter((p) => p.id === 'dashboard' || isPluginEnabled(p.id))
+export const activePages = () => {
+  const registryIds = PAGES.map((p) => p.id)
+  const enabledIds = registryIds.filter((id) => id === 'dashboard' || isPluginEnabled(id))
+  return resolveNavOrder(registryIds, enabledIds, loadNavOrder()).map(pageById)
+}
