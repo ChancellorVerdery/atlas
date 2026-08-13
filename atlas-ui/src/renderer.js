@@ -23,6 +23,7 @@ import { renderFlashcardsPage } from './page/flashcardsui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus } from './page/email.js'
 import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
 import { openThemeModal } from './page/themeui.js'
+import { loadAI, saveAI, connectedProviders, isProviderConnected, maskKey } from './page/ai.js'
 
 // Widgetless plugins that own the whole content area (registry: full:true).
 const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage, flashcards: renderFlashcardsPage }
@@ -54,13 +55,17 @@ const ICONS = {
 
 // Settings is three pages, not one long scroll: who you are, how it looks,
 // what's turned on.
-const SETTINGS_TABS = [['accounts', 'Accounts'], ['customize', 'Customize'], ['plugins', 'Plugins']]
+const SETTINGS_TABS = [['accounts', 'Accounts'], ['appearance', 'Appearance'], ['plugins', 'Plugins']]
+// The tab used to be called "customize" — keep old #/settings/customize links
+// (bookmarks, synced hashes) resolving to the same page under its new name.
+const TAB_ALIASES = { customize: 'appearance' }
 
 function route() {
   const h = location.hash.replace(/^#\/?/, '')
   const [id, sub] = h.split('/')
   if (id === 'settings') {
-    return { name: 'settings', tab: SETTINGS_TABS.some(([t]) => t === sub) ? sub : 'accounts' }
+    const tab = TAB_ALIASES[sub] || sub
+    return { name: 'settings', tab: SETTINGS_TABS.some(([t]) => t === tab) ? tab : 'accounts' }
   }
   let def = pageById(id) || PAGES[0]
   // A disabled plugin's page routes to the dashboard (stale link, synced
@@ -101,20 +106,25 @@ function setCustomizing(on) {
 
 function syncModalAspect() {
   const m = document.querySelector('#app-modal .modal')
-  if (m) m.style.aspectRatio = `${window.innerWidth} / ${window.innerHeight}`
+  // .modal--fit opts out: that modal sizes to its own content instead of
+  // being forced into the window's shape (see openModal's `fit` option).
+  if (m && !m.classList.contains('modal--fit')) m.style.aspectRatio = `${window.innerWidth} / ${window.innerHeight}`
 }
 
-function openModal(title, body) {
+// `fit: true` skips the window-aspect lock for modals whose content has to
+// stay fully visible without internal scrolling (the theme editor) rather
+// than being squeezed into whatever shape the window happens to be.
+function openModal(title, body, { fit = false } = {}) {
   closeModal()
   const o = document.createElement('div')
   o.className = 'modal-overlay'
   o.id = 'app-modal'
-  o.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+  o.innerHTML = `<div class="modal${fit ? ' modal--fit' : ''}" role="dialog" aria-modal="true">
     <h2 class="modal__title">${esc(title)}</h2>
     <div class="modal__body">${body}</div>
   </div>`
   document.body.appendChild(o)
-  syncModalAspect() // always the same aspect ratio as the window
+  syncModalAspect() // no-op for modal--fit — its CSS sizes to content instead
   fitEquations(o) // no-op unless the body contains an .eq-render (eqcard modal)
   o.addEventListener('click', (e) => { if (e.target === o) closeModal() })
   document.addEventListener('keydown', onModalKeydown)
@@ -243,6 +253,68 @@ const themeSettingsHTML = () => {
   </div>`
 }
 
+// AI connections: which providers this device holds a key for, a
+// primary/secondary preference, and per-capability overrides. Storage lives
+// in page/ai.js; this just renders + wires it, same split as theme.js/themeui.js.
+const AI_PROVIDER_LABEL = { claude: 'Claude', openai: 'OpenAI' }
+const aiProviderOptions = (connected, value, noneLabel) =>
+  `<option value="">${esc(noneLabel)}</option>` +
+  connected.map((id) => `<option value="${id}"${value === id ? ' selected' : ''}>${esc(AI_PROVIDER_LABEL[id])}</option>`).join('')
+
+const aiConnectionsHTML = () => {
+  const s = loadAI()
+  const connected = connectedProviders(s)
+  const providerRow = (id, label) => {
+    const on = isProviderConnected(id, s)
+    const key = s.providers[id]?.apiKey
+    // Claude offers OAuth too, but there's no registered OAuth client to send
+    // users through yet — stub it rather than block on it; the API key path
+    // below is the one that actually works today.
+    // ponytail: swap this for a real "Connect with Claude" OAuth flow once
+    // Atlas has somewhere to register a client id / redirect URI.
+    const oauthBtn = id === 'claude'
+      ? `<button type="button" class="gym-btn gym-btn--ghost" disabled title="Not wired up yet — connect with an API key below.">Connect with Claude (coming soon)</button>`
+      : ''
+    return `<div class="ai-conn__row">
+      <div class="ai-conn__meta">
+        <span class="ai-conn__name">${esc(label)}</span>
+        <span class="ai-conn__status${on ? '' : ' ai-conn__status--off'}">${on ? `Connected ${esc(maskKey(key))}` : 'Not connected'}</span>
+      </div>
+      <div class="ai-conn__actions">
+        ${on
+          ? `<button type="button" class="gym-btn gym-btn--ghost" data-act="ai-disconnect" data-provider="${id}">Disconnect</button>`
+          : `<input type="password" class="pw-field ai-conn__field" id="ai-key-${id}" placeholder="API key" autocomplete="off" spellcheck="false">
+             <button type="button" class="gym-btn" data-act="ai-connect" data-provider="${id}">Connect</button>`}
+        ${oauthBtn}
+      </div>
+    </div>`
+  }
+  return `<div class="set-row set-row--ai">
+    <div class="set-row__meta">
+      <span class="set-row__name">AI connections</span>
+      <span class="set-row__sub">Connect Claude and/or OpenAI, then choose a primary (and optional secondary), or override which one Studying and Notes use. Keys stay on this device — they never sync to the Atlas server.</span>
+    </div>
+    <div class="ai-conn">
+      ${providerRow('claude', 'Claude')}
+      ${providerRow('openai', 'OpenAI')}
+      <div class="ai-conn__prefs${connected.length ? '' : ' is-disabled'}">
+        <label class="ai-conn__pref">Primary
+          <select class="pw-field pw-field--select" data-act="ai-primary"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.primary, 'None')}</select>
+        </label>
+        <label class="ai-conn__pref">Secondary
+          <select class="pw-field pw-field--select" data-act="ai-secondary"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.secondary, 'None')}</select>
+        </label>
+        <label class="ai-conn__pref">Studying
+          <select class="pw-field pw-field--select" data-act="ai-cap" data-cap="study"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.perCapability.study, 'Use primary')}</select>
+        </label>
+        <label class="ai-conn__pref">Notes
+          <select class="pw-field pw-field--select" data-act="ai-cap" data-cap="notes"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.perCapability.notes, 'Use primary')}</select>
+        </label>
+      </div>
+    </div>
+  </div>`
+}
+
 // Accounts: the identities Atlas talks to, and the data that belongs to them.
 const accountsHTML = () => {
   const auth = authState()
@@ -268,6 +340,7 @@ const accountsHTML = () => {
       </div>
       <div class="set-gmail">${gmail}</div>
     </div>
+    ${aiConnectionsHTML()}
     <div class="set-row">
       <div class="set-row__meta">
         <span class="set-row__name">Backup &amp; restore</span>
@@ -403,7 +476,7 @@ function render() {
   if (r.name === 'settings') {
     const label = SETTINGS_TABS.find(([t]) => t === r.tab)[1]
     setHead('Settings', `Atlas / Settings / ${label}`)
-    content.innerHTML = r.tab === 'customize' ? `<div class="page">${themeSettingsHTML()}</div>`
+    content.innerHTML = r.tab === 'appearance' ? `<div class="page">${themeSettingsHTML()}</div>`
       : r.tab === 'plugins' ? `<div class="page page--plugins">${pluginsSettingsHTML()}</div>`
       : accountsHTML()
     observeCharts(content) // drops stale chart-mount observations
@@ -474,6 +547,30 @@ document.body.addEventListener('click', (e) => {
     }
     if (act.dataset.act === 'export-data') { exportData(); return }
     if (act.dataset.act === 'import-data') { document.getElementById('import-file')?.click(); return }
+    if (act.dataset.act === 'ai-connect') {
+      const id = act.dataset.provider
+      const input = document.getElementById(`ai-key-${id}`)
+      const key = input?.value.trim()
+      if (!key) return
+      const s = loadAI()
+      s.providers[id] = { ...s.providers[id], apiKey: key }
+      if (!s.primary) s.primary = id // first connected provider becomes primary by default
+      saveAI(s)
+      render()
+      return
+    }
+    if (act.dataset.act === 'ai-disconnect') {
+      const id = act.dataset.provider
+      const s = loadAI()
+      s.providers[id] = {}
+      if (s.primary === id) s.primary = null
+      if (s.secondary === id) s.secondary = null
+      if (s.perCapability.study === id) s.perCapability.study = null
+      if (s.perCapability.notes === id) s.perCapability.notes = null
+      saveAI(s)
+      render()
+      return
+    }
   }
   if (customizing) return
   const r = route()
@@ -490,9 +587,21 @@ document.body.addEventListener('click', (e) => {
 // apply without saving or re-rendering — a rerender would close the picker.
 // The backup file picker (change bubbles, so this catches the re-rendered input).
 document.body.addEventListener('change', (e) => {
-  if (e.target.id !== 'import-file' || !e.target.files?.length) return
-  importData(e.target.files[0])
-  e.target.value = '' // let the same file be re-picked if the user retries
+  if (e.target.id === 'import-file' && e.target.files?.length) {
+    importData(e.target.files[0])
+    e.target.value = '' // let the same file be re-picked if the user retries
+    return
+  }
+  const act = e.target.dataset.act
+  if (act === 'ai-primary' || act === 'ai-secondary' || act === 'ai-cap') {
+    const s = loadAI()
+    const val = e.target.value || null
+    if (act === 'ai-primary') s.primary = val
+    else if (act === 'ai-secondary') s.secondary = val
+    else s.perCapability[e.target.dataset.cap] = val
+    saveAI(s)
+    render()
+  }
 })
 
 // One-time cleanup of the pre-rebuild data model (widget-of-blocks + sizes).

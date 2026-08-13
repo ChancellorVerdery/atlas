@@ -15,7 +15,8 @@ const DEFAULTS = {
   outbox: 'wss://sync.myatlasapp.net/outbox',
 }
 const PLUGINS = new Set(['calendar', 'canvas', 'course', 'email', 'gym', 'ladder', 'sleep', 'work'])
-const NEVER_PUSH = new Set(['atlas.auth.v1', 'atlas.devMode', 'atlas.backend'])
+// atlas.ai.v1 holds API keys — device-local only, same as auth/devMode/backend.
+const NEVER_PUSH = new Set(['atlas.auth.v1', 'atlas.devMode', 'atlas.backend', 'atlas.ai.v1'])
 const REQUEST_TIMEOUT = 30_000
 const PUSH_DEBOUNCE = 400
 // How long connect() waits for the outbox hello before degrading gracefully:

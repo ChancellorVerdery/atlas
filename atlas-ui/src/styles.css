@@ -385,6 +385,14 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
   color: var(--ink);
 }
 .modal__body { flex: 1; overflow: auto; font-size: 14px; line-height: 1.7; color: var(--ink-dim); white-space: pre-wrap; }
+/* Opts out of the JS-applied window-aspect lock (renderer.js's
+   syncModalAspect): no forced aspect-ratio, so the box's height is driven by
+   its own content up to max-height instead of by the window's shape — the
+   custom colour editor needs its whole layout visible, never scrolled. Width
+   stays the normal fixed max-width (unchanged) so the wheel/inputs row keeps
+   its usual layout room; .modal__body's overflow:auto stays too, as a
+   fallback for a window too short to fit even this. */
+.modal--fit { max-height: 92vh; }
 .modal__body::-webkit-scrollbar { width: 11px; }
 .modal__body::-webkit-scrollbar-thumb {
   background: rgba(var(--ink-rgb), 0.1);
@@ -1184,12 +1192,14 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 /* colour scheme picker (Settings) */
 .set-theme { display: flex; flex-direction: column; gap: 12px; align-items: flex-end; }
 .set-theme__row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
-/* One size for every scheme: a grid of equal columns, so "Emerald" and "Rose"
-   make the same button and the row reads as a set of options rather than a
-   ragged line of words. */
-.set-theme__presets { display: grid; grid-template-columns: repeat(3, 132px); gap: 8px; }
+/* One size for every scheme: fixed column width AND a pinned row height (not
+   left to content), plus grid-auto-rows so a trailing partial row still lines
+   up instead of dangling at a different height. Custom is the 9th tile in the
+   same grid as the 8 presets, not a one-off appended below it. */
+.set-theme__presets { display: grid; grid-template-columns: repeat(3, 132px); grid-auto-rows: 44px; gap: 8px; }
 .set-theme__preset {
   display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0;
+  box-sizing: border-box; height: 44px;
   background: none; /* without this a <button> keeps the platform's grey chrome */
   padding: 7px 10px 7px 9px; border-radius: 10px;
   border: 1px solid var(--line-2); color: var(--ink-dim);
@@ -1410,6 +1420,20 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 .set-gmail__id { width: 300px; }
 .set-gmail__who { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-dim); }
 
+/* settings → accounts → AI connections */
+.set-row--ai { align-items: flex-start; flex-wrap: wrap; }
+.ai-conn { display: flex; flex-direction: column; gap: 8px; flex: 1 1 340px; max-width: 420px; }
+.ai-conn__row { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.ai-conn__meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ai-conn__name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.ai-conn__status { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--signal); }
+.ai-conn__status--off { color: var(--ink-faint); }
+.ai-conn__actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ai-conn__field { flex: 1; min-width: 0; }
+.ai-conn__prefs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; padding-top: 2px; }
+.ai-conn__prefs.is-disabled { opacity: 0.5; }
+.ai-conn__pref { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--ink-faint); }
+
 /* settings → plugins */
 .plug-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
 .plug-head .set-row__sub { max-width: 62ch; }
@@ -1427,7 +1451,7 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
   padding: 13px 14px 11px; font-family: inherit; color: var(--ink-dim);
   transition: border-color 0.15s, background 0.15s, transform 0.15s;
 }
-.plug-card:hover { border-color: var(--ink-faint); transform: translateY(-1px); }
+.plug-card:hover { border-color: var(--ink-faint); transform: translateY(-1px); box-shadow: 0 10px 24px -16px rgba(0, 0, 0, 0.55); }
 .plug-card.is-on { border-color: rgba(var(--brass-rgb), 0.45); background: rgba(var(--brass-rgb), 0.06); }
 .plug-card__top { display: flex; align-items: center; gap: 10px; }
 .plug-card__name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); }

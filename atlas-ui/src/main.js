@@ -15,7 +15,7 @@ applyTheme()
 const logoUrl = logoDataURL()
 
 const AUTH_KEY = 'atlas.auth.v1'
-const SKIP_KEYS = [AUTH_KEY, 'atlas.devMode', 'atlas.backend']
+const SKIP_KEYS = [AUTH_KEY, 'atlas.devMode', 'atlas.backend', 'atlas.ai.v1']
 // Which account the Atlas data cached in this browser belongs to. Deliberately
 // NOT an 'atlas.' key: sync's pushKey, the import map, and the backup export
 // all filter on that prefix, so this stays device-local by construction — and

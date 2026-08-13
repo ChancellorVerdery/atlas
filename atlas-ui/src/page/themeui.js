@@ -82,7 +82,7 @@ export function openThemeModal(openModal, closeModal, rerender) {
         <button type="button" class="gym-btn gym-btn--ghost" data-tm="cancel">Cancel</button>
         <button type="button" class="gym-btn" data-tm="done">Use this scheme</button>
       </div>
-    </div>`)
+    </div>`, { fit: true }) // the whole editor should be visible at once, not scrolled
 
   const root = document.getElementById('app-modal')
   if (!root) return
