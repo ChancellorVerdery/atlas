@@ -14,7 +14,7 @@ const DEFAULTS = {
   inbox: 'wss://sync.myatlasapp.net/inbox',
   outbox: 'wss://sync.myatlasapp.net/outbox',
 }
-const PLUGINS = new Set(['calendar', 'canvas', 'course', 'email', 'finance', 'graph', 'gym', 'ladder', 'sleep', 'work'])
+const PLUGINS = new Set(['calendar', 'canvas', 'course', 'email', 'gym', 'ladder', 'sleep', 'work'])
 const NEVER_PUSH = new Set(['atlas.auth.v1', 'atlas.devMode', 'atlas.backend'])
 const REQUEST_TIMEOUT = 30_000
 const PUSH_DEBOUNCE = 400

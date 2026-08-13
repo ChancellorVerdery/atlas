@@ -45,22 +45,10 @@ const KIND_META = {
   wkhistory: { label: 'Shift history', hint: 'Every past shift, 10 per page', plugin: 'Work' },
   wktipshare: { label: 'Tip share', hint: 'Split a tip pool by hours', plugin: 'Work' },
   wkupcoming: { label: 'Upcoming shifts', hint: 'Scheduled shifts, pushed to their own calendar', plugin: 'Work' },
-  gfgraph: { label: 'Directory graph', hint: 'Graphify knowledge graph, view-only', plugin: 'Graph' },
-  fintopspend: { label: 'Top transactions', hint: 'Largest transactions for a period', plugin: 'Finances' },
-  finrecent: { label: 'Recent transactions', hint: 'Chronological, recategorize inline', plugin: 'Finances' },
-  fincategory: { label: 'Spending by category', hint: 'Breakdown or 6-month trend', plugin: 'Finances' },
-  finsubs: { label: 'Upcoming subscriptions', hint: 'Detected recurring payments', plugin: 'Finances' },
-  finaccounts: { label: 'Accounts', hint: 'Bank + credit card balances', plugin: 'Finances' },
-  finincexp: { label: 'Income vs. expenses', hint: 'Transfers between your own accounts excluded', plugin: 'Finances' },
-  finbudget: { label: 'Budgets', hint: 'Progress against monthly limits', plugin: 'Finances' },
-  finnetworth: { label: 'Net worth', hint: 'Accounts minus credit card debt, over time', plugin: 'Finances' },
-  finanomaly: { label: 'Large transactions', hint: 'Above your threshold, dismissible', plugin: 'Finances' },
   slbedtime: { label: 'Tonight\'s bedtime', hint: 'Bedtime + wake time, debt-adjusted', plugin: 'Sleep' },
   sllog: { label: 'Sleep log', hint: 'Log nights and naps, with quality', plugin: 'Sleep' },
   slhours: { label: 'Hours per night', hint: 'Night sleep vs your goal, charted', plugin: 'Sleep' },
   sldebt: { label: 'Sleep debt', hint: 'Rolling debt over your window, charted', plugin: 'Sleep' },
-  fmhouses: { label: 'House', hint: 'One house — rooms, price, fit check', plugin: 'Formal' },
-  fmexpenses: { label: 'Expenses', hint: 'Trip costs — totals & per-brother split', plugin: 'Formal' },
 }
 
 // The page currently being customized (its storage, not the default's).

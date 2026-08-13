@@ -12,13 +12,10 @@ import { pluginsSettingsHTML, bindPlugins } from './page/pluginsui.js'
 import { bindGym, renderGymSettings } from './page/gymui.js'
 import { renderEmailPage } from './page/emailui.js'
 import { renderCalendarPage } from './page/calendarui.js'
-import { renderGraphPage } from './page/graphui.js'
 import { bindCanvas, renderCanvasSettings } from './page/canvasui.js'
 import { bindWork, renderWorkSettings } from './page/workui.js'
-import { bindFinance, renderFinanceSettings, renderFinanceExplore } from './page/financeui.js'
 import { renderLadderPage, renderLadderSettings } from './page/ladderui.js'
 import { bindSleep, renderSleepSettings } from './page/sleepui.js'
-import { bindFormal } from './page/formalui.js'
 import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/courseui.js'
 import { renderNotesPage } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
@@ -27,11 +24,11 @@ import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL
 import { openThemeModal } from './page/themeui.js'
 
 // Widgetless plugins that own the whole content area (registry: full:true).
-const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, graph: renderGraphPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage }
+const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage }
 // Plugin-scoped settings tabs (registry: settings:'<key>').
-const SETTINGS_PAGES = { gym: renderGymSettings, canvas: renderCanvasSettings, work: renderWorkSettings, finance: renderFinanceSettings, ladder: renderLadderSettings, sleep: renderSleepSettings, course: renderCourseSettings }
+const SETTINGS_PAGES = { gym: renderGymSettings, canvas: renderCanvasSettings, work: renderWorkSettings, ladder: renderLadderSettings, sleep: renderSleepSettings, course: renderCourseSettings }
 // Second full-window tab per plugin (registry: explore:true|'<tab label>').
-const EXPLORE_PAGES = { finance: renderFinanceExplore, course: renderCourseMap }
+const EXPLORE_PAGES = { course: renderCourseMap }
 const exploreLabel = (def) => (typeof def.explore === 'string' ? def.explore : 'Explore')
 
 const esc = (s) =>
@@ -43,14 +40,11 @@ const ICONS = {
   email: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7.5 8.5 6 8.5-6"/></svg>',
   calendar: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>',
   canvas: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2 9l10 5 10-5z"/><path d="M6 11.8V16c0 1.4 2.7 2.8 6 2.8s6-1.4 6-2.8v-4.2"/><path d="M22 9v5"/></svg>',
-  graph: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.6"/><circle cx="18" cy="9" r="2.6"/><circle cx="9" cy="18" r="2.6"/><line x1="8.3" y1="7" x2="15.7" y2="8.4"/><line x1="7" y1="8.3" x2="8.2" y2="15.7"/><line x1="16.2" y1="11.1" x2="10.9" y2="16.3"/></svg>',
   work: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8.5 7V5.5A1.5 1.5 0 0 1 10 4h4a1.5 1.5 0 0 1 1.5 1.5V7"/><path d="M3 12.5h18"/><path d="M12 11v3"/></svg>',
-  finance: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="13" rx="2"/><line x1="2.5" y1="10" x2="21.5" y2="10"/><line x1="6" y1="14.5" x2="10" y2="14.5"/></svg>',
   ladder: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="16" y2="21"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="17" x2="16" y2="17"/></svg>',
   equations: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5h3l2.5 6L13 4.5h8"/><path d="M14.5 12l6 8M20.5 12l-6 8"/></svg>',
   sleep: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/><path d="M14.5 5.5h4l-4 4h4"/></svg>',
   course: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 12 3l9 3.5-9 3.5z"/><path d="M7 8.5V14c0 1.3 2.2 2.5 5 2.5s5-1.2 5-2.5V8.5"/><line x1="21" y1="6.5" x2="21" y2="12"/></svg>',
-  formal: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M10 19.5v-5h4v5"/></svg>',
   notes: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5h11l3.5 3.5v13.5a0.5 0.5 0 0 1-0.5 0.5H5a0.5 0.5 0 0 1-0.5-0.5v-16a0.5 0.5 0 0 1 0.5-0.5z"/><path d="M15.5 3.5V7.5h4"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13.5" y2="15"/></svg>',
   study: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.3C10.4 4.9 8.4 4.2 5.8 4.2c-1.1 0-2.2.15-3.3.5V19c1.1-.35 2.2-.5 3.3-.5 2.6 0 4.6.7 6.2 2.1 1.6-1.4 3.6-2.1 6.2-2.1 1.1 0 2.2.15 3.3.5V4.7c-1.1-.35-2.2-.5-3.3-.5-2.6 0-4.6.7-6.2 2.1z"/><line x1="12" y1="6.3" x2="12" y2="20.6"/></svg>',
   settings: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="8.5" x2="20" y2="8.5"/><line x1="4" y1="15.5" x2="20" y2="15.5"/><circle cx="9" cy="8.5" r="2.4"/><circle cx="15" cy="15.5" r="2.4"/></svg>',
@@ -421,9 +415,7 @@ refreshGoogleStatus().then((d) => { if (d) render() })
 bindGym(render) // gym logging / complete / exercise-modal delegation (view mode)
 bindCanvas() // canvas widget interactions (course pills, filters, dismissals)
 bindWork(render) // work widget interactions (shifts, income range, tip share)
-bindFinance(render) // finance widget interactions (period pills, recategorize modal, dismiss)
 bindSleep(render) // sleep widget interactions (log nights/naps, quality stars, delete)
-bindFormal(render) // formal widget interactions (houses, rooms, fit-check slider)
 // First visit to the Canvas page gets a ready-made board (key absent = never
 // seeded; an intentionally emptied board stays empty).
 const CANVAS_STARTER = { v: 1, rows: [
@@ -450,20 +442,6 @@ const WORK_STARTER = { v: 1, rows: [
       { id: 's-wk3', lines: [{ id: 'l-wk3', widgets: [{ id: 'w-wkts', kind: 'wktipshare' }] }] },
       { id: 's-wk4', lines: [{ id: 'l-wk4', widgets: [{ id: 'w-wkup', kind: 'wkupcoming' }] }] }] } ] },
 ] }
-const FINANCE_STARTER = { v: 1, rows: [
-  { id: 'r-fin1', title: 'Overview', cols: [
-    { id: 'c-fin1', width: 1.3, sections: [{ id: 's-fin1', lines: [{ id: 'l-fin1', widgets: [{ id: 'w-finacc', kind: 'finaccounts' }] }, { id: 'l-fin2', widgets: [{ id: 'w-finrec', kind: 'finrecent' }] }] }] },
-    { id: 'c-fin2', sections: [
-      { id: 's-fin2', lines: [{ id: 'l-fin3', widgets: [{ id: 'w-fininc', kind: 'finincexp' }] }] },
-      { id: 's-fin3', lines: [{ id: 'l-fin4', widgets: [{ id: 'w-fincat', kind: 'fincategory' }] }] },
-      { id: 's-fin4', lines: [{ id: 'l-fin5', widgets: [{ id: 'w-finsub', kind: 'finsubs' }] }] }] } ] },
-  { id: 'r-fin2', title: 'Details', cols: [
-    { id: 'c-fin3', sections: [{ id: 's-fin5', lines: [{ id: 'l-fin6', widgets: [{ id: 'w-fintop', kind: 'fintopspend' }] }] }] },
-    { id: 'c-fin4', sections: [{ id: 's-fin6', lines: [{ id: 'l-fin7', widgets: [{ id: 'w-finbud', kind: 'finbudget' }] }] }] },
-    { id: 'c-fin5', sections: [
-      { id: 's-fin7', lines: [{ id: 'l-fin8', widgets: [{ id: 'w-finnw', kind: 'finnetworth' }] }] },
-      { id: 's-fin8', lines: [{ id: 'l-fin9', widgets: [{ id: 'w-finan', kind: 'finanomaly' }] }] }] } ] },
-] }
 const SLEEP_STARTER = { v: 1, rows: [
   { id: 'r-sl1', cols: [
     { id: 'c-sl1', width: 1.4, sections: [{ id: 's-sl1', lines: [{ id: 'l-sl1', widgets: [{ id: 'w-sllog', kind: 'sllog' }] }] }] },
@@ -471,10 +449,6 @@ const SLEEP_STARTER = { v: 1, rows: [
   { id: 'r-sl2', title: 'Trends', cols: [
     { id: 'c-sl3', sections: [{ id: 's-sl3', lines: [{ id: 'l-sl3', widgets: [{ id: 'w-slhrs', kind: 'slhours' }] }] }] },
     { id: 'c-sl4', sections: [{ id: 's-sl4', lines: [{ id: 'l-sl4', widgets: [{ id: 'w-sldbt', kind: 'sldebt' }] }] }] } ] },
-] }
-const FORMAL_STARTER = { v: 1, rows: [
-  { id: 'r-fm1', cols: [
-    { id: 'c-fm1', sections: [{ id: 's-fm1', lines: [{ id: 'l-fm1', widgets: [{ id: 'w-fmh', kind: 'fmhouses', house: { name: '', link: '', price: 0, couches: 0, rooms: [{ id: 'fr-fm1', beds: { king: 0, queen: 0, full: 0, twin: 0, futon: 0 } }] } }] }] }] } ] },
 ] }
 // First visit to an ENABLED plugin's board page gets its ready-made starter
 // (key absent = never seeded; an intentionally emptied board stays empty).
@@ -488,9 +462,7 @@ function seedStarters() {
   }
   seed('canvas', 'atlas.page.canvas.v1', CANVAS_STARTER)
   seed('work', 'atlas.page.work.v1', WORK_STARTER)
-  seed('finance', 'atlas.page.finance.v1', FINANCE_STARTER)
   seed('sleep', 'atlas.page.sleep.v1', SLEEP_STARTER)
-  seed('formal', 'atlas.page.formal.v1', FORMAL_STARTER)
   // One-time appends for work boards seeded before these widgets existed.
   // Flag-guarded so deleting the widget later sticks.
   if (isPluginEnabled('work')) {
@@ -512,27 +484,6 @@ function seedStarters() {
 }
 seedStarters()
 bindPlugins(render, seedStarters) // Settings → Plugins toggles + zip install
-// One-time: houses entered under the original shared-store design move onto
-// the widgets themselves (one house per widget). Data-less House widgets on
-// the formal board adopt the legacy houses in order; leftovers get their own
-// rows. Stripping `houses` from the store makes this self-disabling.
-try {
-  const fmStore = JSON.parse(localStorage.getItem('atlas.formal.v1'))
-  if (fmStore?.houses?.length) {
-    const board = JSON.parse(localStorage.getItem('atlas.page.formal.v1'))
-    const empties = []
-    for (const row of board?.rows || []) for (const col of row.cols || []) for (const sec of col.sections || []) for (const line of sec.lines || [])
-      for (const w of line.widgets || []) if (w.kind === 'fmhouses' && !w.house) empties.push(w)
-    fmStore.houses.forEach((h, i) => {
-      const { id, ...house } = h
-      if (empties[i]) empties[i].house = house
-      else board.rows.push({ id: `r-fmmig${i}`, cols: [{ id: `c-fmmig${i}`, sections: [{ id: `s-fmmig${i}`, lines: [{ id: `l-fmmig${i}`, widgets: [{ id: `w-fmmig${i}`, kind: 'fmhouses', house }] }] }] }] })
-    })
-    localStorage.setItem('atlas.page.formal.v1', JSON.stringify(board))
-    delete fmStore.houses
-    localStorage.setItem('atlas.formal.v1', JSON.stringify(fmStore))
-  }
-} catch { /* corrupted legacy store — nothing to migrate */ }
 // One-time seed: if the gym store holds no real data and a seed file is
 // served (e.g. data imported from an older Atlas), adopt it. "No real data"
 // rather than "key absent" — merely opening Gym Settings once writes an

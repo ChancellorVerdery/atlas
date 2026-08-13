@@ -19,9 +19,6 @@ export const PLUGIN_DEFS = [
   { id: 'course', name: 'Course Planner', description: 'Degree planner — semesters, prerequisites, route map' },
   { id: 'email', name: 'Email', description: 'Gmail — inbox, compose, pins, multiple accounts' },
   { id: 'equations', name: 'Equations', description: 'LaTeX equation cards and formula sheets' },
-  { id: 'finance', name: 'Finances', description: 'Plaid-linked accounts, budgets, transactions, net worth' },
-  { id: 'formal', name: 'Formal', description: 'Formal housing — room capacity solver + trip expenses' },
-  { id: 'graph', name: 'Graph', description: 'Knowledge-graph viewer for graphify output' },
   { id: 'gym', name: 'Gym', description: 'Workouts, set logging, strength scores, volume' },
   { id: 'ladder', name: 'Ladder', description: 'Day planner — classes, shifts, sleep, and drive times on one timeline' },
   { id: 'notes', name: 'Notes', description: 'Apple Notes browser + markdown conversion' },
@@ -39,10 +36,7 @@ export const KIND_PLUGIN = {
   calagenda: 'calendar', calmonth: 'calendar',
   cvgradebook: 'canvas', cvupcoming: 'canvas', cvannounce: 'canvas', cvoverdue: 'canvas', cvgpa: 'canvas', cvsemesters: 'canvas', cvcourses: 'canvas', cvtodo: 'canvas',
   wkincome: 'work', wkshifts: 'work', wkhistory: 'work', wktipshare: 'work', wkupcoming: 'work',
-  gfgraph: 'graph',
-  fintopspend: 'finance', finrecent: 'finance', fincategory: 'finance', finsubs: 'finance', finaccounts: 'finance', finincexp: 'finance', finbudget: 'finance', finnetworth: 'finance', finanomaly: 'finance',
   slbedtime: 'sleep', sllog: 'sleep', slhours: 'sleep', sldebt: 'sleep',
-  fmhouses: 'formal', fmexpenses: 'formal',
 }
 
 // ---- state ------------------------------------------------------------------
@@ -60,11 +54,11 @@ export const KIND_PLUGIN = {
 // profile, never a brand-new user.
 const LEGACY_EVIDENCE = [
   'atlas.page.v1', 'atlas.devMode', 'atlas.work.upseeded',
-  'atlas.calendar.v1', 'atlas.canvas.v1', 'atlas.course.v1', 'atlas.email.v1', 'atlas.finance.v1',
-  'atlas.formal.v1', 'atlas.graph.v1', 'atlas.gym.v1', 'atlas.ladder.v1', 'atlas.notes.v1',
+  'atlas.calendar.v1', 'atlas.canvas.v1', 'atlas.course.v1', 'atlas.email.v1',
+  'atlas.gym.v1', 'atlas.ladder.v1', 'atlas.notes.v1',
   'atlas.sleep.v1', 'atlas.study.v1', 'atlas.work.v1',
-  'atlas.page.gym.v1', 'atlas.page.canvas.v1', 'atlas.page.work.v1', 'atlas.page.finance.v1',
-  'atlas.page.sleep.v1', 'atlas.page.formal.v1', 'atlas.page.equations.v1',
+  'atlas.page.gym.v1', 'atlas.page.canvas.v1', 'atlas.page.work.v1',
+  'atlas.page.sleep.v1', 'atlas.page.equations.v1',
 ]
 
 export function loadPlugins() {

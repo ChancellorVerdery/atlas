@@ -10,10 +10,7 @@ import { gymWidgetHTML, gymScoreGraphSVG, GYM_KINDS } from './gymui.js'
 import { calWidgetHTML, hydrateCalWidgets, CAL_KINDS } from './calendarui.js'
 import { canvasWidgetHTML, hydrateCanvasWidgets, CV_KINDS } from './canvasui.js'
 import { workWidgetHTML, WK_KINDS } from './workui.js'
-import { graphWidgetHTML, hydrateGraphWidgets, GF_KINDS } from './graphui.js'
-import { financeWidgetHTML, financeCategoryChartSVG, financeIncExpChartSVG, financeNetWorthChartSVG, FIN_KINDS } from './financeui.js'
 import { sleepWidgetHTML, sleepHoursChartSVG, sleepDebtChartSVG, SL_KINDS } from './sleepui.js'
-import { formalWidgetHTML, FM_KINDS } from './formalui.js'
 import { isKindEnabled, KIND_PLUGIN, pluginDef } from './plugins.js'
 import { MathfieldElement, convertLatexToMarkup } from 'mathlive'
 import 'mathlive/fonts.css'
@@ -251,7 +248,6 @@ export function renderPageInto(contentEl, page, customizing, storageKey) {
   fitEquations(contentEl)
   hydrateCalWidgets(contentEl)
   hydrateCanvasWidgets(contentEl)
-  hydrateGraphWidgets(contentEl)
 }
 
 // In customize mode a resize bar sits in each gutter between adjacent
@@ -356,26 +352,13 @@ export function widgetHTML(w, cz, secCtx = {}) {
   if (CV_KINDS.includes(w.kind)) {
     return `<article class="pwidget pwidget--cv pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${canvasWidgetHTML(w)}</article>`
   }
-  if (GF_KINDS.includes(w.kind)) {
-    // Graph widget renders a placeholder synchronously; hydrateGraphWidgets
-    // fills it with a live view-only 2D force graph after each render.
-    return `<article class="pwidget pwidget--gf pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${graphWidgetHTML(w)}</article>`
-  }
   if (WK_KINDS.includes(w.kind)) {
     // Work widgets are live views over the local work store — sync render.
     return `<article class="pwidget pwidget--wk pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${workWidgetHTML(w, cz)}</article>`
   }
-  if (FIN_KINDS.includes(w.kind)) {
-    // Finance widgets are live views over the local Plaid cache — sync render.
-    return `<article class="pwidget pwidget--fin pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${financeWidgetHTML(w)}</article>`
-  }
   if (SL_KINDS.includes(w.kind)) {
     // Sleep widgets are live views over the local sleep store — sync render.
     return `<article class="pwidget pwidget--sl pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${sleepWidgetHTML(w, cz)}</article>`
-  }
-  if (FM_KINDS.includes(w.kind)) {
-    // Formal widgets are live views over the local formal store — sync render.
-    return `<article class="pwidget pwidget--fm pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${formalWidgetHTML(w, cz)}</article>`
   }
   const title = cz
     ? `<input class="pw-field pw-field--title" data-field="title" value="${esc(w.title)}" placeholder="Title">`
@@ -446,9 +429,6 @@ export function drawChart(mount) {
   const h = Math.round(mount.clientHeight)
   if (w <= 0 || h <= 0) return
   if (f.widget.kind === 'gymscoregraph') { mount.innerHTML = gymScoreGraphSVG(w, h); return }
-  if (f.widget.kind === 'fincategory') { mount.innerHTML = financeCategoryChartSVG(w, h, f.widget.id); return }
-  if (f.widget.kind === 'finincexp') { mount.innerHTML = financeIncExpChartSVG(w, h, f.widget.id); return }
-  if (f.widget.kind === 'finnetworth') { mount.innerHTML = financeNetWorthChartSVG(w, h); return }
   if (f.widget.kind === 'slhours') { mount.innerHTML = sleepHoursChartSVG(w, h); return }
   if (f.widget.kind === 'sldebt') { mount.innerHTML = sleepDebtChartSVG(w, h); return }
   if (f.widget.kind !== 'graph') return

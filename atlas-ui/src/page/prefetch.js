@@ -46,7 +46,6 @@ const TASKS = [
   { plugin: 'canvas', load: () => import('./canvasui.js').then((m) => m.warmCanvas) },
   { plugin: 'email', load: () => import('./emailui.js').then((m) => m.warmEmail) },
   { plugin: 'calendar', load: () => import('./calendarui.js').then((m) => m.warmCalendar) },
-  { plugin: 'finance', load: () => import('./finance.js').then((m) => m.warmFinance) },
 ]
 
 let started = false

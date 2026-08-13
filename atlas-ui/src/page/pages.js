@@ -12,7 +12,7 @@ export const PAGES = [
     label: 'Dashboard',
     crumb: 'Atlas / Dashboard',
     storageKey: 'atlas.page.v1',
-    kinds: ['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'gfgraph', 'fintopspend', 'finrecent', 'fincategory', 'finsubs', 'finaccounts', 'finincexp', 'finbudget', 'finnetworth', 'finanomaly', 'slbedtime', 'sllog', 'slhours', 'sldebt', 'fmhouses', 'fmexpenses'],
+    kinds: ['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'slbedtime', 'sllog', 'slhours', 'sldebt'],
   },
   {
     id: 'gym',
@@ -43,12 +43,6 @@ export const PAGES = [
     settings: 'canvas', // connection, grade scale, credits, previous semesters
   },
   {
-    id: 'graph',
-    label: 'Graph',
-    crumb: 'Atlas / Graph',
-    full: true, // full-window force graph; its dashboard widget is gfgraph
-  },
-  {
     id: 'work',
     label: 'Work',
     crumb: 'Atlas / Work',
@@ -72,15 +66,6 @@ export const PAGES = [
     settings: 'sleep', // preferred sleep/bedtime, debt window, recovery ratio, nap credit
   },
   {
-    id: 'finance',
-    label: 'Finances',
-    crumb: 'Atlas / Finances',
-    storageKey: 'atlas.page.finance.v1',
-    kinds: ['fintopspend', 'finrecent', 'fincategory', 'finsubs', 'finaccounts', 'finincexp', 'finbudget', 'finnetworth', 'finanomaly'],
-    settings: 'finance', // Plaid connection, sync, budgets, custom categories
-    explore: true, // Explore tab: every synced transaction, filter/search/export
-  },
-  {
     id: 'equations',
     label: 'Equations',
     crumb: 'Atlas / Equations',
@@ -98,13 +83,6 @@ export const PAGES = [
     label: 'Study',
     crumb: 'Atlas / Study',
     full: true, // widgetless: course tabs → tutor chat, question bank, flashcards, card bank
-  },
-  {
-    id: 'formal',
-    label: 'Formal',
-    crumb: 'Atlas / Formal',
-    storageKey: 'atlas.page.formal.v1',
-    kinds: ['fmhouses', 'fmexpenses'],
   },
   {
     id: 'course',
