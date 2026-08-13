@@ -15,10 +15,7 @@
   },
   "dependencies": {
     "@cortex-js/compute-engine": "^0.96.0",
-    "3d-force-graph": "^1.80.0",
-    "force-graph": "^1.51.4",
     "marked": "^18.0.5",
-    "mathlive": "^0.110.0",
-    "vis-network": "^9.1.6"
+    "mathlive": "^0.110.0"
   }
 }
