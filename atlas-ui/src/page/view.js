@@ -5,6 +5,7 @@
 // each carrying its model id in a data attribute (hitzones.js matches on them).
 
 import { barChart, lineChart } from './chart.js'
+import { openChartModal } from './chartmodal.js'
 import { loadPage, findWidget } from './model.js'
 import { gymWidgetHTML, gymScoreGraphSVG, GYM_KINDS } from './gymui.js'
 import { calWidgetHTML, hydrateCalWidgets, CAL_KINDS } from './calendarui.js'
@@ -627,10 +628,43 @@ export function drawChart(mount) {
   const w = Math.round(mount.clientWidth)
   const h = Math.round(mount.clientHeight)
   if (w <= 0 || h <= 0) return
-  if (f.widget.kind === 'gymscoregraph') { mount.innerHTML = gymScoreGraphSVG(w, h); return }
-  if (f.widget.kind === 'slhours') { mount.innerHTML = sleepHoursChartSVG(w, h); return }
-  if (f.widget.kind === 'sldebt') { mount.innerHTML = sleepDebtChartSVG(w, h); return }
-  if (f.widget.kind !== 'graph') return
-  const g = f.widget
-  mount.innerHTML = (g.graphType === 'line' ? lineChart : barChart)(g.points, { w, h, xLabel: g.xLabel, yLabel: g.yLabel })
+  const kind = f.widget.kind
+  if (kind === 'gymscoregraph') mount.innerHTML = gymScoreGraphSVG(w, h)
+  else if (kind === 'slhours') mount.innerHTML = sleepHoursChartSVG(w, h)
+  else if (kind === 'sldebt') mount.innerHTML = sleepDebtChartSVG(w, h)
+  else if (kind === 'graph') mount.innerHTML = (f.widget.graphType === 'line' ? lineChart : barChart)(f.widget.points, { w, h, xLabel: f.widget.xLabel, yLabel: f.widget.yLabel })
+  else return
+  // data-chart marks the mount clickable (see styles.css) — only bar/line
+  // data-point charts get this, never the other widget kinds.
+  mount.dataset.chart = kind
 }
+
+// spec builder for openChartModal, one branch per in-scope chart kind. The
+// gym/sleep charts pass their existing SVG functions straight through as the
+// render callback (they already take (w,h) and own their data source); the
+// generic graph widget passes its data + axis labels directly.
+function chartModalSpec(mount) {
+  const kind = mount.dataset.chart
+  if (kind === 'gymscoregraph') return { title: 'Strength over time', render: gymScoreGraphSVG }
+  if (kind === 'slhours') return { title: 'Hours per night', render: sleepHoursChartSVG }
+  if (kind === 'sldebt') return { title: 'Sleep debt', render: sleepDebtChartSVG }
+  if (kind === 'graph') {
+    const f = findWidget(loadPage(activeKey), mount.dataset.widgetId)
+    if (!f) return null
+    const g = f.widget
+    return { title: g.title || 'Chart', kind: g.graphType, points: g.points, xLabel: g.xLabel, yLabel: g.yLabel }
+  }
+  return null
+}
+
+// Click-to-enlarge: any chart mount drawChart just marked with data-chart
+// opens a big modal with hover tooltips (chartmodal.js). Customize mode
+// leaves mounts inert — same gating as renderer.js's card-click modal and
+// gymui.js's exercise-row modal.
+document.body.addEventListener('click', (e) => {
+  if (document.body.classList.contains('customizing')) return
+  const mount = e.target.closest('.chart-mount[data-chart]')
+  if (!mount) return
+  const spec = chartModalSpec(mount)
+  if (spec) openChartModal(spec)
+})

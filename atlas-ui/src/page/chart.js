@@ -88,7 +88,30 @@ function frame(points, W, H, xLabel, yLabel) {
     ? `<text class="chart__axis-title" x="12" y="${yMid.toFixed(1)}" text-anchor="middle" transform="rotate(-90 12 ${yMid.toFixed(1)})"${fit(yLabel, innerH)}>${esc(yLabel)}</text>`
     : ''
 
-  return { axisY, zeroY, slot, yFor, xFor, gridlines, zeroLabel, axisLines, xLabels, xTitle, yTitle }
+  return { axisY, zeroY, slot, yFor, xFor, gridlines, zeroLabel, axisLines, xLabels, xTitle, yTitle, top: pad.t }
+}
+
+// Per-datum hover targets: one rect per x-slot spanning the FULL plot height
+// (not just the bar's own height, or the 3px dot), so a hover anywhere in a
+// point's column resolves to that datum instead of requiring a pixel-perfect
+// landing. barChart/lineChart draw these as invisible `.chart__hit` rects
+// UNDER the visible bar/dot (which also carry the same data-v/data-l), so
+// whichever element the pointer actually lands on reports the same value —
+// see chartmodal.js's mousemove handler, which just reads the nearest
+// `[data-v]` ancestor-or-self.
+function hitRectsFromFrame(points, f) {
+  return points.map((p, i) => ({
+    x: f.xFor(i) - f.slot / 2, y: f.top, width: f.slot, height: f.axisY - f.top,
+    value: p.value, label: p.label,
+  }))
+}
+
+// Pure entry point (recomputes the frame from scratch) for callers that want
+// hover geometry without parsing it back out of rendered SVG — chartmodal's
+// node check exercises this directly, no DOM required.
+export function hitTargets(points, W, H, xLabel, yLabel) {
+  if (!points?.length) return []
+  return hitRectsFromFrame(points, frame(points, W, H, xLabel, yLabel))
 }
 
 // points: [{ label, value }, ...]. opts.w/h are the container px; xLabel/yLabel
@@ -106,8 +129,11 @@ export function barChart(points, opts = {}) {
     const y = f.yFor(p.value)
     const top = Math.min(y, f.zeroY)
     const barH = Math.max(1, Math.abs(f.zeroY - y))
-    return `<rect class="chart__bar" fill="url(#${gradId})" x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="4"/>`
+    return `<rect class="chart__bar" data-v="${p.value}" data-l="${esc(p.label)}" fill="url(#${gradId})" x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="4"/>`
   }).join('')
+  const hits = hitRectsFromFrame(points, f).map((h) =>
+    `<rect class="chart__hit" data-v="${h.value}" data-l="${esc(h.label)}" x="${h.x.toFixed(1)}" y="${h.y.toFixed(1)}" width="${h.width.toFixed(1)}" height="${h.height.toFixed(1)}" />`
+  ).join('')
 
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Bar chart">
     <defs>
@@ -119,6 +145,7 @@ export function barChart(points, opts = {}) {
     ${f.gridlines}
     ${f.zeroLabel}
     ${f.axisLines}
+    ${hits}
     ${bars}
     ${f.xLabels}
     ${f.xTitle}
@@ -136,7 +163,10 @@ export function lineChart(points, opts = {}) {
   const xy = points.map((p, i) => [f.xFor(i), f.yFor(p.value)])
   const line = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
   const area = `${line} L${xy[xy.length - 1][0].toFixed(1)},${f.zeroY.toFixed(1)} L${xy[0][0].toFixed(1)},${f.zeroY.toFixed(1)} Z`
-  const dots = xy.map(([x, y]) => `<circle class="chart__dot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.2" />`).join('')
+  const dots = xy.map(([x, y], i) => `<circle class="chart__dot" data-v="${points[i].value}" data-l="${esc(points[i].label)}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.2" />`).join('')
+  const hits = hitRectsFromFrame(points, f).map((h) =>
+    `<rect class="chart__hit" data-v="${h.value}" data-l="${esc(h.label)}" x="${h.x.toFixed(1)}" y="${h.y.toFixed(1)}" width="${h.width.toFixed(1)}" height="${h.height.toFixed(1)}" />`
+  ).join('')
 
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Line chart">
     <defs>
@@ -150,6 +180,7 @@ export function lineChart(points, opts = {}) {
     ${f.axisLines}
     <path class="chart__area" fill="url(#${gradId})" d="${area}" />
     <path class="chart__line" d="${line}" />
+    ${hits}
     ${dots}
     ${f.xLabels}
     ${f.xTitle}
