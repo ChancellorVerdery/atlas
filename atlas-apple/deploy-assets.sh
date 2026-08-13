@@ -24,8 +24,9 @@ node scripts/gen-manifest.mjs
 # as root:root and our non-root tar would fail every write. Take ownership
 # (no-op once we already own it); the box runs docker under sudo anyway.
 ssh "$HOST" 'mkdir -p ~/atlas-backend/app-dist && [ -w ~/atlas-backend/app-dist ] || sudo chown -R "$(id -u):$(id -g)" ~/atlas-backend/app-dist'
-# COPYFILE_DISABLE drops the macOS xattr headers Debian's tar grumbles about
-COPYFILE_DISABLE=1 tar -C dist --exclude manifest.json -czf - . | ssh "$HOST" 'tar -xzf - -C ~/atlas-backend/app-dist'
+# macOS bsdtar embeds com.apple.* xattr headers GNU tar doesn't recognise;
+# --warning=no-unknown-keyword silences the (harmless) extract-side grumble.
+tar -C dist --exclude manifest.json -czf - . | ssh "$HOST" 'tar --warning=no-unknown-keyword -xzf - -C ~/atlas-backend/app-dist'
 scp -q dist/manifest.json "$HOST:atlas-backend/app-dist/manifest.json"
 
 echo "deployed: $(node -e 'console.log(JSON.parse(require("fs").readFileSync("dist/manifest.json")).version)')"
