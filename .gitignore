@@ -27,4 +27,8 @@ atlas-ui/tmp-e2e/**/*.png
 # Built plugin zips — regenerate with tools/build-plugin-zips.mjs
 plugins-dist/
 
+# Retired-plugin archive (formal/graph/finance source zips + exported data) —
+# lives on the Desktop beside the repo, never committed.
+custom plugins/
+
 .DS_Store

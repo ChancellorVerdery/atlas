@@ -46,7 +46,6 @@ roundTrip('rich edge-case state', {
       credits: 0,
       prereqs: [],
       coreqs: [],
-      preOrCo: [],
       summerOk: false,
       term: null,
     },
@@ -56,8 +55,8 @@ roundTrip('rich edge-case state', {
       title: '',
       credits: 1.5,
       prereqs: ['MATH 101', 'φυσική-100'],
-      coreqs: ['MATH 201L'],
-      preOrCo: ['STAT 200'],
+      // pre-or-co folded into coreqs (the retired bucket) — order: coreqs then folded
+      coreqs: ['MATH 201L', 'STAT 200'],
       summerOk: true,
       term: 'fall-2025',
     },
@@ -78,12 +77,12 @@ roundTrip('rich edge-case state', {
 //    summer, settings touched via the Settings page (always numbers there).
 roundTrip('realistic state', {
   courses: [
-    { id: 'c-m1a2b3c4d', code: 'CS 101', title: 'Intro to Programming', credits: 3, prereqs: [], coreqs: [], preOrCo: [], summerOk: true, term: 'fall-2024' },
-    { id: 'c-m1a2b3c4e', code: 'CS 201', title: 'Data Structures', credits: 4, prereqs: ['CS 101'], coreqs: [], preOrCo: [], summerOk: false, term: 'spring-2025' },
-    { id: 'c-m1a2b3c4f', code: 'CS 301', title: 'Algorithms', credits: 3, prereqs: ['CS 201'], coreqs: [], preOrCo: [], summerOk: false, term: null },
-    { id: 'c-m1a2b3c4g', code: 'CS 301L', title: 'Algorithms Lab', credits: 1, prereqs: [], coreqs: ['CS 301'], preOrCo: [], summerOk: false, term: null },
-    { id: 'c-m1a2b3c4h', code: 'PHYS 150', title: 'Mechanics', credits: 4, prereqs: [], coreqs: [], preOrCo: ['MATH 140'], summerOk: true, term: null },
-    { id: 'c-m1a2b3c4i', code: 'MATH 140', title: 'Calculus I', credits: 4, prereqs: [], coreqs: [], preOrCo: [], summerOk: true, term: 'fall-2024' },
+    { id: 'c-m1a2b3c4d', code: 'CS 101', title: 'Intro to Programming', credits: 3, prereqs: [], coreqs: [], summerOk: true, term: 'fall-2024' },
+    { id: 'c-m1a2b3c4e', code: 'CS 201', title: 'Data Structures', credits: 4, prereqs: ['CS 101'], coreqs: [], summerOk: false, term: 'spring-2025' },
+    { id: 'c-m1a2b3c4f', code: 'CS 301', title: 'Algorithms', credits: 3, prereqs: ['CS 201'], coreqs: [], summerOk: false, term: null },
+    { id: 'c-m1a2b3c4g', code: 'CS 301L', title: 'Algorithms Lab', credits: 1, prereqs: [], coreqs: ['CS 301'], summerOk: false, term: null },
+    { id: 'c-m1a2b3c4h', code: 'PHYS 150', title: 'Mechanics', credits: 4, prereqs: [], coreqs: ['MATH 140'], summerOk: true, term: null },
+    { id: 'c-m1a2b3c4i', code: 'MATH 140', title: 'Calculus I', credits: 4, prereqs: [], coreqs: [], summerOk: true, term: 'fall-2024' },
   ],
   terms: [
     { key: 'fall-2024', season: 'fall', year: 2024, current: false },
@@ -113,9 +112,9 @@ roundTrip('realistic state', {
   const back = mapper.recompose(simulatePg(mapper.decompose(seeded)))
   deepStrictEqual(back, {
     courses: [
-      { id: 'c-x', code: 'CS 101', title: '', credits: 3, prereqs: [], coreqs: [], preOrCo: [], summerOk: false, term: null },
-      { id: 'c-x', code: 'CS 101', title: '', credits: 3, prereqs: [], coreqs: [], preOrCo: [], summerOk: false, term: null },
-      { id: 'c-y', code: 'MATH 2', title: '42', credits: 4, prereqs: ['CS 101', '3'], coreqs: [], preOrCo: [], summerOk: true, term: null },
+      { id: 'c-x', code: 'CS 101', title: '', credits: 3, prereqs: [], coreqs: [], summerOk: false, term: null },
+      { id: 'c-x', code: 'CS 101', title: '', credits: 3, prereqs: [], coreqs: [], summerOk: false, term: null },
+      { id: 'c-y', code: 'MATH 2', title: '42', credits: 4, prereqs: ['CS 101', '3'], coreqs: [], summerOk: true, term: null },
     ],
     terms: [],
     disabledTerms: [],

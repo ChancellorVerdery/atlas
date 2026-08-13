@@ -2,8 +2,10 @@
 //
 // The blob (as loadCourse() in atlas-ui/src/page/course.js normalizes it):
 //   {
-//     courses: [{ id, code, title, credits, prereqs[], coreqs[], preOrCo[],
+//     courses: [{ id, code, title, credits, prereqs[], coreqs[],
 //                 summerOk, term }],          // term: term key string | null
+//   The retired "pre-or-co" bucket folds into coreqs (same term or earlier) —
+//   see decompose(). An old client still sending preOrCo has it merged, not lost.
 //     terms: [{ key, season, year, current }],
 //     disabledTerms: string[],                // term keys, order preserved
 //     settings: { maxCredits, summerMax, strategy },
@@ -64,8 +66,7 @@ CREATE TABLE IF NOT EXISTS course.courses (
   title     text NOT NULL DEFAULT '',
   credits   numeric NOT NULL CHECK (credits >= 0),
   prereqs   text[] NOT NULL DEFAULT '{}',  -- free-text codes (earlier term)
-  coreqs    text[] NOT NULL DEFAULT '{}',  -- same term or earlier
-  pre_or_co text[] NOT NULL DEFAULT '{}',
+  coreqs    text[] NOT NULL DEFAULT '{}',  -- same term or earlier (absorbs the retired pre_or_co)
   summer_ok boolean NOT NULL DEFAULT false,
   term_key  text,                          -- soft ref to terms.key; NULL = 'to take'
   ord       integer NOT NULL DEFAULT 0
@@ -87,6 +88,8 @@ const termRank = (key) => {
 }
 const isObj = (o) => o !== null && typeof o === 'object'
 const cleanRefs = (a) => (Array.isArray(a) ? a.map((x) => String(x).trim()).filter(Boolean) : [])
+// coreqs now absorbs the retired preOrCo bucket; dedupe the union, order kept.
+const uniq = (a) => { const seen = new Set(); return a.filter((x) => !seen.has(x) && seen.add(x)) }
 
 const mapper = {
   name: 'course',
@@ -126,8 +129,8 @@ const mapper = {
         title: String(c.title || '').trim(),
         credits: Number.isFinite(Number(c.credits)) && Number(c.credits) >= 0 ? Number(c.credits) : 3,
         prereqs: cleanRefs(c.prereqs),
-        coreqs: cleanRefs(c.coreqs),
-        pre_or_co: cleanRefs(c.preOrCo),
+        // Fold any lingering preOrCo (old clients / un-migrated data) into coreqs.
+        coreqs: uniq([...cleanRefs(c.coreqs), ...cleanRefs(c.preOrCo)]),
         summer_ok: !!c.summerOk,
         term_key: typeof c.term === 'string' && c.term ? c.term : null,
       }))
@@ -154,7 +157,6 @@ const mapper = {
         credits: r.credits,
         prereqs: r.prereqs,
         coreqs: r.coreqs,
-        preOrCo: r.pre_or_co,
         summerOk: r.summer_ok,
         term: r.term_key,
       })),

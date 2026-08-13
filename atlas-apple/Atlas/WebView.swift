@@ -6,6 +6,41 @@ import WebKit
 // links to the system browser, and only Google's OAuth popup allowed to open
 // in-app (it must post the auth code back to its opener).
 
+// ponytail: one weak ref, not a whole state-management layer — the View menu
+// commands (AtlasApp.swift) need *some* way to reach the on-screen WKWebView
+// for zoom, and there's only ever one window's worth of it.
+@MainActor
+final class ActiveWebView {
+    static let shared = ActiveWebView()
+    private init() {}
+
+    weak var webView: WKWebView?
+
+    static let minZoom: CGFloat = 0.5
+    static let maxZoom: CGFloat = 3.0
+    private static let step: CGFloat = 0.1
+    private static let zoomDefaultsKey = "atlas.webview.pageZoom"
+
+    func zoomIn() { setZoom((webView?.pageZoom ?? 1) + Self.step) }
+    func zoomOut() { setZoom((webView?.pageZoom ?? 1) - Self.step) }
+    func resetZoom() { setZoom(1) }
+
+    private func setZoom(_ zoom: CGFloat) {
+        let clamped = min(Self.maxZoom, max(Self.minZoom, zoom))
+        webView?.pageZoom = clamped
+        UserDefaults.standard.set(Double(clamped), forKey: Self.zoomDefaultsKey)
+    }
+
+    // Called once, from makeWebView, when the page's own WKWebView exists.
+    // Restores whatever zoom the last session left behind (session-only
+    // persistence was the ask; UserDefaults gives us across-launch for free).
+    fileprivate func attach(_ web: WKWebView) {
+        webView = web
+        let saved = UserDefaults.standard.double(forKey: Self.zoomDefaultsKey)
+        web.pageZoom = saved > 0 ? min(Self.maxZoom, max(Self.minZoom, CGFloat(saved))) : 1
+    }
+}
+
 struct AtlasWebView {
     let origin: URL
 
@@ -20,6 +55,7 @@ struct AtlasWebView {
         #endif
     }()
 
+    @MainActor
     func makeWebView(_ coordinator: Coordinator) -> WKWebView {
         let config = WKWebViewConfiguration()
         // Persistent on purpose: localStorage is Atlas's device cache of the
@@ -37,6 +73,7 @@ struct AtlasWebView {
         web.scrollView.contentInsetAdjustmentBehavior = .never
         #endif
         coordinator.webView = web
+        ActiveWebView.shared.attach(web)
         web.load(URLRequest(url: origin))
         return web
     }

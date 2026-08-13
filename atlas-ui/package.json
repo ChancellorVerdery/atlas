@@ -4,17 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Atlas control UI — Vite",
-  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "app": "npm run build && node electron/name.mjs && electron .",
-    "app:nobuild": "node electron/name.mjs && electron .",
-    "app:smoke": "npm run build && node electron/name.mjs && electron . --smoke"
+    "preview": "vite preview"
   },
   "devDependencies": {
-    "electron": "^43.3.0",
     "playwright": "^1.61.1",
     "vite": "^8.1.0"
   },

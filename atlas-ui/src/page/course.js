@@ -1,10 +1,11 @@
 // Course Planner plugin — data + degree-route scheduler. Pure data/localStorage
 // (UI lives in courseui.js). The user records past + current semesters with the
 // classes taken, plus the remaining required classes — each with credit hours,
-// prerequisites (must be an EARLIER term), corequisites and "pre-or-co" classes
-// (both mean SAME term or earlier), and whether it's offered in summer. The
-// scheduler lays out the route to finish, respecting a per-term credit cap,
-// summer availability, and disabled terms, under one of three strategies.
+// prerequisites (must be an EARLIER term) and corequisites (SAME term or
+// earlier — a class in both buckets simply needs to satisfy both), and whether
+// it's offered in summer. The scheduler lays out the route to finish,
+// respecting a per-term credit cap, summer availability, and disabled terms,
+// under one of three strategies.
 
 const KEY = 'atlas.course.v1'
 const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
@@ -46,7 +47,6 @@ export function loadCourse() {
     credits: Number.isFinite(Number(c.credits)) && Number(c.credits) >= 0 ? Number(c.credits) : 3,
     prereqs: cleanRefs(c.prereqs),
     coreqs: cleanRefs(c.coreqs),
-    preOrCo: cleanRefs(c.preOrCo),
     summerOk: !!c.summerOk,
     term: typeof c.term === 'string' && c.term ? c.term : null, // past/current term key, or null = still to take
   }))
@@ -94,11 +94,11 @@ export function removeTerm(s, key) {
   for (const c of s.courses) if (c.term === key) c.term = null // its classes fall back to "to take"
   saveCourse(s)
 }
-export function addCourse(s, { code, title, credits, prereqs, coreqs, preOrCo, summerOk, term }) {
+export function addCourse(s, { code, title, credits, prereqs, coreqs, summerOk, term }) {
   const c = {
     id: uid('c'), code: String(code || '').trim(), title: String(title || '').trim(),
     credits: Number.isFinite(Number(credits)) && Number(credits) >= 0 ? Number(credits) : 3,
-    prereqs: cleanRefs(prereqs), coreqs: cleanRefs(coreqs), preOrCo: cleanRefs(preOrCo),
+    prereqs: cleanRefs(prereqs), coreqs: cleanRefs(coreqs),
     summerOk: !!summerOk, term: term || null,
   }
   if (!c.code && !c.title) return null
@@ -114,7 +114,6 @@ export function updateCourse(s, id, patch) {
   if ('credits' in patch) c.credits = Number.isFinite(Number(patch.credits)) && Number(patch.credits) >= 0 ? Number(patch.credits) : c.credits
   if ('prereqs' in patch) c.prereqs = cleanRefs(patch.prereqs)
   if ('coreqs' in patch) c.coreqs = cleanRefs(patch.coreqs)
-  if ('preOrCo' in patch) c.preOrCo = cleanRefs(patch.preOrCo)
   if ('summerOk' in patch) c.summerOk = !!patch.summerOk
   if ('term' in patch) c.term = patch.term || null
   saveCourse(s)
@@ -152,7 +151,7 @@ export function scheduleDegree(s, now = new Date()) {
   // resolve requirement code-refs to ids that exist in the plan (unknown refs
   // are dropped — a class can't wait on something the user never entered)
   const preOf = (c) => c.prereqs.map(idOf).filter(Boolean)
-  const coOf = (c) => [...c.coreqs, ...c.preOrCo].map(idOf).filter(Boolean) // both = same-or-earlier
+  const coOf = (c) => c.coreqs.map(idOf).filter(Boolean) // same-or-earlier
 
   // downstream weight: how much work is gated behind a class (longer = do sooner)
   const dependents = new Map(s.courses.map((c) => [c.id, []]))

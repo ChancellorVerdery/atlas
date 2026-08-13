@@ -36,6 +36,24 @@ struct AtlasApp: App {
         #if os(macOS)
         .defaultSize(width: 1440, height: 900)
         #endif
+        .commands {
+            // The Edit menu (Cut/Copy/Paste/Undo/Redo/Select All) already
+            // exists by default; this makes it explicit so it can't be
+            // dropped by a future CommandGroup(replacing:) elsewhere. It's
+            // pure menu-item plumbing — the shortcuts still route down the
+            // normal responder chain into the WKWebView, so a focused text
+            // field's own Cmd+A (native WebKit/DOM selection) is untouched;
+            // nothing here defines a competing global select-all.
+            TextEditingCommands()
+            CommandMenu("View") {
+                Button("Zoom In") { ActiveWebView.shared.zoomIn() }
+                    .keyboardShortcut("=", modifiers: .command)
+                Button("Zoom Out") { ActiveWebView.shared.zoomOut() }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Actual Size") { ActiveWebView.shared.resetZoom() }
+                    .keyboardShortcut("0", modifiers: .command)
+            }
+        }
     }
 }
 

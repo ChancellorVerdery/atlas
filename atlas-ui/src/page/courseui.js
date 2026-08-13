@@ -93,7 +93,7 @@ export function renderCoursePage(root, rerender) {
     if (!el || el.tagName === 'SELECT' || el.type === 'checkbox') return
     if (el.hasAttribute('size')) el.size = fit(el.value, el.placeholder, el.dataset.field === 'title' ? 10 : 4) // grow to fit; the subgrid widens the whole column
     const f = el.dataset.field
-    const val = ['prereqs', 'coreqs', 'preOrCo'].includes(f) ? el.value.split(',').map((x) => x.trim()).filter(Boolean) : el.value
+    const val = ['prereqs', 'coreqs'].includes(f) ? el.value.split(',').map((x) => x.trim()).filter(Boolean) : el.value
     updateCourse(loadCourse(), el.dataset.cid, { [f]: val })
   }
   root.onchange = (e) => {
@@ -122,12 +122,17 @@ function classTable(s) {
     <input class="pw-field cp-cr wk-num" data-cid="${c.id}" data-field="credits" type="number" min="0" max="24" value="${c.credits}" title="Credit hours" aria-label="Credits">
     ${req(c, 'prereqs', 'prereqs', 'Prerequisites (codes, comma-separated) — must be an EARLIER term')}
     ${req(c, 'coreqs', 'coreqs', 'Corequisites — same term or earlier')}
-    ${req(c, 'preOrCo', 'pre-or-co', 'Pre-or-co — may be a prerequisite OR corequisite (same term or earlier)')}
+    <span class="cp-reqgap" aria-hidden="true"></span>
     <label class="gym-check cp-su" title="Offered in summer"><input type="checkbox" data-cid="${c.id}" data-field="summerOk"${c.summerOk ? ' checked' : ''}> su</label>
     <select class="pw-field cp-term" data-cid="${c.id}" data-field="term" title="Which term (or leave To take)">${termOpts(c.term)}</select>
     <button type="button" class="pw-item-remove" data-cp="del-class" data-cid="${c.id}" title="Remove class">×</button>
   </div>`
-  return `<div class="cp-rowhead"><span>Code</span><span>Title</span><span>Cr</span><span>Prereq</span><span>Coreq</span><span>Pre/Co</span><span></span><span>Term</span><span></span></div>` +
+  // ponytail: dropped the Pre/Co column (see course.js) but kept its grid track as an
+  // empty spacer in header+row rather than editing styles.css's cp-classes
+  // grid-template-columns (owned by another agent in this pass). A follow-up styles.css
+  // edit could drop that 6th `max-content` track and the two blank spans below for a
+  // fully clean 8-column table.
+  return `<div class="cp-rowhead"><span>Code</span><span>Title</span><span>Cr</span><span>Prereq</span><span title="Same term or earlier">Coreq</span><span></span><span></span><span>Term</span><span></span></div>` +
     (s.courses.length ? s.courses.map(row).join('') : '<p class="gym-sub cp-emptyrow">No classes yet — click “+ Class”.</p>')
 }
 
@@ -280,7 +285,6 @@ function openClassModal(root, id) {
     <div class="cp-modal__reqs">
       <div><h4>Prerequisites <span class="cp-mut">(earlier term)</span></h4><ul>${resolve(c.prereqs)}</ul></div>
       <div><h4>Corequisites <span class="cp-mut">(same term or earlier)</span></h4><ul>${resolve(c.coreqs)}</ul></div>
-      <div><h4>Pre-or-co</h4><ul>${resolve(c.preOrCo)}</ul></div>
     </div>
   </div>`
   el.addEventListener('click', (e) => { if (e.target === el) el.remove() })
