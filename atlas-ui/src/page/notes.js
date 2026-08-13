@@ -45,19 +45,24 @@ export const convertNote = (payload) => post('/notes-api/convert', payload)
 // {dir, subdir, filename, markdown, uploads: [{name, data(b64)}]} → {ok, path}
 export const saveNote = (payload) => post('/notes-api/save', payload)
 
-// Apple Notes import: list note titles / export one as a PDF (slow — the dev
-// server drives the Notes app UI; needs the Mac unlocked)
-export async function appleNotesList() {
-  const r = await fetch('/notes-api/apple-list')
-  const j = await r.json().catch(() => ({})) // non-JSON (e.g. dev server mid-restart) → {}
-  if (!r.ok) throw new Error(j.error || `list failed (${r.status})`)
-  return Array.isArray(j.titles) ? j.titles : []
+// Apple Notes import: the account → folder → note tree (each note carries a
+// STABLE id — never keyed by title, which can collide silently), and one
+// note's full content fetched directly by that id. Typed notes come back as
+// markdown with no conversion step; handwritten notes still render slowly
+// (the dev server reads ink vectors off disk) and come back as PDF pages to
+// route through the normal upload+convert flow.
+// → [{account, folders: [{name, id, notes: [{id, title}]}]}]
+export async function appleNotesTree() {
+  const r = await fetch('/notes-api/apple-tree')
+  const j = await r.json().catch(() => ([])) // non-JSON (e.g. dev server mid-restart) → []
+  if (!r.ok) throw new Error(j.error || `tree failed (${r.status})`)
+  return Array.isArray(j) ? j : []
 }
-// → { files: [{name, media_type, data}], source } ; files[] normalized so a
-// malformed response can never crash the caller on .length.
-export async function appleNotesExport(title) {
-  const j = await post('/notes-api/apple-export', { title })
-  return { files: Array.isArray(j.files) ? j.files : [], source: j.source }
+// → { kind: 'typed', title, markdown } | { kind: 'ink', title, files: [{name, media_type, data}], source }
+// files[] normalized so a malformed response can never crash the caller on .length.
+export async function appleNotesFetch(id) {
+  const j = await post('/notes-api/apple-note', { id })
+  return j.kind === 'ink' ? { ...j, files: Array.isArray(j.files) ? j.files : [] } : j
 }
 
 // note contents + original images are read via the graph middleware (sandboxed)

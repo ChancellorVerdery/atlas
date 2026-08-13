@@ -238,6 +238,68 @@ async function askClaude(prompt, schema, extra = []) {
 // notes directory — none of which the browser can do. Conversion runs the
 // `claude` CLI in headless mode, so it uses the user's Claude subscription
 // (no API key). Reading note contents reuses /graph-api/file (sandboxed).
+// Apple Notes import reads the account/folder/note tree and one note's full
+// content directly by its stable id (never by title, which can collide) —
+// typed notes skip claude entirely (a plain AppleScript body read); ink still
+// renders via notes-ink and flows through the same claude conversion as any
+// other upload.
+
+// ---- Apple Notes tree + HTML→markdown (pure, testable) ----------------------
+// notesApi()'s osascript walk emits \x1f-delimited lines (AppleScript has no
+// JSON encoder); this turns that text into the account→folders→notes shape
+// the note picker renders. One line per (account, folder) pair even when the
+// folder has no notes, so empty folders still show up in the tree.
+// ponytail: only top-level folders per account are walked — nested subfolders
+// (folders inside folders) don't appear. Upgrade path: recurse into `folders
+// of fld` in appleTree() below and thread a parent id through here.
+export function parseAppleTree(raw) {
+  const order = []
+  const accounts = new Map() // accName → Map(fldId → {name, id, notes[]})
+  for (const line of String(raw || '').split('\n')) {
+    if (!line.trim()) continue
+    const [accName, fldName, fldId, ntId, ntTitle] = line.split('\x1f')
+    if (!accName || !fldId) continue
+    if (!accounts.has(accName)) { accounts.set(accName, new Map()); order.push(accName) }
+    const folders = accounts.get(accName)
+    if (!folders.has(fldId)) folders.set(fldId, { name: fldName || '', id: fldId, notes: [] })
+    if (ntId) folders.get(fldId).notes.push({ id: ntId, title: ntTitle || '' })
+  }
+  return order.map((account) => ({ account, folders: [...accounts.get(account).values()] }))
+}
+
+// AppleScript's note "id" is a Core Data objectID URI
+// (x-coredata://<store-uuid>/ICNote/p<pk>) whose trailing integer is
+// NoteStore.sqlite's own Z_PK for that row — extracting it lets the ink-canvas
+// lookup key off the exact row instead of a title (which can collide).
+// Unverified against a live Notes database; paperCanvases() below falls back
+// to the old title match if this ever comes back empty.
+export function notePk(id) {
+  const m = /\/p(\d+)$/.exec(String(id || ''))
+  return m ? m[1] : null
+}
+
+// Apple Notes' `body of note` returns HTML (h1-3/div/br/b/i/a — Notes' own
+// rich-text tag set). A deliberately simple regex converter, not an HTML
+// parser: good enough for a direct read into a markdown vault; anything it
+// doesn't recognize degrades to plain text rather than breaking.
+const stripTags = (s) => String(s ?? '').replace(/<[^>]+>/g, '').trim()
+const HTML_UNESCAPE = { '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" }
+export function appleHtmlToMarkdown(html) {
+  let s = String(html || '')
+  s = s.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (_m, t) => `\n# ${stripTags(t)}\n`)
+  s = s.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (_m, t) => `\n## ${stripTags(t)}\n`)
+  s = s.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_m, t) => `\n### ${stripTags(t)}\n`)
+  s = s.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, t) => `- ${stripTags(t)}\n`)
+  s = s.replace(/<(?:b|strong)[^>]*>([\s\S]*?)<\/(?:b|strong)>/gi, (_m, t) => `**${stripTags(t)}**`)
+  s = s.replace(/<(?:i|em)[^>]*>([\s\S]*?)<\/(?:i|em)>/gi, (_m, t) => `*${stripTags(t)}*`)
+  s = s.replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href, t) => `[${stripTags(t)}](${href})`)
+  s = s.replace(/<br\s*\/?>/gi, '\n')
+  s = s.replace(/<\/(?:div|p)>/gi, '\n')
+  s = s.replace(/<[^>]+>/g, '')
+  s = s.replace(/&(?:nbsp|amp|lt|gt|quot|#39);/g, (m) => HTML_UNESCAPE[m])
+  return s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 function notesApi() {
   const exec = (cmd, args) => new Promise((resolve, reject) =>
     execFile(cmd, args, { maxBuffer: 16e6 }, (err, stdout) => (err ? reject(err) : resolve(stdout))))
@@ -245,32 +307,69 @@ function notesApi() {
   // ---- Apple Notes import ----------------------------------------------------
   // A handwritten note is rendered straight from its on-disk ink vectors to a
   // full-height PDF by ../notes-ink/render_note.sh — no Notes app, no screen
-  // unlock, and (unlike Apple's own export) no truncation of tall canvases. A
-  // typed note has no ink bundle, so it falls back to ../notes2pdf.sh, which
-  // UI-scripts Notes' File > Export as > PDF (that path needs the screen
-  // unlocked + one-time Automation/Accessibility grants for the dev server).
-  // Reading either the Notes DB or an ink bundle needs Full Disk Access granted
-  // to whatever app runs the dev server.
+  // unlock, and (unlike Apple's own export) no truncation of tall canvases.
+  // A typed note has no ink bundle, so its content is read directly via
+  // AppleScript's `body of note` (HTML → markdown) — no export, no screen
+  // unlock, no claude call; see fetchAppleNote below.
+  // Reading the Notes DB or an ink bundle needs Full Disk Access granted to
+  // whatever app runs the dev server.
   // Caveat: ink syncs lazily — a note not yet scrolled through on this Mac has
   // only its first page of strokes locally, so it still renders truncated until
   // opened+scrolled in Notes once (a data limit, not an export limit). See
   // ~/.claude memory apple-notes-ink-renderer.
-  const NOTES2PDF = fileURLToPath(new URL('../../notes2pdf.sh', import.meta.url))
   const RENDER_SH = fileURLToPath(new URL('../../notes-ink/render_note.sh', import.meta.url))
   const NOTES_DIR = path.join(os.homedir(), 'Library/Group Containers/group.com.apple.notes')
 
-  const screenLocked = () =>
-    exec('ioreg', ['-n', 'Root', '-d1', '-a'])
-      .then((out) => /IOConsoleLocked<\/key>\s*<true\/>/.test(out))
-      .catch(() => false) // can't tell — let the export attempt speak
-
-  async function appleList() {
-    // linefeed-joined so titles containing commas survive
+  // Every account → its top-level folders → each folder's notes, id-first.
+  // \x1f-delimited (AppleScript has no JSON encoder — matches the sqlite3
+  // -separator convention used below). One line per folder even when it holds
+  // zero notes, so empty folders still appear in the tree.
+  async function appleTree() {
+    const SEP = '(ASCII character 31)'
     const out = await exec('osascript', [
+      '-e', 'set treeOut to {}',
+      '-e', 'tell application "Notes"',
+      '-e', 'repeat with acc in accounts',
+      '-e', 'set accName to name of acc',
+      '-e', 'repeat with fld in folders of acc',
+      '-e', 'set fldName to name of fld',
+      '-e', 'set fldId to id of fld as text',
+      '-e', `set end of treeOut to accName & ${SEP} & fldName & ${SEP} & fldId & ${SEP} & "" & ${SEP} & ""`,
+      '-e', 'repeat with nt in notes of fld',
+      '-e', `set end of treeOut to accName & ${SEP} & fldName & ${SEP} & fldId & ${SEP} & (id of nt as text) & ${SEP} & (name of nt)`,
+      '-e', 'end repeat',
+      '-e', 'end repeat',
+      '-e', 'end repeat',
+      '-e', 'end tell',
       '-e', 'set text item delimiters to linefeed',
-      '-e', 'tell application "Notes" to (name of every note) as text',
+      '-e', 'treeOut as text',
     ])
-    return out.split('\n').map((t) => t.trim()).filter(Boolean)
+    return parseAppleTree(out)
+  }
+
+  // Escape a client-supplied note id for interpolation into an AppleScript
+  // string literal — a newline would let it smuggle extra statements.
+  function ascLit(s) {
+    const v = String(s ?? '')
+    if (/[\r\n]/.test(v)) throw fail(400, 'invalid note id')
+    return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  }
+
+  // {title, html} for one note by its stable id. html is '' for a note with
+  // no typed content — a purely handwritten note's body is empty; that's the
+  // paperCanvases() branch in fetchAppleNote, not this.
+  async function noteNameAndBody(id) {
+    let out
+    try {
+      out = await exec('osascript', [
+        '-e', 'tell application "Notes"',
+        '-e', `set n to note id "${ascLit(id)}"`,
+        '-e', '(name of n) & (ASCII character 31) & (body of n)',
+        '-e', 'end tell',
+      ])
+    } catch (e) { throw fail(404, `note not found — ${String(e.stderr || e.message).trim().split('\n').pop()}`) }
+    const i = out.indexOf('\x1f')
+    return i < 0 ? { title: out.trim(), html: '' } : { title: out.slice(0, i), html: out.slice(i + 1) }
   }
 
   // Locate a paper attachment's ink bundle across the (possibly several) Notes
@@ -288,16 +387,19 @@ function notesApi() {
   // A note's handwritten canvases: [{uuid, bundle, W,H,OX,OY}]. Empty for a
   // typed note. Canvas bounds come from the attachment's ZMETADATADATA JSON.
   // NoteStore.sqlite is copied (with -wal/-shm) before querying so a live WAL
-  // never yields a torn read.
-  function paperCanvases(title) {
+  // never yields a torn read. Keyed by id (via notePk) when the Core Data PK
+  // extraction holds, else by title (the old, collision-prone match).
+  function paperCanvases(id, title) {
     const store = path.join(NOTES_DIR, 'NoteStore.sqlite')
     if (!fs.existsSync(store)) throw fail(500, `Notes database not found — the dev server needs Full Disk Access to read ${NOTES_DIR}.`)
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-nstore-'))
     try {
       for (const ext of ['', '-wal', '-shm']) if (fs.existsSync(store + ext)) fs.copyFileSync(store + ext, path.join(tmp, 'NoteStore.sqlite' + ext))
+      const pk = notePk(id)
+      const where = pk ? `n.Z_PK = ${pk}` : `n.ZTITLE1 = '${title.replace(/'/g, "''")}'`
       const sql = `SELECT a.ZIDENTIFIER, a.ZMETADATADATA FROM ZICCLOUDSYNCINGOBJECT a `
         + `JOIN ZICCLOUDSYNCINGOBJECT n ON n.Z_PK = a.ZNOTE `
-        + `WHERE n.ZTITLE1 = '${title.replace(/'/g, "''")}' AND a.ZTYPEUTI = 'com.apple.paper'`
+        + `WHERE ${where} AND a.ZTYPEUTI = 'com.apple.paper'`
       let out
       try { out = execFileSync('sqlite3', ['-separator', '\x1f', path.join(tmp, 'NoteStore.sqlite'), sql], { encoding: 'utf8', maxBuffer: 8e6 }) }
       catch (e) {
@@ -335,12 +437,17 @@ function notesApi() {
     })
   })
 
-  // Returns { files: [{name, media_type, data}], source: 'ink' | 'export' }.
-  // Handwritten notes render from disk (no unlock); typed notes fall back to
-  // Notes' own PDF export (needs the screen unlocked).
-  // ponytail: duplicate titles resolve to whichever note NoteStore lists first.
-  async function appleExport(title) {
-    const canvases = paperCanvases(title)
+  // One note, by its stable id — never by title (titles can collide).
+  // Handwritten → { kind: 'ink', title, files: [{name, media_type, data}],
+  // source: 'ink' }: unchanged render_note.sh rendering; the caller runs
+  // these through the existing upload+convert (claude) pipeline, same as any
+  // other upload. Typed → { kind: 'typed', title, markdown }: read directly
+  // via AppleScript's `body of note` — no export, no claude call, and nothing
+  // is written back to Apple Notes (no duplicate, no delete — see notesui.js
+  // pickAppleNote, which only ever reads).
+  async function fetchAppleNote(id) {
+    const { title, html } = await noteNameAndBody(id)
+    const canvases = paperCanvases(id, title)
     if (canvases.length) {
       // A note can hold several ink canvases (plus empty stubs); render each,
       // keep the non-empty ones.
@@ -358,19 +465,15 @@ function notesApi() {
           media_type: 'application/pdf',
           data,
         }))
-        return { files, source: 'ink' }
+        return { kind: 'ink', title, files, source: 'ink' }
       }
-      // Canvases exist but hold no local ink — not synced (or genuinely blank).
+      // Canvases exist but hold no local ink — not synced (or genuinely
+      // blank). Never fall through to a partial read: a truncated note must
+      // surface clearly rather than silently return incomplete content.
       throw fail(422, `"${title}" is handwritten, but none of its ink is on this Mac yet — open it in Notes and scroll to the bottom once so iCloud downloads it, then try again.`)
     }
-    // Typed note: no ink to render, use Notes' own export.
-    if (await screenLocked()) throw fail(409, 'The Mac is locked — unlock the screen to export this note (handwritten notes render without unlocking, but this one has no ink).')
-    const out = path.join(os.tmpdir(), `apple-note-${Date.now()}.pdf`)
-    try {
-      await new Promise((resolve, reject) => execFile('bash', [NOTES2PDF, title, out], { timeout: 120e3, maxBuffer: 16e6 }, (err, _o, stderr) =>
-        err ? reject(fail(502, (stderr || err.message).trim().split('\n').pop())) : resolve()))
-      return { files: [{ name: `${title}.pdf`, media_type: 'application/pdf', data: fs.readFileSync(out).toString('base64') }], source: 'export' }
-    } finally { fs.rmSync(out, { force: true }) }
+    // Typed note: direct read, no export, no claude.
+    return { kind: 'typed', title, markdown: appleHtmlToMarkdown(html) }
   }
 
   // path must live inside dir — no ../ escapes, no absolute-path smuggling
@@ -462,6 +565,7 @@ Output:
         'Convert the material above into one note.',
       ].filter(Boolean).join('\n\n')
 
+      // TODO(orchestrator): AI provider routing
       // Pinned model + effort: following the user's Claude Code default made
       // note style drift whenever they switched models. Sonnet/medium per user.
       const args = ['-p', prompt, '--output-format', 'json', '--json-schema', SCHEMA, '--allowedTools', 'Read', '--model', 'claude-sonnet-5', '--effort', 'medium']
@@ -525,11 +629,11 @@ Output:
           return json(200, { path: out.trim().replace(/\/$/, '') })
         } catch { return json(200, { canceled: true }) } // Cancel exits non-zero
       }
-      if (u.pathname === '/apple-list') return json(200, { titles: await appleList() })
+      if (u.pathname === '/apple-tree' && req.method === 'GET') return json(200, await appleTree())
       const body = req.method === 'POST' ? await readBody(req) : {}
-      if (u.pathname === '/apple-export' && req.method === 'POST') {
-        if (!String(body.title || '').trim()) return json(400, { error: 'missing note title' })
-        return json(200, await appleExport(String(body.title)))
+      if (u.pathname === '/apple-note' && req.method === 'POST') {
+        if (!String(body.id || '').trim()) return json(400, { error: 'missing note id' })
+        return json(200, await fetchAppleNote(String(body.id)))
       }
       const dir = u.searchParams.get('dir') || body.dir || ''
       if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return json(400, { error: 'bad or missing dir' })

@@ -8,7 +8,7 @@
 
 import {
   loadNotesStore, saveNotesStore, pickFolder, fetchTree, convertNote, saveNote,
-  appleNotesList, appleNotesExport, fileURL, revealFile, WIKI_RE, EMBED_RE, IMG_RE,
+  appleNotesTree, appleNotesFetch, fileURL, revealFile, WIKI_RE, EMBED_RE, IMG_RE,
 } from './notes.js'
 import { sanitizeHTML } from './canvasui.js'
 import { marked } from 'marked'
@@ -387,8 +387,37 @@ function renderUpload() {
   if (up.phase === 'preview' && !up.raw) fitEquations(o) // fit equations in the preview too
 }
 
+// Apple Notes tree, rendered with the same <details> markup/classes as the
+// vault's own note tree — two levels only (account, then its top-level
+// folders; see the ponytail note on parseAppleTree in middlewares.js). Notes
+// are buttons keyed by their stable id, never by title.
+function appleTreeHTML(accounts) {
+  if (!accounts.length) return '<p class="cal-wnote">No notes found in Apple Notes.</p>'
+  return accounts.map((a) => `<details class="nt-dir" open><summary>${esc(a.account)}</summary>${
+    a.folders.map((f) => `<details class="nt-dir" open><summary>${esc(f.name)}</summary>${
+      f.notes.length
+        ? f.notes.map((n) => `<button type="button" class="nt-note" data-nt="apple-pick" data-id="${esc(n.id)}">${esc(n.title)}</button>`).join('')
+        : '<p class="cal-wnote">Empty</p>'
+    }</details>`).join('')
+  }</details>`).join('')
+}
+
+// Shared by both phases: a typed Apple Note (pickAppleNote) lands straight on
+// the preview phase, skipping edit entirely, so the destination picker has to
+// be reachable from there too or that path could never choose a folder.
+function destHTML() {
+  return `<div class="nt-dest">
+      <label>Save into
+        <select class="pw-field" data-nt-field="subdir" ${up.busy ? 'disabled' : ''}>
+          <option value="">(top level)</option>
+          ${(pg.tree?.dirs || []).map((d) => `<option value="${esc(d)}"${up.subdir === d ? ' selected' : ''}>${esc(d)}</option>`).join('')}
+        </select>
+      </label>
+      <input class="pw-field" type="text" data-nt-field="newdir" placeholder="…or a new folder" value="${esc(up.newdir)}" ${up.busy ? 'disabled' : ''}>
+    </div>`
+}
+
 function editHTML() {
-  const dirs = pg.tree?.dirs || []
   return `
     <p class="cal-panel__cal">Photos of handwriting, screenshots, PDFs, pasted text, or a link — Claude turns it all into one markdown note.</p>
     <div class="nt-files">
@@ -398,23 +427,16 @@ function editHTML() {
       ${up.files.map((f, i) => `<span class="nt-chip">${esc(f.name)} <button type="button" class="nt-chip__x" data-nt="up-remove" data-i="${i}" aria-label="Remove">×</button></span>`).join('')}
     </div>
     ${up.apple ? `<div class="nt-apple">
-      <select class="pw-field" data-nt-field="applesel" ${up.apple.busy ? 'disabled' : ''}>
-        ${up.apple.titles.map((t) => `<option value="${esc(t)}"${t === up.apple.sel ? ' selected' : ''}>${esc(t)}</option>`).join('')}
-      </select>
-      <button type="button" class="gym-btn" data-nt="apple-import" ${up.apple.busy ? 'disabled' : ''}>${up.apple.busy ? 'Exporting…' : 'Import'}</button>
+      <div class="nt-tree">${
+        up.apple.busy ? '<p class="cal-wnote">Reading…</p>'
+        : up.apple.tree === null ? '<p class="cal-wnote">Loading…</p>'
+        : appleTreeHTML(up.apple.tree)
+      }</div>
       <button type="button" class="gym-btn gym-btn--ghost" data-nt="apple-cancel" ${up.apple.busy ? 'disabled' : ''}>Cancel</button>
     </div>` : ''}
     <textarea class="pw-field nt-text" data-nt-field="text" rows="5" placeholder="…or type/paste notes here" ${up.busy ? 'disabled' : ''}>${esc(up.text)}</textarea>
     <input class="pw-field" type="url" data-nt-field="url" placeholder="…or a website link (https://…)" value="${esc(up.url)}" ${up.busy ? 'disabled' : ''}>
-    <div class="nt-dest">
-      <label>Save into
-        <select class="pw-field" data-nt-field="subdir" ${up.busy ? 'disabled' : ''}>
-          <option value="">(top level)</option>
-          ${(pg.tree?.dirs || []).map((d) => `<option value="${esc(d)}"${up.subdir === d ? ' selected' : ''}>${esc(d)}</option>`).join('')}
-        </select>
-      </label>
-      <input class="pw-field" type="text" data-nt-field="newdir" placeholder="…or a new folder" value="${esc(up.newdir)}" ${up.busy ? 'disabled' : ''}>
-    </div>
+    ${destHTML()}
     <div class="nt-acts">
       <button type="button" class="gym-btn" data-nt="up-convert">Convert</button>
     </div>`
@@ -433,6 +455,7 @@ function previewHTML(s) {
       ? `<textarea class="pw-field nt-text nt-rawmd" data-nt-field="markdown" rows="16">${esc(up.result.markdown)}</textarea>`
       : `<div class="cv-annbody nt-md nt-prevmd">${renderMarkdown(up.result.markdown, s.dir)}</div>`}
     ${up.files.length ? '<p class="cal-panel__cal">Originals will be saved to “note uploads” and attached below the note.</p>' : ''}
+    ${destHTML()}
     <div class="nt-acts">
       <button type="button" class="gym-btn gym-btn--ghost" data-nt="up-back" ${up.busy ? 'disabled' : ''}>Back</button>
       <button type="button" class="gym-btn" data-nt="up-save" ${up.busy ? 'disabled' : ''}>${up.busy ? 'Saving…' : 'Save note'}</button>
@@ -448,7 +471,6 @@ function onModalInput(e) {
 
 function onModalChange(e) {
   if (e.target.dataset.ntField === 'subdir' && up) { up.subdir = e.target.value; return }
-  if (e.target.dataset.ntField === 'applesel' && up?.apple) { up.apple.sel = e.target.value; return }
   if (e.target.id !== 'nt-file-input' || !e.target.files?.length) return
   addFiles([...e.target.files])
   e.target.value = ''
@@ -486,41 +508,60 @@ function addFiles(list) {
   if (!pending) renderUpload()
 }
 
-// The exported PDF joins up.files as a normal chip, so conversion, queueing,
-// and the "note uploads" original all work exactly like a file upload.
+// Opens the account/folder/note tree. Fetching a note happens on click, in
+// pickAppleNote below — nothing is exported/duplicated just by browsing.
 async function openApplePicker() {
   up.error = ''
+  up.apple = { tree: null, busy: false } // tree:null = still loading the list
+  renderUpload()
   try {
-    const titles = (await appleNotesList()) || []
-    if (!up) return // modal closed while listing
-    if (!titles.length) { up.error = 'No notes found in Apple Notes.'; return renderUpload() }
-    up.apple = { titles, sel: titles[0], busy: false }
-  } catch (err) { up.error = err.message }
+    const tree = await appleNotesTree()
+    if (!up?.apple) return // modal closed / cancelled while listing
+    up.apple.tree = tree
+  } catch (err) {
+    if (!up) return
+    up.apple = null
+    up.error = err.message
+  }
   renderUpload()
 }
 
-async function doAppleImport() {
-  const pick = up.apple?.sel
-  if (!pick || up.apple.busy) return
+// Fetches one note's full content directly by its stable id — no export, no
+// duplicate/delete in Apple Notes. A typed note comes back as markdown and
+// goes straight into the preview (same shape as a claude conversion result,
+// so it reuses that whole screen — Save writes only into Atlas's vault, never
+// back into Apple Notes). A handwritten note still needs claude to transcribe
+// the rendered ink, so its PDF page(s) join up.files as normal upload chips,
+// exactly like a file upload — the user then hits Convert as usual. A
+// truncated (not-yet-synced) handwritten note surfaces its error instead of
+// silently importing a partial page.
+async function pickAppleNote(id) {
+  if (!up?.apple || up.apple.busy) return
   up.apple.busy = true
   up.error = ''
   renderUpload()
   try {
-    // Handwritten note → one PDF per ink canvas (rendered from disk); typed
-    // note → one PDF from Notes' own export. Add them all as upload chips.
-    const { files } = await appleNotesExport(pick)
+    const note = await appleNotesFetch(id)
     if (!up) return
-    if (!files.length) throw new Error('That note produced no pages to import.')
-    for (const f of files) {
-      const size = Math.floor((f.data || '').length * 0.75) // base64 → bytes
-      if (size > MAX_PDF) throw new Error(`${f.name} rendered at ${(size / 1e6).toFixed(1)}MB — over the 20MB PDF limit.`)
-      if (totalSize() + size > MAX_TOTAL) throw new Error('Total upload limit is 25MB — split into two notes.')
-      up.files.push({ name: f.name, media_type: f.media_type, data: f.data, size })
+    if (note.kind === 'typed') {
+      up.result = { title: note.title, markdown: note.markdown }
+      up.filename = note.title
+      up.raw = false
+      up.apple = null
+      up.phase = 'preview'
+    } else {
+      if (!note.files.length) throw new Error('That note produced no pages to import.')
+      for (const f of note.files) {
+        const size = Math.floor((f.data || '').length * 0.75) // base64 → bytes
+        if (size > MAX_PDF) throw new Error(`${f.name} rendered at ${(size / 1e6).toFixed(1)}MB — over the 20MB PDF limit.`)
+        if (totalSize() + size > MAX_TOTAL) throw new Error('Total upload limit is 25MB — split into two notes.')
+        up.files.push({ name: f.name, media_type: f.media_type, data: f.data, size })
+      }
+      up.apple = null
     }
-    up.apple = null
   } catch (err) {
     if (!up) return
-    up.apple.busy = false
+    if (up.apple) up.apple.busy = false
     up.error = err.message
   }
   renderUpload()
@@ -533,7 +574,7 @@ function onModalClick(e) {
   if (act === 'up-close') closeUpload()
   else if (act === 'up-files') document.getElementById('nt-file-input')?.click()
   else if (act === 'up-apple') openApplePicker()
-  else if (act === 'apple-import') doAppleImport()
+  else if (act === 'apple-pick') pickAppleNote(el.dataset.id)
   else if (act === 'apple-cancel') { up.apple = null; renderUpload() }
   else if (act === 'up-remove') { up.files.splice(Number(el.dataset.i), 1); renderUpload() }
   else if (act === 'up-convert') doConvert()
