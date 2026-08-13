@@ -64,8 +64,53 @@ check('prefixes match only on a path boundary', () => {
   strictEqual(mounted('/notes-api/tree'), null, 'notes-api must never be served here')
   strictEqual(mounted('/graph-api/file'), null, 'graph-api must never be served here')
 })
-check('only the two moved prefixes are routed', () => {
-  strictEqual(ROUTES.map((r) => r.prefix).sort().join(','), '/canvas-proxy,/finance-api')
+check('only the moved prefixes and the app bundle are routed', () => {
+  strictEqual(ROUTES.map((r) => r.prefix).sort().join(','), '/app,/canvas-proxy,/finance-api')
+})
+
+// ---- app bundle route ----------------------------------------------------
+// Functional, against a fixture dir: the containment guard is the money path —
+// this route serves raw files to authenticated-but-arbitrary internet callers.
+import { appAssets } from '../services/uiapi/app.js'
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const fixture = mkdtempSync(join(tmpdir(), 'uiapi-app-'))
+mkdirSync(join(fixture, 'assets'))
+writeFileSync(join(fixture, 'manifest.json'), '{"version":"t"}')
+writeFileSync(join(fixture, 'assets', 'a.js'), 'js')
+process.env.APP_DIST = fixture
+
+const serve = (url, method = 'GET') => new Promise((resolve) => {
+  const res = {
+    code: 0, body: '',
+    writeHead(c) { this.code = c; return this },
+    end(b) { this.body = String(b ?? ''); resolve(res) },
+  }
+  appAssets({ method, url }, res)
+})
+
+// the base check() is sync; these serve real (async) requests
+const checkAsync = async (name, fn) => {
+  try { await fn(); console.log('ok', name) }
+  catch (e) { failures++; console.error('FAIL', name, '-', e.message) }
+}
+await checkAsync('app route serves the manifest and files', async () => {
+  strictEqual((await serve('/manifest.json')).code, 200)
+  strictEqual((await serve('/manifest.json')).body, '{"version":"t"}')
+  strictEqual((await serve('/assets/a.js')).code, 200)
+})
+await checkAsync('app route refuses traversal and misses', async () => {
+  // Measured: the WHATWG URL parser normalizes both '..' and '%2e%2e' dot
+  // segments away (in-root miss, 404). Only %2F-spliced dots survive parsing
+  // and reach the resolve+containment guard, which must answer 403.
+  strictEqual((await serve('/../.pgpass')).code, 404)
+  strictEqual((await serve('/%2e%2e/%2e%2e/etc/hosts')).code, 404)
+  strictEqual((await serve('/..%2F..%2Fetc/hosts')).code, 403)
+  strictEqual((await serve('/assets%2F..%2F..%2F.pgpass')).code, 403)
+  strictEqual((await serve('/nope.js')).code, 404)
+  strictEqual((await serve('/manifest.json', 'POST')).code, 405)
 })
 
 // ---- auth and body handling --------------------------------------------------

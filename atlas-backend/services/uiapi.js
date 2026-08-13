@@ -12,6 +12,7 @@
 // and may be binary.
 import http from 'node:http'
 import { userForToken } from '../lib/session.js'
+import { appAssets } from './uiapi/app.js'
 import { canvasProxy } from './uiapi/canvas.js'
 import { plaidApi } from './uiapi/plaid.js'
 
@@ -23,6 +24,9 @@ const PORT = Number(process.env.PORT || 80)
 const ROUTES = [
   { prefix: '/canvas-proxy', handler: canvasProxy },
   { prefix: '/finance-api', handler: plaidApi },
+  // The built web bundle for the Swift shells' self-updater — static files,
+  // but token-gated like everything else here.
+  { prefix: '/app', handler: appAssets },
 ]
 
 function mount(req) {

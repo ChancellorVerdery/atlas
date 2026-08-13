@@ -49,6 +49,9 @@ services:
       PGDATABASE: atlas
     volumes:
       - ./.pgpass.uiapi:/run/pgpass:ro
+      # The built web bundle the native apps update themselves from; rsynced by
+      # atlas-apple/deploy-assets.sh, read per request — no restart on deploy.
+      - ./app-dist:/app-dist:ro
     ports: ["127.0.0.1:8102:80"]
   atlas-auth:
     <<: *svc
