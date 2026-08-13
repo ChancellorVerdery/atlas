@@ -70,6 +70,12 @@ await check('empty task list resolves rather than hanging', async () => {
   strictEqual((await runLimited([], { limit: 2 })).length, 0)
 })
 
+// A real EventTarget, not a hand-rolled stub — startPrefetch now listens for
+// 'atlas:hydrated' (see prefetch.js), so the fake `window` needs the same
+// addEventListener/removeEventListener/dispatchEvent contract a real one has,
+// including honouring `{ once: true }`.
+const fakeWindow = () => new EventTarget()
+
 await check('disabled plugins are never fetched for', async () => {
   const loaded = []
   const tasks = [
@@ -77,8 +83,7 @@ await check('disabled plugins are never fetched for', async () => {
     { plugin: 'email', load: () => { loaded.push('email'); return Promise.resolve(() => {}) } },
   ]
   // startPrefetch schedules on a timer; delay 0 plus a macrotask wait runs it.
-  globalThis.window = { dispatchEvent() {} }
-  globalThis.CustomEvent = class { constructor(t) { this.type = t } }
+  globalThis.window = fakeWindow()
   startPrefetch((p) => p === 'canvas', { tasks, delay: 0 })
   await new Promise((r) => setTimeout(r, 20))
   strictEqual(loaded.join(','), 'canvas', `loaded: ${loaded.join(',') || '(none)'}`)
@@ -92,6 +97,47 @@ await check('startPrefetch only ever runs once', async () => {
   startPrefetch(() => true, { tasks, delay: 0 })
   await new Promise((r) => setTimeout(r, 20))
   strictEqual(loaded.length, 0)
+})
+
+// The module-level `started` guard only trips once per process, so the two
+// checks above already used up this module instance's one real run. The race
+// behaviour needs fresh instances — a cache-busting query string gives each
+// its own module scope (and its own `started`), same trick as re-importing a
+// singleton under test.
+await check('the hydrate event starts the warm well before the fallback timer', async () => {
+  const { startPrefetch: start } = await import('../src/page/prefetch.js?race-event')
+  const loaded = []
+  const tasks = [{ plugin: 'canvas', load: () => { loaded.push('canvas'); return Promise.resolve(() => {}) } }]
+  globalThis.window = fakeWindow()
+  // A delay far longer than the wait below — if the timer were what fired
+  // this, `loaded` would still be empty when we check it.
+  start(() => true, { tasks, delay: 10_000 })
+  globalThis.window.dispatchEvent(new CustomEvent('atlas:hydrated'))
+  await new Promise((r) => setTimeout(r, 30))
+  strictEqual(loaded.join(','), 'canvas', 'the hydrate event should have started the warm immediately')
+})
+
+await check('the fallback timer still fires when the hydrate event never comes', async () => {
+  const { startPrefetch: start } = await import('../src/page/prefetch.js?race-timer')
+  const loaded = []
+  const tasks = [{ plugin: 'canvas', load: () => { loaded.push('canvas'); return Promise.resolve(() => {}) } }]
+  globalThis.window = fakeWindow() // never dispatches 'atlas:hydrated' — offline / dead sync tunnel
+  start(() => true, { tasks, delay: 5 })
+  await new Promise((r) => setTimeout(r, 30))
+  strictEqual(loaded.join(','), 'canvas', 'the fallback timer should still fire on its own')
+})
+
+await check('a hydrate event after the timer already fired does not double-run', async () => {
+  const { startPrefetch: start } = await import('../src/page/prefetch.js?race-no-double')
+  const loaded = []
+  const tasks = [{ plugin: 'canvas', load: () => { loaded.push('canvas'); return Promise.resolve(() => {}) } }]
+  const win = fakeWindow()
+  globalThis.window = win
+  start(() => true, { tasks, delay: 5 }) // timer wins this one — no event dispatched yet
+  await new Promise((r) => setTimeout(r, 20))
+  win.dispatchEvent(new CustomEvent('atlas:hydrated')) // arrives late; must be a no-op
+  await new Promise((r) => setTimeout(r, 20))
+  strictEqual(loaded.length, 1, `expected exactly one warm pass, got ${loaded.length}`)
 })
 
 console.log(failures ? `\n${failures} failed` : '\nprefetch.check: all good')

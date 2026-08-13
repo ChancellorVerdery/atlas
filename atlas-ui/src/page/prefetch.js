@@ -33,8 +33,17 @@ const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const CONCURRENCY = 2
 const GAP_MS = 250
-// Long enough for the first paint and the sync pull to land. Warming is a
-// nicety; it must never be what the opening frame waits on.
+// Fallback ceiling only — see startPrefetch(), which races this against the
+// 'atlas:hydrated' event and normally starts on that instead, well under this.
+// Kept at 1500ms rather than shortened: on the common warm-cache boot, render()
+// has already returned by the time this timer is even armed (main.js awaits
+// bootApp() — which imports and fully evaluates renderer.js, running its
+// startPrefetch() call — before firing the background sync), so this length is
+// no longer "time for first paint." It is now purely how long a live sync pull
+// gets before plugin fetches join it on the wire. Shortening it would start
+// competing with an in-flight sync on a slow connection — the exact interference
+// this delay exists to prevent — for no benefit on a fast one, since the event
+// already wins that race.
 const START_DELAY_MS = 1500
 
 // Each entry names the plugin that owns it, so a disabled plugin is never
@@ -52,12 +61,25 @@ let started = false
 
 // Called once from renderer boot. `isEnabled` is injected rather than imported
 // so this stays testable, and so the caller decides what "enabled" means.
+//
+// Fires on whichever comes first: the fixed `delay`, or main.js's
+// 'atlas:hydrated' (dispatched once the warm-cache boot's background sync
+// pull lands — see hydrateInBackground() in main.js). That event is the
+// actual signal this delay was only ever estimating, so racing it starts the
+// warm as soon as it's safe rather than after a fixed guess — while the timer
+// still guarantees a start on a cold boot, an offline session, or a dead sync
+// tunnel, where the event never comes at all.
 export function startPrefetch(isEnabled, { tasks = TASKS, delay = START_DELAY_MS } = {}) {
   if (started) return
   started = true
   const due = tasks.filter((t) => isEnabled(t.plugin))
   if (!due.length) return
-  setTimeout(() => {
+  let fired = false
+  const go = () => {
+    if (fired) return
+    fired = true
+    clearTimeout(timer)
+    window.removeEventListener('atlas:hydrated', go)
     runLimited(
       due.map((t) => async () => {
         const warm = await t.load()
@@ -65,5 +87,7 @@ export function startPrefetch(isEnabled, { tasks = TASKS, delay = START_DELAY_MS
       }),
       { limit: CONCURRENCY, gapMs: GAP_MS },
     ).then(() => window.dispatchEvent(new CustomEvent('atlas:prefetched')))
-  }, delay)
+  }
+  const timer = setTimeout(go, delay)
+  window.addEventListener('atlas:hydrated', go, { once: true })
 }

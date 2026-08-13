@@ -218,14 +218,30 @@ function loadAll() {
   })
 }
 
-// Boot prefetch: this month, on the calendars the user actually shows.
+// Boot prefetch: whatever range the page will actually open on. loadAll()
+// keys its cache read off cs.view (month/week/day, persisted from the last
+// time Calendar was open) — warming a hardcoded 'month' range silently
+// missed that cache key whenever the user had last left it on week or day
+// view, which is exactly the "warmed but still feels live" bug. This mirrors
+// the same rangeFor(view, ...) call loadAll() makes, plus one step forward
+// in that view, since paging ahead is the most common next click.
+// ponytail: only ONE adjacent step, forward only — warming backward too, or
+// every granularity regardless of which view is active, would fan this out
+// well past the CONCURRENCY=2/GAP_MS=250 budget the other plugins share it
+// with.
 export async function warmCalendar() {
   if (!isConnected()) return
   try {
     const cals = await listCalendars()
     writeCache(CAL_CACHE, cals)
-    const { min, max } = rangeFor('month', startOfDay(new Date()))
-    writeCache(evCacheKey(min, max), await fetchRange(cals, min, max))
+    calsFetched = true // loadAll() then trusts this cache instead of refetching the list itself
+    const view = loadCal().view
+    const today = startOfDay(new Date())
+    const nextCursor = view === 'month' ? new Date(today.getFullYear(), today.getMonth() + 1, 1)
+      : view === 'week' ? addDays(today, 7) : addDays(today, 1)
+    const ranges = [rangeFor(view, today), rangeFor(view, nextCursor)]
+    await Promise.all(ranges.map(({ min, max }) =>
+      fetchRange(cals, min, max).then((events) => writeCache(evCacheKey(min, max), events))))
   } catch { /* prefetch is best-effort */ }
 }
 

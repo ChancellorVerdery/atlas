@@ -550,7 +550,15 @@ function loadFolder(fid) {
   })
 }
 
-// Boot prefetch: the inbox, which is what Mail opens on.
+// Boot prefetch: the inbox, which is what Mail opens on. This mirrors
+// renderEmailPage()'s own account resolution exactly (accts.length === 1 ?
+// accts[0] : 'all', folder always 'INBOX' on a fresh boot) so the cache key
+// this writes is the one loadFolder() reads on first open.
+// ponytail: Inbox only, on purpose. listThreads() is N+1 — one list call
+// plus one hydrate call per thread (up to 25) — so a second folder roughly
+// doubles this task's own network cost for a folder that may not even get
+// opened. Not "cheap" the way an extra calendar-month range is; widen this
+// only if a specific second folder proves to be the common next click.
 export async function warmEmail() {
   if (!isConnected()) return
   const accts = connectedAccounts()
