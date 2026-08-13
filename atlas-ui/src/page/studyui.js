@@ -1,39 +1,41 @@
 // Study plugin UI — a full-window page (registry: full:true). Course tabs
-// across the top; per tab four tools: Study (tutor chat quizzing from the
+// across the top; per tab two tools: Study (tutor chat quizzing from the
 // question bank, answers graded by the compute engine with a Claude-judge
-// fallback), Question Bank (view/add/edit/upload-extract), Flashcards
-// (spaced repetition, 1-3-7-14-21-day ladder), Card Bank. All Claude work
+// fallback), Question Bank (view/add/edit/upload-extract). All Claude work
 // runs through the dev server's /study-api (see vite.config.js).
+//
+// Flashcards split out (2026-08) into its own plugin (flashcards.js/
+// flashcardsui.js) with its own store — this file no longer touches cards at
+// all. The upload/extract/review pipeline and the app-wide "one Claude turn"
+// lock are shared with it via studyjobs.js.
 
 import {
-  loadStudy, saveStudy, newTab, normQuestion, normCard, fixEscapes, fixSlashes,
-  localToday, dueCards, gradeCard, recordCat, catPct,
+  loadStudy, saveStudy, newTab, normQuestion,
+  recordCat, catPct,
   checkPart, partRule, extractStudy, chatTurn, judgeItems,
   listJobs, getJob, retryJob, removeJob,
 } from './study.js'
-import { sanitizeHTML } from './canvasui.js'
-import { marked } from 'marked'
-import { convertLatexToMarkup } from 'mathlive' // mathlive CSS is loaded globally by view.js
-import { renderMath, fitEquations, tuneMathFields } from './view.js'
+import {
+  busyBox, stMD, inlineMath, syncNavDot as jobsSyncNavDot, queueHTML as jobsQueueHTML, qPct,
+  addFiles as jobsAddFiles, uploadHTML as jobsUploadHTML, reviewHTML as jobsReviewHTML,
+  importAllReady as jobsImportAllReady, bindFileInput,
+} from './studyjobs.js'
+import { fitEquations, tuneMathFields } from './view.js'
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
-// No file-type restriction — anything can be uploaded, and the dev server
-// converts what Claude can't read natively (HEIC photos, Word docs). The only
-// caps left are transport ones: the JSON body has to stay under /study-api's
-// 50MB backstop, and Claude Code resizes oversized images itself.
-const MAX_FILE = 25e6, MAX_TOTAL = 45e6
-
 // Session-only state — survives re-renders and page switches, not reloads.
 const ui = {
-  tool: 'study',   // study | bank | cards | cardbank
+  tool: 'study',   // study | bank
   chatDraft: '',
   rename: null,    // non-null while the active tab name is being edited
-  busy: null,      // { tabId, text } — one Claude turn at a time, app-wide
-  fc: null,        // flashcard session { ids, i, missed:Set, flipped, practice }
-  modal: null,     // { type: 'question'|'card'|'upload'|'review', … }
+  modal: null,     // { type: 'question'|'upload'|'review', … }
   focusChat: false,
+  // ponytail: busy is backed by studyjobs' shared lock (see busyBox there) —
+  // reads/writes here look local but really cross into Flashcards' module too.
+  get busy() { return busyBox.v },
+  set busy(v) { busyBox.v = v },
 }
 let pageRoot = null
 
@@ -41,51 +43,15 @@ let pageRoot = null
 // actually runs (one Claude agent per uploaded file, 4 at a time). Because
 // the server owns the jobs, a page reload rebuilds every loading bar and the
 // extractions keep running through it; the ticker animates the bars locally
-// and re-polls the server every few beats.
+// and re-polls the server every few beats. Scoped to target:'questions' only
+// — Flashcards' 'cards' jobs live in its own mirror (flashcardsui.js).
 let jobs = []      // [{ id, target, tabId, tabName, label, phase, error, startedAt, count }]
 let qTimer = null  // bar ticker + poll driver, runs only while jobs exist
 let qBeat = 0
 
-// ---- markdown + math rendering (same $…$ pipeline as the Notes viewer) ------
-
-const fixDots = (latex) => latex.replace(/\\dotsb\b/g, '\\cdots').replace(/\\dots[cmio]?\b/g, '\\ldots')
-
-const inlineMath = (latex) => {
-  try { return `<span class="nt-math">${convertLatexToMarkup(fixDots(fixSlashes(latex)).trim(), { defaultMode: 'textstyle' })}</span>` }
-  catch { return esc(latex) }
-}
-const mathMarkup = (latex, block) => (block ? renderMath(fixDots(latex)) : inlineMath(latex))
-
-// Inline math requires non-space immediately inside both delimiters (Pandoc's
-// rule). Without it, "$12 for the first unit and $30" reads as one math span
-// and both dollar amounts vanish — and this is a prose channel where the tutor
-// writes word problems, not the math-first Notes viewer this came from.
-const INLINE_MATH = /\$(?![\s$])([^\n$]*[^\s$])\$/g
-
-function stMD(text) {
-  const math = []
-  const src = fixEscapes(text) // raw paths (review items) bypass the normalizers
-    .replace(/\\\[([\s\S]+?)\\\]/g, (m, l) => `$$${l}$$`)
-    .replace(/\\\(([\s\S]+?)\\\)/g, (m, l) => `$${l.replace(/\n/g, ' ')}$`)
-    .replace(/\$\$([\s\S]+?)\$\$/g, (m, l) => `STMATH${math.push(mathMarkup(l, true)) - 1}STMATH`)
-    .replace(INLINE_MATH, (m, l) => `STMATH${math.push(mathMarkup(l, false)) - 1}STMATH`)
-  const html = marked.parse(src)
-    .replace(/<p>STMATH(\d+)STMATH<\/p>/g, (m, i) => math[Number(i)])
-    .replace(/STMATH(\d+)STMATH/g, (m, i) => math[Number(i)])
-  return sanitizeHTML(html)
-}
-
 // ---- helpers ----------------------------------------------------------------
 
 const curTab = (s) => s.tabs.find((t) => t.id === s.active) || s.tabs[0] || null
-
-function shuffle(a) {
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
-}
 
 function pushSys(tabId, text) {
   const s = loadStudy()
@@ -132,25 +98,26 @@ function restoreFocus(f) {
 
 function render() {
   if (!pageRoot?.isConnected || !onStudyPage()) return
-  // Study + Flashcards fit the viewport (chat/card scroll internally); the
-  // bank lists keep normal page scrolling. Scoped to data-page="study" in the
-  // CSS, so a lingering class can never affect other pages.
-  document.documentElement.classList.toggle('st-fit', ui.tool === 'study' || ui.tool === 'cards')
+  // Study fits the viewport while chatting (the transcript scrolls
+  // internally); the bank list keeps normal page scrolling. Scoped to
+  // data-page="study" in the CSS, so a lingering class can never affect
+  // other pages.
+  document.documentElement.classList.toggle('st-fit', ui.tool === 'study')
   const keep = captureFocus()
   const s = loadStudy()
   if (!s.tabs.length) {
     pageRoot.innerHTML = `<div class="st"><div class="gf-empty">
-      <p class="gym-empty">Make a tab per course — each gets a tutor chat quizzing you from its question bank, and flashcards on a spaced-repetition schedule.</p>
+      <p class="gym-empty">Make a tab per course — each gets a tutor chat quizzing you from its question bank.</p>
       <button type="button" class="gym-btn" data-st="tab-add">+ Add your first course</button>
     </div></div>`
     return
   }
   const tab = curTab(s)
-  const views = { study: studyView, bank: bankView, cards: cardsView, cardbank: cardBankView }
+  const views = { study: studyView, bank: bankView }
   pageRoot.innerHTML = `<div class="st">
     ${tabsBar(s)}
     ${toolsBar(tab)}
-    <div class="nt-queue" id="st-queue">${queueHTML()}</div>
+    <div class="nt-queue" id="st-queue">${jobsQueueHTML(stripJobs())}</div>
     <div class="st-view">${(views[ui.tool] || studyView)(tab, s)}</div>
   </div>`
   syncNavDot()
@@ -187,12 +154,9 @@ function tabsBar(s) {
 }
 
 function toolsBar(tab) {
-  const due = dueCards(tab).length
   const T = [
     ['study', 'Study'],
     ['bank', `Question bank (${tab.questions.length})`],
-    ['cards', due ? `Flashcards (${due} due)` : 'Flashcards'],
-    ['cardbank', `Card bank (${tab.cards.length})`],
   ]
   return `<div class="st-tools">${T.map(([k, l]) =>
     `<button type="button" class="wk-pill${ui.tool === k ? ' is-on' : ''}" data-st="tool" data-tool="${k}">${esc(l)}</button>`).join('')}</div>`
@@ -468,133 +432,17 @@ function catSection(cat, qs, stat) {
   </section>`
 }
 
-// ---- Flashcards -------------------------------------------------------------
-
-function cardsView(tab) {
-  const today = localToday()
-  const due = dueCards(tab, today)
-  const f = ui.fc
-  if (!f) {
-    const next = tab.cards.filter((c) => c.due && c.due > today).sort((a, b) => (a.due < b.due ? -1 : 1))[0]
-    return `<div class="card st-fcpanel">
-      <h3 class="gym-head">Flashcards</h3>
-      <p class="gym-sub">${tab.cards.length} card${tab.cards.length === 1 ? '' : 's'} · <b>${due.length} due</b>${!due.length && next ? ` — next on ${esc(next.due)}` : ''}</p>
-      <p class="st-ladder">Each correct answer roughly doubles the wait — 1, 3, 7, 14, then 21 days. A miss starts back at 1 day.</p>
-      <div class="st-fcacts">
-        <button type="button" class="gym-btn" data-st="fc-start" ${due.length ? '' : 'disabled'}>Review ${due.length} due</button>
-        <button type="button" class="gym-btn gym-btn--ghost" data-st="fc-practice" ${tab.cards.length ? '' : 'disabled'}>Practice all (no scheduling)</button>
-      </div>
-      ${tab.cards.length ? '' : '<p class="gym-empty">No cards yet — add or upload some in the Card bank tab.</p>'}
-    </div>`
-  }
-  if (f.i >= f.ids.length) {
-    return `<div class="card st-fcpanel">
-      <h3 class="gym-head">Session done</h3>
-      <p class="gym-sub">${f.ids.length} review${f.ids.length === 1 ? '' : 's'} · ${f.missed.size} card${f.missed.size === 1 ? '' : 's'} missed${f.practice ? ' · practice run, nothing rescheduled' : ''}</p>
-      <div class="st-fcacts"><button type="button" class="gym-btn" data-st="fc-end">Done</button></div>
-    </div>`
-  }
-  const card = curTab(loadStudy())?.cards.find((c) => c.id === f.ids[f.i])
-  if (!card) { f.i++; return cardsView(tab) } // card deleted mid-session
-  return `<div class="st-fcwrap">
-    <div class="st-fcbar">
-      <span>${f.i + 1} / ${f.ids.length}</span>
-      ${f.practice ? '<span class="st-gen">practice</span>' : ''}
-      <button type="button" class="gym-btn gym-btn--ghost gym-btn--sm" data-st="fc-end">End session</button>
-    </div>
-    <div class="card st-flash${f.flipped ? ' is-flipped' : ''}" data-st="fc-flip">
-      <div class="st-flash__content">${stMD(f.flipped ? card.back : card.front)}</div>
-      <div class="st-flash__hint">${f.flipped ? 'front ⇄ back' : 'click or space to flip'}</div>
-    </div>
-    ${f.flipped ? `<div class="st-fcacts">
-      <button type="button" class="gym-btn gym-btn--ghost" data-st="fc-miss">✘ Missed <kbd>1</kbd></button>
-      <button type="button" class="gym-btn" data-st="fc-got">✔ Got it <kbd>2</kbd></button>
-    </div>` : ''}
-  </div>`
-}
-
-function startSession(practice) {
-  const s = loadStudy()
-  const tab = curTab(s)
-  if (!tab) return
-  const pool = practice ? tab.cards : dueCards(tab)
-  if (!pool.length) return
-  ui.fc = { ids: shuffle(pool.map((c) => c.id)), i: 0, missed: new Set(), flipped: false, practice }
-  render()
-}
-
-function gradeFc(got) {
-  const f = ui.fc
-  if (!f || !f.flipped) return
-  const s = loadStudy()
-  const tab = curTab(s)
-  const id = f.ids[f.i]
-  const card = tab?.cards.find((c) => c.id === id)
-  if (card && !f.practice) {
-    // a same-session recovery after a miss keeps the demotion the miss wrote
-    if (!got) gradeCard(card, false)
-    else if (!f.missed.has(id)) gradeCard(card, true)
-    saveStudy(s)
-  }
-  if (!got) { f.missed.add(id); f.ids.push(id) } // missed cards recycle until cleared
-  f.i++
-  f.flipped = false
-  render()
-}
-
-// ---- Card bank --------------------------------------------------------------
-
-function cardBankView(tab) {
-  const today = localToday()
-  const dueChip = (c) => (!c.due ? 'new' : c.due <= today ? 'due now' : `due ${c.due}`)
-  return `
-    <div class="gf-bar">
-      <button type="button" class="gym-btn" data-st="c-add">+ Add card</button>
-      <button type="button" class="gym-btn gym-btn--ghost" data-st="up-open" data-target="cards">Upload material…</button>
-      <span class="gf-status">${tab.cards.length ? `${tab.cards.length} card${tab.cards.length === 1 ? '' : 's'}` : ''}</span>
-    </div>
-    ${tab.cards.length ? `<div class="card st-crows">${tab.cards.map((c) => `<div class="st-crow">
-        <div class="st-crow__front">${stMD(c.front)}</div>
-        <div class="st-crow__back">${stMD(c.back)}</div>
-        <span class="st-duechip">${esc(dueChip(c))}</span>
-        <div class="st-qrow__acts">
-          <button type="button" class="st-iconbtn" data-st="c-edit" data-id="${esc(c.id)}" aria-label="Edit">✎</button>
-          <button type="button" class="nt-chip__x" data-st="c-del" data-id="${esc(c.id)}" aria-label="Remove">×</button>
-        </div>
-      </div>`).join('')}</div>`
-      : '<p class="gym-empty">No cards yet — upload material (definitions, formulas, key facts) or add cards by hand. The Flashcards tab schedules them for you.</p>'}`
-}
-
 // ---- upload → extract → review ----------------------------------------------
-
-// No real progress signal exists (one claude spawn, returns at the end), so
-// each bar is a time estimate: asymptotic fill that hits ~63% at 30s and caps
-// at 95% until its job actually finishes. (Same estimator as Notes.)
-const qPct = (j) => Math.min(95, Math.round(100 * (1 - Math.exp(-(Date.now() - j.startedAt) / 30000))))
-
-const Q_STATUS = { queued: 'Queued', converting: 'Extracting with Claude…', ready: 'Ready to review', error: 'Failed' }
-
-function jobCardHTML(j) {
-  return `<div class="nt-qcard" data-qid="${j.id}">
-    <div class="nt-qtop">
-      <span class="nt-qlabel" title="${esc(j.label)}">${esc(j.label)}</span>
-      <span class="nt-qstatus">${Q_STATUS[j.phase] || esc(j.phase)}${j.phase === 'ready' ? ` — ${j.count} ${j.target === 'cards' ? 'card' : 'question'}${j.count === 1 ? '' : 's'}` : ''}</span>
-      ${j.phase === 'ready' ? `<button type="button" class="gym-btn gym-btn--sm" data-st="job-review" data-id="${j.id}">Review</button>` : ''}
-      ${j.phase === 'error' ? `<button type="button" class="gym-btn gym-btn--ghost gym-btn--sm" data-st="job-retry" data-id="${j.id}">Retry</button>` : ''}
-      ${j.phase !== 'converting' ? `<button type="button" class="nt-chip__x" data-st="job-remove" data-id="${j.id}" aria-label="Remove">×</button>` : ''}
-    </div>
-    ${j.phase === 'queued' || j.phase === 'converting'
-      ? `<div class="nt-qbar"><div class="nt-qfill" style="width:${j.phase === 'converting' ? qPct(j) : 0}%"></div></div>` : ''}
-    ${j.phase === 'error' ? `<p class="nt-error">${esc(j.error)}</p>` : ''}
-  </div>`
-}
+// Shared with Flashcards via studyjobs.js (HTML rendering, file handling,
+// bulk import) — this file supplies the question-specific bits (extract
+// categories, the review-item preview) and keeps its own job mirror + poll
+// timer scoped to target:'questions', so a card extraction on the Flashcards
+// page never surfaces here.
 
 // Nav dot on Study stays lit until the queue is empty — a ready-to-review or
 // failed job still needs attention, not just a running one. (The dot covers
 // every course; the strip below is filtered to the course being viewed.)
-function syncNavDot() {
-  document.querySelector('.nav__item[href="#/study"]')?.classList.toggle('is-busy', jobs.length > 0)
-}
+function syncNavDot() { jobsSyncNavDot('#/study', jobs.length > 0) }
 
 // Only the active course's jobs — an upload to Calc II must not show its
 // loading bars on the Physics II tab.
@@ -603,25 +451,14 @@ const tabJobs = () => {
   return jobs.filter((j) => j.tabId === active)
 }
 
-// Running/failed jobs show on every tool; FINISHED jobs wait on their bank
-// tab only (per Chancellor — done cards were cluttering the chat view).
-const stripJobs = () => tabJobs().filter((j) => j.phase !== 'ready'
-  || (ui.tool === 'bank' && j.target === 'questions')
-  || (ui.tool === 'cardbank' && j.target === 'cards'))
-
-function queueHTML() {
-  const js = stripJobs()
-  const ready = js.filter((j) => j.phase === 'ready')
-  const items = ready.reduce((a, j) => a + j.count, 0)
-  const all = ready.length > 1
-    ? `<div class="st-qall"><button type="button" class="gym-btn gym-btn--sm" data-st="jobs-import-all">Import all — ${ready.length} files, ${items} item${items === 1 ? '' : 's'}</button></div>` : ''
-  return all + js.map(jobCardHTML).join('')
-}
+// Running jobs show on every tool; FINISHED jobs wait on the bank tab only
+// (per Chancellor — done items were cluttering the chat view).
+const stripJobs = () => tabJobs().filter((j) => j.phase !== 'ready' || ui.tool === 'bank')
 
 function renderQueue() {
   syncNavDot()
   const el = document.getElementById('st-queue')
-  if (el) el.innerHTML = queueHTML()
+  if (el) el.innerHTML = jobsQueueHTML(stripJobs())
 }
 
 // One click for a whole semester's worth of ready files — items land exactly
@@ -635,19 +472,8 @@ async function importAllReady() {
     const s = loadStudy()
     const tab = curTab(s)
     if (!tab) return
-    const want = ui.tool === 'cardbank' ? 'cards' : 'questions'
-    const failed = []
-    for (const job of jobs.filter((j) => j.tabId === tab.id && j.phase === 'ready' && j.target === want)) {
-      let full
-      try { full = await getJob(job.id) } catch (err) { failed.push(`${job.label}: ${err.message}`); continue }
-      if (full?.phase !== 'ready') continue
-      const items = full.results || []
-      if (want === 'cards') tab.cards.push(...items.map((c) => normCard({ front: c.front, back: c.back })))
-      else tab.questions.push(...items.map((q) => normQuestion(q)))
-      removeJob(job.id).catch(() => {})
-    }
-    saveStudy(s)
-    for (const f of failed) pushSys(tab.id, `Import failed for ${f}`) // after save — pushSys writes the store itself
+    await jobsImportAllReady(jobs, tab, 'questions', (t, items) => t.questions.push(...items.map((q) => normQuestion(q))), pushSys)
+    saveStudy(s) // after the pipeline's own pushSys writes — this save wins, same store
     await refreshJobs()
     render()
   } finally { bulkBusy = false }
@@ -663,7 +489,7 @@ async function refreshJobs() {
   // queue that way. A truly orphaned job (course deleted here) just idles
   // until the dev server restarts; the nav dot ignores it too.
   const tabIds = new Set(loadStudy().tabs.map((t) => t.id))
-  jobs = tabIds.size ? all.filter((j) => tabIds.has(j.tabId)) : all
+  jobs = (tabIds.size ? all.filter((j) => tabIds.has(j.tabId)) : all).filter((j) => j.target === 'questions')
   renderQueue()
   if (jobs.length && !qTimer) qTimer = setInterval(qTick, 600)
   if (!jobs.length && qTimer) { clearInterval(qTimer); qTimer = null }
@@ -677,36 +503,6 @@ function qTick() {
     if (fill) fill.style.width = qPct(j) + '%'
   }
   if (++qBeat % 4 === 0) refreshJobs() // server poll every ~2.4s while jobs exist
-}
-
-const totalSize = (files) => files.reduce((a, f) => a + f.size, 0)
-
-function addFiles(list) {
-  const m = ui.modal
-  m.error = ''
-  let pending = 0
-  for (const file of list) {
-    // plain text lands in the paste box so it stays visible and editable
-    if (/\.(txt|md|csv)$/i.test(file.name) || file.type.startsWith('text/')) {
-      pending++
-      const r = new FileReader()
-      r.onload = () => { m.text = (m.text ? m.text + '\n\n' : '') + r.result; if (!--pending) renderModal() }
-      r.readAsText(file)
-      continue
-    }
-    if (file.size > MAX_FILE) { m.error = `${file.name} is too big (limit ${MAX_FILE / 1e6}MB per file).`; continue }
-    if (totalSize(m.files) + file.size > MAX_TOTAL) { m.error = `Total upload limit is ${MAX_TOTAL / 1e6}MB — split it up.`; continue }
-    pending++
-    const r = new FileReader()
-    r.onload = () => {
-      // media_type may be '' for types the OS doesn't recognize; the server
-      // falls back to the filename extension, so send the name regardless
-      m.files.push({ name: file.name, media_type: file.type || '', data: String(r.result).split(',')[1], size: file.size })
-      if (!--pending) renderModal()
-    }
-    r.readAsDataURL(file)
-  }
-  if (!pending) renderModal()
 }
 
 // Extract = enqueue on the SERVER: one job (one Claude agent, one loading
@@ -736,8 +532,7 @@ function importChosen() {
   const tab = s.tabs.find((t) => t.id === m.tabId)
   if (tab) {
     const picked = m.items.filter((_, i) => m.chosen.has(i))
-    if (m.target === 'cards') tab.cards.push(...picked.map((c) => normCard({ front: c.front, back: c.back })))
-    else tab.questions.push(...picked.map((q) => normQuestion(q)))
+    tab.questions.push(...picked.map((q) => normQuestion(q)))
     saveStudy(s)
   }
   removeJob(m.jobId).catch(() => {}).then(refreshJobs) // resolved — off the strip
@@ -776,8 +571,8 @@ function renderModal() {
   const o = document.querySelector('.st-overlay')
   const m = ui.modal
   if (!o || !m) return
-  const TITLES = { question: m.id ? 'Edit question' : 'New question', card: m.id ? 'Edit card' : 'New card', upload: 'Upload material', review: 'Review extracted items' }
-  const BODIES = { question: qEditorHTML, card: cardEditorHTML, upload: uploadHTML, review: reviewHTML }
+  const TITLES = { question: m.id ? 'Edit question' : 'New question', upload: 'Upload material', review: 'Review extracted items' }
+  const BODIES = { question: qEditorHTML, upload: jobsUploadHTML, review: (mm) => jobsReviewHTML(mm, qReviewItemHTML) }
   o.innerHTML = `<div class="cal-panel st-panel">
     <div class="cal-panel__head">
       <h2 class="cal-panel__title">${TITLES[m.type]}</h2>
@@ -829,57 +624,16 @@ function qEditorHTML(m) {
     </div>`
 }
 
-function cardEditorHTML(m) {
-  const d = m.draft
-  return `
-    <label class="st-flabel">Front (math inline as $…$)
-      <textarea class="pw-field pw-field--text" data-stf="front" rows="3">${esc(d.front)}</textarea>
-    </label>
-    <label class="st-flabel">Back
-      <textarea class="pw-field pw-field--text" data-stf="back" rows="3">${esc(d.back)}</textarea>
-    </label>
-    <div class="nt-acts"><button type="button" class="gym-btn" data-st="m-savec">Save card</button></div>`
-}
-
-function uploadHTML(m) {
-  return `
-    <p class="cal-panel__cal">${m.target === 'cards'
-      ? 'Any files — photos, PDFs, Word docs, slides, notes — or pasted text. Claude turns definitions, formulas, and key facts into flashcards for this course.'
-      : 'Old homework, worksheets, exams, notes — any file type or pasted text. Claude mines them for practice questions (answers included) for this course\'s bank.'}</p>
-    <div class="nt-files">
-      <button type="button" class="gym-btn" data-st="up-files">Add files…</button>
-      <input type="file" id="st-file-input" multiple hidden>
-      ${m.files.map((f, i) => `<span class="nt-chip">${esc(f.name)} <button type="button" class="nt-chip__x" data-st="up-remove" data-i="${i}" aria-label="Remove">×</button></span>`).join('')}
-    </div>
-    ${m.files.length > 1 ? `<label class="st-bundle"><input type="checkbox" data-st="up-bundle"${m.bundle ? ' checked' : ''}> One bundle — one agent per document; figure images named after a file (&quot;1.11 fig 2.png&quot;) attach to its questions, and an all-image bundle keeps a single agent</label>` : ''}
-    <textarea class="pw-field nt-text" data-stf="uptext" rows="5" placeholder="…or paste material here">${esc(m.text)}</textarea>
-    <div class="nt-acts"><button type="button" class="gym-btn" data-st="up-extract">Extract</button></div>
-    <p class="cal-panel__cal">Extract queues the job — progress shows at the top of the Study page, and Atlas stays usable while Claude works.</p>`
-}
-
-function reviewHTML(m) {
-  const item = m.target === 'cards'
-    ? (c, i) => `<div class="st-rev__body"><div class="st-crow__front">${stMD(c.front)}</div><div class="st-crow__back">${stMD(c.back)}</div></div>`
-    : (q, i) => {
-        const nq = normQuestion(q)
-        return `<div class="st-rev__body">
-          <span class="st-cat">${esc(nq.category)}</span>
-          <div class="st-qintro">${stMD(nq.intro)}</div>
-          ${figsHTML(nq)}
-          ${nq.parts.map((p) => `<div class="st-ans">${p.prompt ? `<span class="st-ans__p">${stMD(p.prompt)}</span>` : ''}<span class="st-ans__a">${partAnswerHTML(p)}</span><span class="st-ans__rule">${esc(ruleBadge(p))}</span></div>`).join('')}
-        </div>`
-      }
-  return `
-    <p class="cal-panel__cal">${m.items.length ? 'Uncheck anything you don\'t want, then import.' : 'Claude found nothing usable in that material.'}</p>
-    <div class="st-revlist">
-      ${m.items.map((it, i) => `<label class="st-rev">
-        <input type="checkbox" data-st-rev="${i}" ${m.chosen.has(i) ? 'checked' : ''}>
-        ${item(it, i)}
-      </label>`).join('')}
-    </div>
-    <div class="nt-acts">
-      ${m.items.length ? `<button type="button" class="gym-btn" data-st="m-import">Import ${m.chosen.size} selected</button>` : ''}
-    </div>`
+// Review-item preview for an extracted question. (The card-preview analogue
+// lives in flashcardsui.js — small enough that sharing it wasn't worth it.)
+function qReviewItemHTML(q) {
+  const nq = normQuestion(q)
+  return `<div class="st-rev__body">
+    <span class="st-cat">${esc(nq.category)}</span>
+    <div class="st-qintro">${stMD(nq.intro)}</div>
+    ${figsHTML(nq)}
+    ${nq.parts.map((p) => `<div class="st-ans">${p.prompt ? `<span class="st-ans__p">${stMD(p.prompt)}</span>` : ''}<span class="st-ans__a">${partAnswerHTML(p)}</span><span class="st-ans__rule">${esc(ruleBadge(p))}</span></div>`).join('')}
+  </div>`
 }
 
 function onModalInput(e) {
@@ -896,7 +650,6 @@ function onModalInput(e) {
   if (!f) return
   const i = Number(e.target.dataset.i)
   if (m.type === 'upload' && f === 'uptext') m.text = e.target.value
-  else if (m.type === 'card') m.draft[f] = e.target.value
   else if (m.type === 'question') {
     const p = m.draft.parts[i]
     if (f === 'category' || f === 'intro') m.draft[f] = e.target.value
@@ -922,7 +675,6 @@ function onModalClick(e) {
   else if (act === 'm-addpart') { m.draft.parts.push({ prompt: '', kind: 'math', answer: '', check: 'equiv', tolerancePct: 1, form: '' }); renderModal() }
   else if (act === 'm-delpart') { m.draft.parts.splice(Number(el.dataset.i), 1); renderModal() }
   else if (act === 'm-saveq') saveQuestion()
-  else if (act === 'm-savec') saveCard()
 }
 
 function saveQuestion() {
@@ -941,20 +693,6 @@ function saveQuestion() {
   closeModal()
 }
 
-function saveCard() {
-  const m = ui.modal
-  if (!String(m.draft.front).trim() || !String(m.draft.back).trim()) { m.error = 'A card needs both a front and a back.'; return renderModal() }
-  const s = loadStudy()
-  const tab = curTab(s)
-  if (!tab) return closeModal()
-  if (m.id) {
-    const c = tab.cards.find((x) => x.id === m.id)
-    if (c) { c.front = String(m.draft.front); c.back = String(m.draft.back) }
-  } else tab.cards.push(normCard(m.draft))
-  saveStudy(s)
-  closeModal()
-}
-
 // ---- events -----------------------------------------------------------------
 
 function onClick(e) {
@@ -969,14 +707,12 @@ function onClick(e) {
     s.tabs.push(t)
     s.active = t.id
     ui.rename = t.name
-    ui.fc = null
     saveStudy(s)
     return render()
   }
   if (act === 'tab') {
     if (el.dataset.id !== s.active) {
       s.active = el.dataset.id
-      ui.fc = null
       ui.rename = null
       ui.chatDraft = ''
       saveStudy(s)
@@ -987,10 +723,9 @@ function onClick(e) {
   if (act === 'tab-del') {
     e.stopPropagation()
     const t = s.tabs.find((x) => x.id === el.dataset.id)
-    if (!t || !confirm(`Delete “${t.name}” with its questions, cards, and chat?`)) return
+    if (!t || !confirm(`Delete “${t.name}” with its questions and chat?`)) return
     s.tabs = s.tabs.filter((x) => x.id !== t.id)
     s.active = s.tabs[0]?.id || ''
-    ui.fc = null
     // the dead course's jobs go too — their results have nowhere to import
     for (const j of jobs.filter((x) => x.tabId === t.id)) removeJob(j.id).catch(() => {})
     saveStudy(s)
@@ -1024,19 +759,6 @@ function onClick(e) {
     return render()
   }
 
-  if (act === 'c-add') return openModal({ type: 'card', id: null, draft: { front: '', back: '' } })
-  if (act === 'c-edit') {
-    const c = tab.cards.find((x) => x.id === el.dataset.id)
-    if (c) openModal({ type: 'card', id: c.id, draft: { front: c.front, back: c.back } })
-    return
-  }
-  if (act === 'c-del') {
-    if (!confirm('Remove this card?')) return
-    tab.cards = tab.cards.filter((x) => x.id !== el.dataset.id)
-    saveStudy(s)
-    return render()
-  }
-
   if (act === 'up-open') return openModal({ type: 'upload', target: el.dataset.target, files: [], text: '', bundle: false, error: '' })
   if (act === 'job-review') {
     getJob(Number(el.dataset.id)).then((j) => {
@@ -1047,13 +769,6 @@ function onClick(e) {
   if (act === 'jobs-import-all') { importAllReady(); return }
   if (act === 'job-retry') { retryJob(Number(el.dataset.id)).catch(() => {}).then(refreshJobs); return }
   if (act === 'job-remove') { removeJob(Number(el.dataset.id)).catch(() => {}).then(refreshJobs); return }
-
-  if (act === 'fc-start') return startSession(false)
-  if (act === 'fc-practice') return startSession(true)
-  if (act === 'fc-flip') { if (ui.fc) { ui.fc.flipped = !ui.fc.flipped; render() } return }
-  if (act === 'fc-miss') return gradeFc(false)
-  if (act === 'fc-got') return gradeFc(true)
-  if (act === 'fc-end') { ui.fc = null; return render() }
 }
 
 function onInput(e) {
@@ -1116,19 +831,10 @@ document.addEventListener('keydown', (e) => {
     else if (e.key === 'Enter' && t.id === 'st-rename') { e.preventDefault(); commitRename(t.value) }
     else if (e.key === 'Escape' && t.id === 'st-rename') { ui.rename = null; render() }
     else if (e.key === 'Enter' && t.classList?.contains('st-answer')) { e.preventDefault(); checkAnswers() }
-    return
-  }
-  if (ui.tool === 'cards' && ui.fc && ui.fc.i < ui.fc.ids.length) {
-    // not when a button has focus — there Space must press the button, and
-    // hijacking it would un-flip the card and delete the grade buttons instead
-    if (e.code === 'Space' && !t.closest?.('button')) { e.preventDefault(); ui.fc.flipped = !ui.fc.flipped; render() }
-    else if (e.key === '1' && ui.fc.flipped) gradeFc(false)
-    else if (e.key === '2' && ui.fc.flipped) gradeFc(true)
   }
 })
 
-document.addEventListener('change', (e) => {
-  if (e.target.id !== 'st-file-input' || !e.target.files?.length || ui.modal?.type !== 'upload') return
-  addFiles([...e.target.files])
-  e.target.value = ''
+bindFileInput('st-file-input', (list) => {
+  if (ui.modal?.type !== 'upload') return
+  jobsAddFiles(ui.modal, list, renderModal)
 })

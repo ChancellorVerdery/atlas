@@ -1,5 +1,8 @@
-// Study plugin self-check: spaced-repetition scheduler + the local grading
-// tiers (compute-engine equivalence, numeric sampling, tolerance). Run:
+// Study plugin self-check: question/bank normalization + the local grading
+// tiers (compute-engine equivalence, numeric sampling, tolerance). The
+// spaced-repetition scheduler and card normalization moved to Flashcards
+// (see tests/flashcards.check.mjs) when the plugin split in two — Study's
+// store no longer holds cards at all. Run:
 //   node tests/study.check.mjs
 import assert from 'node:assert/strict'
 
@@ -30,23 +33,8 @@ assert.equal(await S.checkPart(cq.parts[0], '1'), 'correct')
 assert.equal(await S.checkPart(cq.parts[0], '0'), 'incorrect')
 assert.equal(await S.checkPart(cq.parts[0], ''), 'incorrect') // never a judge call
 
-// ---- scheduler (1-3-7-14-21 ladder, misses reset) ---------------------------
-assert.deepEqual(S.LADDER, [1, 3, 7, 14, 21])
-assert.equal(S.addDays('2026-01-31', 3), '2026-02-03') // month rollover
-const card = S.normCard({ front: 'f', back: 'b' })
-assert.equal(card.box, 0)
-assert.equal(card.due, '') // new card: due immediately
-const T = '2026-07-27'
-S.gradeCard(card, true, T);  assert.equal(card.box, 1); assert.equal(card.due, '2026-07-30') // +3
-S.gradeCard(card, true, T);  assert.equal(card.box, 2); assert.equal(card.due, '2026-08-03') // +7
-S.gradeCard(card, true, T);  assert.equal(card.box, 3); assert.equal(card.due, '2026-08-10') // +14
-S.gradeCard(card, true, T);  assert.equal(card.box, 4); assert.equal(card.due, '2026-08-17') // +21 (cap)
-S.gradeCard(card, true, T);  assert.equal(card.box, 4); assert.equal(card.due, '2026-08-17') // stays capped
-S.gradeCard(card, false, T); assert.equal(card.box, 0); assert.equal(card.due, '2026-07-28') // miss → tomorrow
-const tab = { cards: [S.normCard({}), S.normCard({ due: '2026-07-27' }), S.normCard({ due: '2026-09-01' })], catStats: {} }
-assert.equal(S.dueCards(tab, T).length, 2) // '' and today are due, future is not
-
 // ---- category stats ---------------------------------------------------------
+const tab = { catStats: {} }
 S.recordCat(tab, 'u-substitution', true)
 S.recordCat(tab, 'u-substitution', false)
 assert.deepEqual(tab.catStats['u-substitution'], { attempts: 2, correct: 1 })
@@ -130,18 +118,18 @@ assert.equal(S.fixEscapes('so\\n\\nlength is $x$'), 'so\n\nlength is $x$')
 assert.equal(S.fixSlashes('\\\\frac{x}{2} + \\nabla f'), '\\frac{x}{2} + \\nabla f')
 // matrix row separators (followed by whitespace) are untouched
 assert.equal(S.fixEscapes('\\begin{pmatrix}a \\\\ b\\end{pmatrix}'), '\\begin{pmatrix}a \\\\ b\\end{pmatrix}')
-// normalizers heal stored data on load (chat, questions, cards)
+// normalizers heal stored data on load (chat, questions) — no `cards` field
+// anymore: that store split off into atlas.flashcards.v1 (flashcards.js).
 globalThis.localStorage = {
   getItem: () => JSON.stringify({ active: 't1', tabs: [{ id: 't1', name: 'C', catStats: {},
     chat: [{ role: 'tutor', text: 'so\\n\\nlength is $\\\\int_a^b$' }],
-    questions: [{ id: 'q1', category: 'c', intro: 'find $\\\\frac{1}{2}$', parts: [{ prompt: '', kind: 'math', answer: '\\\\frac{x}{2}', check: 'equiv' }] }],
-    cards: [{ front: 'F\\n\\nront $\\\\pi$', back: 'b' }] }] }),
+    questions: [{ id: 'q1', category: 'c', intro: 'find $\\\\frac{1}{2}$', parts: [{ prompt: '', kind: 'math', answer: '\\\\frac{x}{2}', check: 'equiv' }] }] }] }),
   setItem() {}, removeItem() {},
 }
 const healed = S.loadStudy().tabs[0]
 assert.equal(healed.chat[0].text, 'so\n\nlength is $\\int_a^b$')
 assert.equal(healed.questions[0].intro, 'find $\\frac{1}{2}$')
 assert.equal(healed.questions[0].parts[0].answer, '\\frac{x}{2}')
-assert.equal(healed.cards[0].front, 'F\n\nront $\\pi$')
+assert.equal(healed.cards, undefined) // the split: Study's store no longer carries cards at all
 
 console.log('study.check: all assertions passed')

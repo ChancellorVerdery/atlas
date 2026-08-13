@@ -19,12 +19,13 @@ import { bindSleep, renderSleepSettings } from './page/sleepui.js'
 import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/courseui.js'
 import { renderNotesPage } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
+import { renderFlashcardsPage } from './page/flashcardsui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus } from './page/email.js'
 import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
 import { openThemeModal } from './page/themeui.js'
 
 // Widgetless plugins that own the whole content area (registry: full:true).
-const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage }
+const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage, flashcards: renderFlashcardsPage }
 // Plugin-scoped settings tabs (registry: settings:'<key>').
 const SETTINGS_PAGES = { gym: renderGymSettings, canvas: renderCanvasSettings, work: renderWorkSettings, ladder: renderLadderSettings, sleep: renderSleepSettings, course: renderCourseSettings }
 // Second full-window tab per plugin (registry: explore:true|'<tab label>').
@@ -47,6 +48,7 @@ const ICONS = {
   course: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 12 3l9 3.5-9 3.5z"/><path d="M7 8.5V14c0 1.3 2.2 2.5 5 2.5s5-1.2 5-2.5V8.5"/><line x1="21" y1="6.5" x2="21" y2="12"/></svg>',
   notes: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5h11l3.5 3.5v13.5a0.5 0.5 0 0 1-0.5 0.5H5a0.5 0.5 0 0 1-0.5-0.5v-16a0.5 0.5 0 0 1 0.5-0.5z"/><path d="M15.5 3.5V7.5h4"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13.5" y2="15"/></svg>',
   study: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.3C10.4 4.9 8.4 4.2 5.8 4.2c-1.1 0-2.2.15-3.3.5V19c1.1-.35 2.2-.5 3.3-.5 2.6 0 4.6.7 6.2 2.1 1.6-1.4 3.6-2.1 6.2-2.1 1.1 0 2.2.15 3.3.5V4.7c-1.1-.35-2.2-.5-3.3-.5-2.6 0-4.6.7-6.2 2.1z"/><line x1="12" y1="6.3" x2="12" y2="20.6"/></svg>',
+  flashcards: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="7" width="15" height="11" rx="2"/><path d="M3.5 5.5A2 2 0 0 1 5 4.7h11.5"/><line x1="8.5" y1="12.5" x2="16.5" y2="12.5"/></svg>',
   settings: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="8.5" x2="20" y2="8.5"/><line x1="4" y1="15.5" x2="20" y2="15.5"/><circle cx="9" cy="8.5" r="2.4"/><circle cx="15" cy="15.5" r="2.4"/></svg>',
 }
 

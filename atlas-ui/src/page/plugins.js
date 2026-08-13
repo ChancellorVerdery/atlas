@@ -19,11 +19,12 @@ export const PLUGIN_DEFS = [
   { id: 'course', name: 'Course Planner', description: 'Degree planner — semesters, prerequisites, route map' },
   { id: 'email', name: 'Email', description: 'Gmail — inbox, compose, pins, multiple accounts' },
   { id: 'equations', name: 'Equations', description: 'LaTeX equation cards and formula sheets' },
+  { id: 'flashcards', name: 'Flashcards', description: 'Spaced-repetition cards per course, upload-to-extract' },
   { id: 'gym', name: 'Gym', description: 'Workouts, set logging, strength scores, volume' },
   { id: 'ladder', name: 'Ladder', description: 'Day planner — classes, shifts, sleep, and drive times on one timeline' },
   { id: 'notes', name: 'Notes', description: 'Apple Notes browser + markdown conversion' },
   { id: 'sleep', name: 'Sleep', description: 'Sleep log, debt tracking, bedtime guidance' },
-  { id: 'study', name: 'Study', description: 'Tutor chat, question bank, flashcards per course' },
+  { id: 'study', name: 'Study', description: 'Tutor chat and question bank per course' },
   { id: 'work', name: 'Work', description: 'Shifts, tips, income tracking, tip share' },
 ]
 export const pluginDef = (id) => PLUGIN_DEFS.find((p) => p.id === id)

@@ -2377,9 +2377,9 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 /* min-height:0 breaks the flex-item content floor — without it .content sizes
    to its content (taller than the viewport) and .main just clips the excess,
    which put the compose row and grade buttons below the fold. */
-html[data-page="study"].st-fit .content { overflow: hidden; display: flex; min-height: 0; }
-html[data-page="study"].st-fit .st { flex: 1; min-width: 0; height: auto; }
-html[data-page="study"].st-fit .st-view { flex: 1; min-height: 0; }
+html[data-page="study"].st-fit .content, html[data-page="flashcards"].st-fit .content { overflow: hidden; display: flex; min-height: 0; }
+html[data-page="study"].st-fit .st, html[data-page="flashcards"].st-fit .st { flex: 1; min-width: 0; height: auto; }
+html[data-page="study"].st-fit .st-view, html[data-page="flashcards"].st-fit .st-view { flex: 1; min-height: 0; }
 
 /* tutor chat */
 /* min-height:0 everywhere down the chain is what lets the internal scroller

@@ -82,7 +82,13 @@ export const PAGES = [
     id: 'study',
     label: 'Study',
     crumb: 'Atlas / Study',
-    full: true, // widgetless: course tabs → tutor chat, question bank, flashcards, card bank
+    full: true, // widgetless: course tabs → tutor chat, question bank
+  },
+  {
+    id: 'flashcards',
+    label: 'Flashcards',
+    crumb: 'Atlas / Flashcards',
+    full: true, // widgetless: course tabs → flashcards, card bank (split out of Study, 2026-08)
   },
   {
     id: 'course',

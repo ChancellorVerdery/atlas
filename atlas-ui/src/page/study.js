@@ -1,13 +1,19 @@
-// Study plugin — data layer, grading, and spaced repetition. Tabs = courses;
-// each holds a question bank (drives the tutor chat), a card bank (drives
-// flashcards), per-category accuracy, and the chat transcript. Store
-// atlas.study.v1 rides page.save sync as a raw string (sync.js encodePush) —
-// no backend changes. Claude calls (extract/chat/judge) go through the dev
-// server's /study-api middleware (vite.config.js), same pattern as Notes.
+// Study plugin — data layer, grading. Tabs = courses; each holds a question
+// bank (drives the tutor chat) and per-category accuracy, and the chat
+// transcript. Store atlas.study.v1 rides page.save sync as a raw string
+// (sync.js encodePush) — no backend changes. Claude calls (extract/chat/
+// judge) go through the dev server's /study-api middleware (vite.config.js),
+// same pattern as Notes.
+//
+// Flashcards split out (2026-08) into its own plugin + store
+// (atlas.flashcards.v1, see flashcards.js) — fully independent tabs/courses,
+// seeded once from this store's card data on first load. The two still share
+// the /study-api job-queue endpoints below (extractStudy/listJobs/etc, keyed
+// by `target`) and the uid/fixSlashes/fixEscapes helpers.
 
 const KEY = 'atlas.study.v1'
 
-const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
+export const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
 
 // ---- store ------------------------------------------------------------------
 
@@ -65,22 +71,11 @@ export function normQuestion(q) {
   }
 }
 
-export function normCard(c) {
-  return {
-    id: typeof c?.id === 'string' && c.id ? c.id : uid('c'),
-    front: fixEscapes(c?.front),
-    back: fixEscapes(c?.back),
-    box: Math.min(Math.max(Math.trunc(+c?.box) || 0, 0), LADDER.length - 1),
-    due: typeof c?.due === 'string' ? c.due : '', // '' = due now
-  }
-}
-
 function normTab(t) {
   const tab = {
     id: typeof t?.id === 'string' && t.id ? t.id : uid('t'),
     name: String(t?.name ?? 'Course'),
     questions: (Array.isArray(t?.questions) ? t.questions : []).map(normQuestion),
-    cards: (Array.isArray(t?.cards) ? t.cards : []).map(normCard),
     catStats: {},
     chat: (Array.isArray(t?.chat) ? t.chat : [])
       .filter((m) => m && typeof m.text === 'string')
@@ -117,36 +112,6 @@ export function saveStudy(s) {
 }
 
 export const newTab = (name) => normTab({ name })
-
-// ---- spaced repetition ------------------------------------------------------
-
-// Graduated ladder: a miss repeats tomorrow (box 0); each consecutive correct
-// promotes one box. Cap = 21 days: Cepeda et al. (2008) put the optimal review
-// gap at ~10–20% of the retention interval — for a semester exam 6–16 weeks
-// out that's ~8–22 days, and 21 d was their observed optimum at the 70-day
-// horizon. A 21-day cap also keeps every card at 4+ spaced retrievals per
-// semester, the condition under which expanding schedules beat uniform ones
-// (Latimier et al. 2021 meta-analysis).
-export const LADDER = [1, 3, 7, 14, 21]
-
-export const localToday = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-
-export function addDays(dateStr, n) {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  return localToday(new Date(y, m - 1, d + n))
-}
-
-export const dueCards = (tab, today = localToday()) => tab.cards.filter((c) => !c.due || c.due <= today)
-
-// Missed → back to box 0, see it tomorrow. Correct → next box, out
-// LADDER[box] days. A same-session recovery after a miss must NOT call this
-// again — the miss already demoted the card (the UI just clears its queue).
-export function gradeCard(card, correct, today = localToday()) {
-  if (!correct) { card.box = 0; card.due = addDays(today, 1); return }
-  card.box = Math.min((card.box || 0) + 1, LADDER.length - 1)
-  card.due = addDays(today, LADDER[card.box])
-}
 
 // ---- category accuracy ------------------------------------------------------
 
