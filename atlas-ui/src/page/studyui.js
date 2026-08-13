@@ -15,6 +15,7 @@ import {
   checkPart, partRule, extractStudy, chatTurn, judgeItems,
   listJobs, getJob, retryJob, removeJob,
 } from './study.js'
+import { providerForCapability } from './ai.js'
 import {
   busyBox, stMD, inlineMath, syncNavDot as jobsSyncNavDot, queueHTML as jobsQueueHTML, qPct,
   addFiles as jobsAddFiles, uploadHTML as jobsUploadHTML, reviewHTML as jobsReviewHTML,
@@ -176,18 +177,23 @@ function busyLine(s, tab) {
   return owner ? `Busy with ${owner.name}…` : ''
 }
 
+const NO_AI_MSG = 'Connect an AI account in Settings → Accounts to use this.'
+const SWITCHED_MSG = 'Primary AI was out of tokens — switched to your secondary.'
+
 function studyView(tab, s) {
   const msgs = tab.chat.map((m) => `<div class="st-msg ${MSG_CLS[m.role] || 'st-msg--sys'}">${stMD(m.text)}</div>`).join('')
   const intro = !tab.chat.length && !tab.activeQ
     ? `<div class="st-msg st-msg--sys">Your tutor quizzes you from this course's question bank (${tab.questions.length} question${tab.questions.length === 1 ? '' : 's'}) — weakest categories first — and grades your answers. Hit <b>Quiz me</b> to start, or just ask something.</div>`
     : ''
+  const noAI = !providerForCapability('study')
   const line = busyLine(s, tab)
-  const off = ui.busy ? 'disabled' : ''
+  const off = ui.busy || noAI ? 'disabled' : ''
   return `<div class="card st-chat">
     <div class="st-msgs" id="st-msgs">
       ${intro}${msgs}
       ${tab.activeQ ? qCardHTML(tab.activeQ, ui.busy?.tabId === tab.id) : ''}
       ${line ? `<div class="st-msg st-msg--sys st-busy">${esc(line)}</div>` : ''}
+      ${noAI ? `<div class="st-msg st-msg--sys">${esc(NO_AI_MSG)}</div>` : ''}
     </div>
     <div class="st-compose">
       <input id="st-chat-in" class="pw-field" placeholder="Ask your tutor… (Enter to send)" value="${esc(ui.chatDraft)}" ${off}>
@@ -241,7 +247,7 @@ function qCardHTML(q, frozen) {
 
 async function doSend(text) {
   const t = String(text ?? ui.chatDraft).trim()
-  if (!t || ui.busy) return
+  if (!t || ui.busy || !providerForCapability('study')) return
   const s = loadStudy()
   const tab = curTab(s)
   if (!tab) return
@@ -275,6 +281,7 @@ async function tutorTurn(tabId) {
         const nq = normQuestion(bq || r.question)
         tab.activeQ = { ...nq, bankId: bq ? bq.id : null, given: [] }
       }
+      if (r.switched) tab.chat.push({ role: 'sys', text: SWITCHED_MSG })
       saveStudy(s)
     }
   } catch (err) {
@@ -315,20 +322,21 @@ async function checkAnswers() {
   // Everything below grades the `q` snapshot taken above — never a re-read of
   // the store — so the transcript can't report answers that weren't graded.
   const notes = q.parts.map(() => '')
-  let verdicts
+  let verdicts, judgeSwitched = false
   try {
     verdicts = []
     for (const [i, p] of q.parts.entries()) verdicts.push(await checkPart(p, q.given[i] ?? ''))
     const unsure = verdicts.flatMap((v, i) => (v === 'unsure' ? [i] : []))
     if (unsure.length) {
-      const { verdicts: jv } = await judgeItems(unsure.map((i) => ({
+      const jres = await judgeItems(unsure.map((i) => ({
         n: i,
         question: [q.intro, q.parts[i].prompt].filter(Boolean).join(' — '),
         expected: q.parts[i].answer,
         given: q.given[i] ?? '',
         rule: partRule(q.parts[i]),
       })))
-      for (const v of jv || []) {
+      judgeSwitched = !!jres.switched
+      for (const v of jres.verdicts || []) {
         const i = Math.trunc(v.n)
         if (verdicts[i] === 'unsure') { verdicts[i] = v.correct ? 'correct' : 'incorrect'; notes[i] = String(v.note || '') }
       }
@@ -354,6 +362,7 @@ async function checkAnswers() {
     q2.verdicts = verdicts
     q2.vnotes = notes
   }
+  if (judgeSwitched) t2.chat.push({ role: 'sys', text: SWITCHED_MSG })
   saveStudy(s2)
   ui.busy = null
   render()
@@ -396,12 +405,14 @@ function bankView(tab) {
     byCat.get(q.category).push(q)
   }
   const cats = [...byCat.entries()].sort(([a], [b]) => a.localeCompare(b))
+  const noAI = !providerForCapability('study')
   return `
     <div class="gf-bar">
       <button type="button" class="gym-btn" data-st="q-add">+ Add question</button>
-      <button type="button" class="gym-btn gym-btn--ghost" data-st="up-open" data-target="questions">Upload material…</button>
+      <button type="button" class="gym-btn gym-btn--ghost" data-st="up-open" data-target="questions" ${noAI ? 'disabled' : ''}>Upload material…</button>
       <span class="gf-status">${tab.questions.length ? `${tab.questions.length} question${tab.questions.length === 1 ? '' : 's'} · accuracy per category` : ''}</span>
     </div>
+    ${noAI ? `<p class="cal-panel__cal">${esc(NO_AI_MSG)}</p>` : ''}
     ${cats.length ? cats.map(([cat, qs]) => catSection(cat, qs, tab.catStats[cat])).join('')
       : '<p class="gym-empty">No questions yet — upload homework or notes and Claude mines them for practice problems (answers included), or add one by hand. The Study chat quizzes you from this bank.</p>'}`
 }
@@ -511,6 +522,7 @@ function qTick() {
 async function enqueueExtract() {
   const m = ui.modal
   if (!m) return
+  if (!providerForCapability('study')) { m.error = NO_AI_MSG; return renderModal() }
   if (!m.files.length && !m.text.trim()) { m.error = 'Add files or paste some material first.'; return renderModal() }
   const s = loadStudy()
   const tab = curTab(s)
@@ -759,7 +771,10 @@ function onClick(e) {
     return render()
   }
 
-  if (act === 'up-open') return openModal({ type: 'upload', target: el.dataset.target, files: [], text: '', bundle: false, error: '' })
+  if (act === 'up-open') {
+    if (!providerForCapability('study')) return
+    return openModal({ type: 'upload', target: el.dataset.target, files: [], text: '', bundle: false, error: '' })
+  }
   if (act === 'job-review') {
     getJob(Number(el.dataset.id)).then((j) => {
       if (j?.phase === 'ready') openModal({ type: 'review', target: j.target, tabId: j.tabId, jobId: j.id, items: j.results || [], chosen: new Set((j.results || []).map((_, i) => i)) })

@@ -1,9 +1,11 @@
 // Study plugin — data layer, grading. Tabs = courses; each holds a question
 // bank (drives the tutor chat) and per-category accuracy, and the chat
 // transcript. Store atlas.study.v1 rides page.save sync as a raw string
-// (sync.js encodePush) — no backend changes. Claude calls (extract/chat/
-// judge) go through the dev server's /study-api middleware (vite.config.js),
-// same pattern as Notes.
+// (sync.js encodePush) — no backend changes. AI calls (extract/chat/judge)
+// go through the dev server's /study-api middleware (vite.config.js), same
+// pattern as Notes — each request carries the user's own connected AI
+// account (ai.js credsForCapability), never the dev machine's local
+// Claude Code subscription.
 //
 // Flashcards split out (2026-08) into its own plugin + store
 // (atlas.flashcards.v1, see flashcards.js) — fully independent tabs/courses,
@@ -235,7 +237,9 @@ export const partRule = (part) =>
   : part.check === 'form' ? `must be written ${part.form || 'in the requested form'}; any other form is wrong even if equivalent`
   : 'EXACT value required — any mathematically equivalent exact form counts, but a rounded decimal approximation is incorrect'
 
-// ---- /study-api (dev-server middleware → claude CLI) ------------------------
+// ---- /study-api (dev-server middleware → the user's own AI account) --------
+
+import { credsForCapability } from './ai.js'
 
 const post = async (url, payload) => {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
@@ -244,15 +248,23 @@ const post = async (url, payload) => {
   return j
 }
 
+// Every AI-backed request carries the resolved credential list for this
+// capability — see ai.js credsForCapability. The server never falls back to
+// its own local Claude Code subscription; an empty list here means the
+// request comes back `{error: 'no_ai_provider'}`.
+const withAI = (payload) => ({ ...payload, ai: credsForCapability('study') })
+
 // {target, tabId, tabName, categories, files:[{name,media_type,data}], text} → {ids}
-// One server-side job per file, each its own Claude agent; jobs live in the
-// dev-server process so they survive a browser reload.
-export const extractStudy = (payload) => post('/study-api/extract', payload)
+// One server-side job per file, each its own AI call; jobs live in the
+// dev-server process so they survive a browser reload. A job's `switched`
+// flag (surfaced via listJobs/getJob) means the primary AI account ran out
+// of tokens mid-extraction and the secondary finished the job.
+export const extractStudy = (payload) => post('/study-api/extract', withAI(payload))
 export const listJobs = () => fetch('/study-api/jobs').then((r) => r.json())
 export const getJob = (id) => fetch(`/study-api/job?id=${id}`).then((r) => r.json())
 export const retryJob = (id) => post(`/study-api/job/retry?id=${id}`, {})
 export const removeJob = (id) => post(`/study-api/job/remove?id=${id}`, {})
-// {tab, bank, stats, transcript, activeQ} → {message, question|null}
-export const chatTurn = (payload) => post('/study-api/chat', payload)
-// {items:[{n, question, expected, given, rule}]} → {verdicts:[{n, correct, note}]}
-export const judgeItems = (items) => post('/study-api/judge', { items })
+// {tab, bank, stats, transcript, activeQ} → {message, question|null, switched}
+export const chatTurn = (payload) => post('/study-api/chat', withAI(payload))
+// {items:[{n, question, expected, given, rule}]} → {verdicts:[{n, correct, note}], switched}
+export const judgeItems = (items) => post('/study-api/judge', withAI({ items }))

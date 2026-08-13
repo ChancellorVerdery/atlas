@@ -81,6 +81,7 @@ export function jobCardHTML(j) {
     ${j.phase === 'queued' || j.phase === 'converting'
       ? `<div class="nt-qbar"><div class="nt-qfill" style="width:${j.phase === 'converting' ? qPct(j) : 0}%"></div></div>` : ''}
     ${j.phase === 'error' ? `<p class="nt-error">${esc(j.error)}</p>` : ''}
+    ${j.phase === 'ready' && j.switched ? '<p class="cal-panel__cal">Primary AI was out of tokens — switched to your secondary.</p>' : ''}
   </div>`
 }
 

@@ -10,6 +10,7 @@ import {
   loadNotesStore, saveNotesStore, pickFolder, fetchTree, convertNote, saveNote,
   appleNotesTree, appleNotesFetch, fileURL, revealFile, WIKI_RE, EMBED_RE, IMG_RE,
 } from './notes.js'
+import { providerForCapability } from './ai.js'
 import { sanitizeHTML } from './canvasui.js'
 import { marked } from 'marked'
 import { convertLatexToMarkup } from 'mathlive' // mathlive CSS is loaded globally by view.js
@@ -17,6 +18,9 @@ import { renderMath, fitEquations } from './view.js' // reuse the equations plug
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
+const NO_AI_MSG = 'Connect an AI account in Settings → Accounts to use this.'
+const SWITCHED_MSG = 'Primary AI was out of tokens — switched to your secondary.'
 
 const dirName = (dir) => dir.split('/').filter(Boolean).pop() || dir
 const noteName = (rel) => rel.split('/').pop().replace(/\.md$/i, '')
@@ -53,12 +57,13 @@ export function renderNotesPage(root) {
     root.onclick = onPageClick
     return
   }
+  const noAI = !providerForCapability('notes')
   root.innerHTML = `<div class="nt">
     <div class="gf-bar">
-      <button type="button" class="gym-btn" data-nt="new">+ New note</button>
+      <button type="button" class="gym-btn" data-nt="new" ${noAI ? 'disabled' : ''}>+ New note</button>
       <button type="button" class="gym-btn gym-btn--ghost" data-nt="pick">Change folder…</button>
       <span class="gf-dir" title="${esc(s.dir)}">${esc(dirName(s.dir))}</span>
-      <span class="gf-status" id="nt-status"></span>
+      <span class="gf-status" id="nt-status">${noAI ? esc(NO_AI_MSG) : ''}</span>
     </div>
     <div class="nt-queue" id="nt-queue"></div>
     <div class="nt-body">
@@ -286,6 +291,7 @@ function pump() {
     job.result = { title: String(r.title || 'Untitled'), markdown: String(r.markdown || '') }
     job.filename = job.result.title
     job.label = job.result.title
+    job.switched = !!r.switched
     job.phase = 'ready'
   }).catch((err) => {
     job.phase = 'error'
@@ -322,6 +328,7 @@ function qCardHTML(j) {
     ${j.phase === 'queued' || j.phase === 'converting'
       ? `<div class="nt-qbar"><div class="nt-qfill" style="width:${j.phase === 'converting' ? qPct(j) : 0}%"></div></div>` : ''}
     ${j.phase === 'error' ? `<p class="nt-error">${esc(j.error)}</p>` : ''}
+    ${j.phase === 'ready' && j.switched ? `<p class="cal-panel__cal">${esc(SWITCHED_MSG)}</p>` : ''}
   </div>`
 }
 
@@ -587,6 +594,10 @@ function onModalClick(e) {
 // Convert = enqueue: the modal closes immediately and the job runs in the
 // background (queue strip at the top of the page shows progress).
 function doConvert() {
+  if (!providerForCapability('notes')) {
+    up.error = NO_AI_MSG
+    return renderUpload()
+  }
   if (!up.files.length && !up.text.trim() && !up.url.trim()) {
     up.error = 'Add a file, some text, or a link first.'
     return renderUpload()

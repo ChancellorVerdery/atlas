@@ -1,9 +1,10 @@
-import { execFile, execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { remote } from './remote.js'
+import { callLLM } from './llm.js'
 
 
 // Graph plugin backend: the browser can't touch the filesystem, open Finder,
@@ -131,24 +132,26 @@ function graphApi() {
 }
 
 
-// ---- shared by the Claude-backed middlewares (Notes, Study) ----------------
+// ---- shared by the AI-backed middlewares (Notes, Study) --------------------
 
 const fail = (code, msg) => Object.assign(new Error(msg), { code })
 
-// Run `claude` headless with stdin closed (else it waits 3s for pipe input),
-// collecting stdout without execFile's maxBuffer ceiling. No timeout, by
-// request: a big extraction (a semester of PDFs) takes as long as it takes,
-// and the Study queue shows its progress instead of racing a clock.
-const runClaude = (args) => new Promise((resolve, reject) => {
-  let child
-  try { child = spawn('claude', args, { stdio: ['ignore', 'pipe', 'pipe'] }) }
-  catch (e) { return reject(e) }
-  let out = '', err = ''
-  child.stdout.on('data', (c) => { out += c })
-  child.stderr.on('data', (c) => { err += c })
-  child.on('error', reject) // ENOENT if claude isn't on PATH
-  child.on('close', (code) => resolve({ code, out, err }))
-})
+// creds arrive from the client per capability (see src/page/ai.js
+// credsForCapability) — either the POST body's `ai` field or the
+// x-atlas-ai header (base64 JSON), so a caller without a JSON body could
+// still use the header path. Never falls back to the dev machine's own
+// `claude` CLI/subscription — see callLLM in llm.js.
+function credsFromRequest(req, body) {
+  if (Array.isArray(body?.ai) && body.ai.length) return body.ai
+  const h = req?.headers?.['x-atlas-ai']
+  if (h) {
+    try {
+      const parsed = JSON.parse(Buffer.from(String(h), 'base64').toString('utf8'))
+      if (Array.isArray(parsed)) return parsed
+    } catch { /* malformed header — treat as absent */ }
+  }
+  return []
+}
 
 // JSON body with base64 file payloads. Anthropic's request cap is 32MB, so
 // 50MB here is a backstop, not the real limit (the client pre-checks sizes).
@@ -208,41 +211,56 @@ function writeUploads(tmp, files) {
   })
 }
 
-// Run a headless claude job that must return schema-shaped JSON. Model pinned
-// (Sonnet 5) so results don't drift with the user's Claude Code default.
-// askClaude defaults to no extra args, which means the CLI's DEFAULT tool set.
-// /chat and /judge run with uploaded course documents in context, so the model
-// is reading attacker-influenceable text — pin it to Read and nothing else
-// rather than inheriting whatever the CLI enables.
-const READ_ONLY_TOOLS = ['--allowedTools', 'Read']
+// Reads local files for direct-API attachment. The old CLI path handed the
+// `claude` process a Read tool over the job's temp directory and let it
+// open files itself; a direct Messages/chat-completions call has no
+// filesystem tool, so this reads them here instead — images and PDFs become
+// base64 content blocks (see llm.js callLLM), anything else (already-
+// converted .txt from DOC_RE, plain pasted-in text files) is inlined under
+// its own filename.
+const IMG_EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
+function readAttachments(paths) {
+  const images = []
+  const textParts = []
+  for (const p of [...new Set(paths)]) {
+    const ext = path.extname(p).slice(1).toLowerCase()
+    try {
+      if (ext === 'pdf') images.push({ media_type: 'application/pdf', data: fs.readFileSync(p).toString('base64'), name: path.basename(p) })
+      else if (IMG_EXT_MIME[ext]) images.push({ media_type: IMG_EXT_MIME[ext], data: fs.readFileSync(p).toString('base64'), name: path.basename(p) })
+      else textParts.push(`--- ${path.basename(p)} ---\n${fs.readFileSync(p, 'utf8')}`)
+    } catch { /* unreadable — the prompt still lists its filename for context */ }
+  }
+  return { images, text: textParts.join('\n\n') }
+}
 
-async function askClaude(prompt, schema, extra = []) {
-  const args = ['-p', prompt, '--output-format', 'json', '--json-schema', schema, '--model', 'claude-sonnet-5', '--effort', 'medium', ...extra]
-  let res
-  try { res = await runClaude(args) }
-  catch (e) {
-    if (e.code === 'ENOENT') throw fail(500, 'The `claude` CLI was not found on the dev server’s PATH — this feature runs through your Claude subscription via Claude Code.')
-    throw fail(500, `couldn't start Claude Code — ${e.message}`)
-  }
-  let events
-  try { events = JSON.parse(res.out) } catch { throw fail(502, res.err.slice(-400) || `Claude Code returned no usable output (exit ${res.code}).`) }
-  const result = Array.isArray(events) ? events[events.length - 1] : events
-  if (result?.is_error || result?.subtype !== 'success') {
-    throw fail(502, result?.api_error_status ? `Claude error (${result.api_error_status}) — try again in a minute` : (result?.result || 'Claude Code could not complete the request.'))
-  }
-  try { return JSON.parse(result.result) } catch { throw fail(502, 'Claude Code did not return valid JSON — try again.') }
+// Provider-routed LLM call for the AI-backed middlewares (Study extraction,
+// tutor chat, judge; Notes conversion) that must return schema-shaped JSON.
+// `creds` is the caller's own connected Claude/OpenAI account, resolved
+// client-side (src/page/ai.js credsForCapability) — never the dev machine's
+// own `claude` CLI/subscription. callLLM (llm.js) falls forward from primary
+// to secondary only on a token-exhaustion error; `switched` on the return
+// value says whether that happened, so the UI can notify.
+async function askClaude(prompt, schema, creds, images) {
+  if (!Array.isArray(creds) || !creds.length) throw fail(400, 'no_ai_provider')
+  let out
+  try { out = await callLLM({ creds, prompt, schema, images }) }
+  catch (e) { throw fail(502, e.message) }
+  let parsed
+  try { parsed = JSON.parse(out.text) } catch { throw fail(502, 'The AI did not return valid JSON — try again.') }
+  return { ...parsed, switched: out.switched }
 }
 
 // Notes plugin backend: turns uploads (handwriting photos, screenshots, PDFs,
 // pasted text, web links) into markdown notes, and lists/writes the user's
-// notes directory — none of which the browser can do. Conversion runs the
-// `claude` CLI in headless mode, so it uses the user's Claude subscription
-// (no API key). Reading note contents reuses /graph-api/file (sandboxed).
-// Apple Notes import reads the account/folder/note tree and one note's full
-// content directly by its stable id (never by title, which can collide) —
-// typed notes skip claude entirely (a plain AppleScript body read); ink still
-// renders via notes-ink and flows through the same claude conversion as any
-// other upload.
+// notes directory — none of which the browser can do. Conversion runs
+// through askClaude/callLLM on the USER'S OWN connected Claude/OpenAI
+// account (see ai.js credsForCapability) — never the dev machine's local
+// Claude Code subscription. Reading note contents reuses /graph-api/file
+// (sandboxed). Apple Notes import reads the account/folder/note tree and one
+// note's full content directly by its stable id (never by title, which can
+// collide) — typed notes skip the AI entirely (a plain AppleScript body
+// read); ink still renders via notes-ink and flows through the same
+// conversion as any other upload.
 
 // ---- Apple Notes tree + HTML→markdown (pure, testable) ----------------------
 // notesApi()'s osascript walk emits \x1f-delimited lines (AppleScript has no
@@ -545,16 +563,17 @@ Output:
 - title: a short, filename-safe note title (no slashes, no extension).
 - Do NOT write any files — return only the note as structured output; the app saves it.`
 
-  // Conversion runs the `claude` CLI (headless, --json-schema) so it draws on
-  // the user's subscription. Uploads are written to a temp dir and handed to
-  // Claude Code by path — its Read tool ingests the images/PDFs (the only tool
-  // allowed). Everything is torn down after.
-  async function convert(dir, body) {
+  // Conversion runs through callLLM (llm.js) on the user's OWN connected
+  // Claude/OpenAI account. Uploads are written to a temp dir and read back
+  // here as base64 attachments (readAttachments) — no filesystem tool, no
+  // local `claude` CLI. Everything is torn down after.
+  async function convert(dir, body, creds) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-notes-'))
     try {
       const paths = writeUploads(tmp, body.files)
       const webText = body.url ? await fetchPageText(body.url) : ''
       const names = walk(dir).notes.map((n) => n.path.replace(/\.md$/i, '').split('/').pop()).slice(0, 2000)
+      const { images, text: fileText } = readAttachments(paths)
       const prompt = [
         RULES,
         `Existing notes in this vault (wiki-link to these exact names where relevant):\n${names.join(', ') || '(none yet)'}`,
@@ -562,29 +581,16 @@ Output:
         paths.length ? `Attached files to read and transcribe:\n${paths.join('\n')}` : '',
         body.url ? `Source URL: ${body.url}\n\nExtracted page text:\n${webText}` : '',
         body.text ? `Typed/pasted notes:\n${body.text}` : '',
+        fileText ? `File contents:\n${fileText}` : '',
         'Convert the material above into one note.',
       ].filter(Boolean).join('\n\n')
 
-      // TODO(orchestrator): AI provider routing
-      // Pinned model + effort: following the user's Claude Code default made
-      // note style drift whenever they switched models. Sonnet/medium per user.
-      const args = ['-p', prompt, '--output-format', 'json', '--json-schema', SCHEMA, '--allowedTools', 'Read', '--model', 'claude-sonnet-5', '--effort', 'medium']
-      if (paths.length) args.push('--add-dir', tmp)
-      let res
-      try { res = await runClaude(args) }
-      catch (e) {
-        if (e.code === 'ENOENT') throw fail(500, 'The `claude` CLI was not found on the dev server’s PATH — Notes conversion runs through your Claude subscription via Claude Code.')
-        throw fail(500, `couldn't start Claude Code — ${e.message}`)
-      }
-      let events
-      try { events = JSON.parse(res.out) } catch { throw fail(502, res.err.slice(-400) || `Claude Code returned no usable output (exit ${res.code}).`) }
-      const result = Array.isArray(events) ? events[events.length - 1] : events
-      if (result?.is_error || result?.subtype !== 'success') {
-        throw fail(502, result?.api_error_status ? `Claude error (${result.api_error_status}) — try again in a minute` : (result?.result || 'Claude Code could not complete the conversion.'))
-      }
-      let note
-      try { note = JSON.parse(result.result) } catch { throw fail(502, 'Claude Code did not return a valid note — try again.') }
-      return note
+      // ponytail: AI provider routing — creds are the user's own connected
+      // Claude/OpenAI account (resolved client-side by credsForCapability;
+      // never the dev machine's own claude CLI). Model/effort are pinned
+      // inside llm.js so note style doesn't drift with whichever account is
+      // active.
+      return await askClaude(prompt, SCHEMA, creds, images)
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
@@ -638,7 +644,7 @@ Output:
       const dir = u.searchParams.get('dir') || body.dir || ''
       if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return json(400, { error: 'bad or missing dir' })
       if (u.pathname === '/tree') return json(200, walk(dir))
-      if (u.pathname === '/convert' && req.method === 'POST') return json(200, await convert(dir, body))
+      if (u.pathname === '/convert' && req.method === 'POST') return json(200, await convert(dir, body, credsFromRequest(req, body)))
       if (u.pathname === '/save' && req.method === 'POST') return json(200, save(dir, body))
       json(404, { error: 'unknown notes-api endpoint' })
     } catch (err) {
@@ -648,10 +654,11 @@ Output:
   return handler
 }
 
-// Study plugin backend: three Claude jobs the browser can't run itself —
+// Study plugin backend: three AI jobs the browser can't run itself —
 // extracting question-bank items / flashcards from uploaded course material,
 // the tutor-chat turn, and grading arbitration when the local math engine is
-// unsure. Same headless-claude pattern as Notes; Sonnet 5, schema output.
+// unsure. Same provider-routed pattern as Notes — the user's own connected
+// Claude/OpenAI account, schema-constrained output.
 function studyApi() {
   const PART_PROPS = {
     prompt: { type: 'string' },
@@ -897,10 +904,12 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
     try {
       const { paths, figs } = await prepare(job)
       const prompt = PROMPTS[job.target](job.categories, paths, job.text, figs).filter(Boolean).join('\n\n')
-      const extra = paths.length || figs.length ? ['--allowedTools', 'Read', '--add-dir', job.dir] : []
-      const data = await askClaude(prompt, SCHEMAS[job.target], extra)
+      const { images, text: fileText } = readAttachments([...paths, ...figs])
+      const fullPrompt = fileText ? `${prompt}\n\n${fileText}` : prompt
+      const data = await askClaude(fullPrompt, SCHEMAS[job.target], job.creds, images)
       const list = (job.target === 'cards' ? data.cards : data.questions) || []
       job.results = job.target === 'cards' ? list : publishFigures(job, list)
+      job.switched = !!data.switched
       job.phase = 'ready'
     } catch (e) {
       job.phase = 'error'
@@ -919,7 +928,8 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
     }
   }
 
-  function enqueue(body) {
+  function enqueue(body, creds) {
+    if (!Array.isArray(creds) || !creds.length) throw fail(400, 'no_ai_provider')
     const target = body.target === 'cards' ? 'cards' : 'questions'
     const text = String(body.text || '').slice(0, 200000)
     const files = Array.isArray(body.files) ? body.files : []
@@ -947,7 +957,7 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
       return { file, name, mediaType: String(f.media_type || '') }
     }
     const newJob = (id, dir, sources, jobText, label) =>
-      jobs.set(id, { ...base, id, dir, sources, text: jobText, label, phase: 'queued', error: '', results: null, startedAt: 0, prepared: null })
+      jobs.set(id, { ...base, id, dir, sources, text: jobText, label, phase: 'queued', error: '', results: null, startedAt: 0, prepared: null, creds, switched: false })
     const oneJob = (group, label) => {
       const id = ++jobSeq
       const dir = newDir()
@@ -1006,7 +1016,7 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
     return { ids }
   }
 
-  const jobSummary = (j) => ({ id: j.id, target: j.target, tabId: j.tabId, tabName: j.tabName, label: j.label, phase: j.phase, error: j.error, startedAt: j.startedAt, count: j.results?.length ?? 0 })
+  const jobSummary = (j) => ({ id: j.id, target: j.target, tabId: j.tabId, tabName: j.tabName, label: j.label, phase: j.phase, error: j.error, startedAt: j.startedAt, count: j.results?.length ?? 0, switched: !!j.switched })
 
   const handler = async (req, res) => {
     const u = new URL(req.url, 'http://x')
@@ -1041,15 +1051,15 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
         return json(200, { ok: true }) // figures already copied out — bank references stay valid
       }
       const body = await readBody(req)
-      if (u.pathname === '/extract') return json(200, enqueue(body))
+      if (u.pathname === '/extract') return json(200, enqueue(body, credsFromRequest(req, body)))
       if (u.pathname === '/chat') {
         const transcript = (Array.isArray(body.transcript) ? body.transcript : []).slice(-30)
-        return json(200, await askClaude(chatPrompt({ ...body, transcript }).filter(Boolean).join('\n\n'), SCHEMAS.chat, READ_ONLY_TOOLS))
+        return json(200, await askClaude(chatPrompt({ ...body, transcript }).filter(Boolean).join('\n\n'), SCHEMAS.chat, credsFromRequest(req, body)))
       }
       if (u.pathname === '/judge') {
         const items = (Array.isArray(body.items) ? body.items : []).slice(0, 20)
         if (!items.length) throw fail(400, 'no items to judge')
-        return json(200, await askClaude(judgePrompt(items).filter(Boolean).join('\n\n'), SCHEMAS.judge, READ_ONLY_TOOLS))
+        return json(200, await askClaude(judgePrompt(items).filter(Boolean).join('\n\n'), SCHEMAS.judge, credsFromRequest(req, body)))
       }
       json(404, { error: 'unknown study-api endpoint' })
     } catch (err) {
@@ -1081,9 +1091,11 @@ export const MIDDLEWARES = [
   // the Apple Notes store and a vault path that came from a Finder dialog.
   { prefix: '/graph-api', handler: graphApi() },
   { prefix: '/notes-api', handler: notesApi() },
-  // Blocked, not undecided: the server's `claude` CLI is installed but not
-  // logged in, and that login is an interactive browser flow. Moving this is
-  // the only one that buys real compute relief (4 concurrent agents + headless
-  // Chromium), so it is worth finishing once that login happens.
+  // STILL LOCAL, but no longer for a `claude` CLI login reason — extraction
+  // now calls out over HTTP with the user's own AI credentials (askClaude →
+  // llm.js), same as chat/judge. What's left local is headless Chromium
+  // (mhtml → PDF + figure screenshots for WebAssign printouts) and the
+  // in-memory job queue. Moving this would buy real compute relief (4
+  // concurrent agents + Chromium off this machine) whenever that's worth doing.
   { prefix: '/study-api', handler: studyApi() },
 ]

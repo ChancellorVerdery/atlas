@@ -1,10 +1,12 @@
 // Notes plugin — data layer. The browser can't read/write the notes folder
-// or call Claude with a private key, so everything goes through the dev
-// server's /notes-api middleware (vite.config.js). Reading a note's contents
-// reuses the graph plugin's sandboxed /graph-api/file endpoint.
+// or call an AI provider with a private key, so everything goes through the
+// dev server's /notes-api middleware (vite.config.js). Reading a note's
+// contents reuses the graph plugin's sandboxed /graph-api/file endpoint.
 // ponytail: atlas.notes.v1 deliberately does NOT sync (unlike graph's key) —
 // it holds an absolute macOS path, meaningless on another machine, and
 // syncing would force a backend mapper change.
+
+import { credsForCapability } from './ai.js'
 
 const KEY = 'atlas.notes.v1'
 
@@ -39,8 +41,11 @@ export async function fetchTree(dir) {
   return j
 }
 
-// {dir, files: [{name, media_type, data(b64)}], text?, url?} → {title, markdown}
-export const convertNote = (payload) => post('/notes-api/convert', payload)
+// {dir, files: [{name, media_type, data(b64)}], text?, url?} → {title, markdown, switched}
+// Carries the resolved AI credential list (ai.js credsForCapability) on
+// every request — the server never falls back to its own local Claude Code
+// subscription; an empty list comes back `{error: 'no_ai_provider'}`.
+export const convertNote = (payload) => post('/notes-api/convert', { ...payload, ai: credsForCapability('notes') })
 
 // {dir, subdir, filename, markdown, uploads: [{name, data(b64)}]} → {ok, path}
 export const saveNote = (payload) => post('/notes-api/save', payload)
