@@ -810,24 +810,32 @@ body.resizing-row { cursor: ns-resize; user-select: none; }
 /* ---- equations (MathLive) ------------------------------------------------- */
 
 /* The editable math field (customize mode). Typing builds structures live:
-   sqrt → √ with the caret inside, ^ → superscript slot, cos → \cos, … */
+   sqrt → √ with the caret inside, ^ → superscript slot, cos → \cos, …
+   Padding is symmetric — the field's own ☰ menu/keyboard-toggle icons are
+   hidden (below; a single corner control replaces them, see renderer.js),
+   so there's no floating icon on the right edge to clear any more. */
 math-field.pw-mathfield {
   display: block;
   width: 100%;
-  min-height: 46px;
-  /* right padding clears the absolutely-positioned MathLive keyboard toggle so
-     the end of a long equation never underlaps it */
-  padding: 6px 34px 6px 10px;
+  min-height: 50px;
+  padding: 10px 14px;
   border: 1px solid var(--line-2);
-  border-radius: 9px;
-  background: rgba(var(--ink-rgb), 0.03);
+  border-radius: 11px;
+  background: rgba(var(--ink-rgb), 0.035);
   color: var(--ink);
-  font-size: 19px;
+  font-size: 19.5px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
   --caret-color: var(--brass);
   --selection-background-color: rgba(var(--brass-rgb), 0.25);
   --contains-highlight-background-color: rgba(var(--brass-rgb), 0.12);
 }
-math-field.pw-mathfield:focus-within { outline: none; border-color: var(--brass); }
+math-field.pw-mathfield:hover { border-color: var(--line-2); background: rgba(var(--ink-rgb), 0.05); }
+math-field.pw-mathfield:focus-within {
+  outline: none;
+  border-color: var(--brass);
+  background: rgba(var(--ink-rgb), 0.05);
+  box-shadow: 0 0 0 3px rgba(var(--brass-rgb), 0.14);
+}
 
 /* Rendered (read-only) math in view mode and the modal. Never scrolls —
    .eq-render__inner scales down (JS, view.js fitEquations) to fit instead. */
@@ -881,7 +889,10 @@ body.eq-reordering .pw-eq-grip { cursor: grabbing; }
 .pw-eqlist__item .eq-render { min-width: 0; }
 
 /* Floating math keyboard: a movable panel (drag its toolbar), not a
-   full-width dock. Position rides the CSS vars set by the drag in view.js. */
+   full-width dock. Position rides the CSS vars set by the drag in view.js.
+   Frosted-glass treatment (blur + translucent panel, --keyboard-background
+   below) matches .sidebar's own blur — one floating chrome language across
+   the app — plus a thin brass top edge as a small identity touch. */
 .ML__keyboard .MLK__backdrop {
   left: auto !important;
   top: auto !important;
@@ -889,17 +900,19 @@ body.eq-reordering .pw-eq-grip { cursor: grabbing; }
   bottom: var(--atlas-kb-bottom, 26px) !important;
   width: min(720px, 94vw) !important;
   border: 1px solid var(--line-2);
+  border-top: 2px solid rgba(var(--brass-rgb), 0.4);
   border-radius: 16px;
   overflow: hidden;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   box-shadow: 0 30px 80px -24px rgba(0, 0, 0, 0.75);
 }
-.ML__keyboard .MLK__toolbar { cursor: grab; }
+.ML__keyboard .MLK__toolbar { cursor: grab; border-bottom: 1px solid var(--line); }
 
 /* MathLive ships its own palette; these are the hooks it exposes, so the
-   equation keyboard (and the little keyboard glyph that opens it) belongs to
-   the colour scheme like everything else. */
+   equation keyboard belongs to the colour scheme like everything else. */
 .ML__keyboard {
-  --keyboard-background: var(--panel);
+  --keyboard-background: color-mix(in srgb, var(--panel) 90%, transparent);
   --keyboard-text: var(--ink);
   --keyboard-text-active: var(--on-accent);
   --keyboard-accent-color: var(--brass);
@@ -921,9 +934,14 @@ body.eq-reordering .pw-eq-grip { cursor: grabbing; }
   --keyboard-toolbar-text-active: var(--brass);
   --keyboard-toolbar-background-hover: rgba(var(--ink-rgb), 0.07);
 }
-/* the keyboard glyph on a math field */
-math-field::part(virtual-keyboard-toggle), .ML__virtual-keyboard-toggle { color: var(--ink-faint); }
-math-field::part(virtual-keyboard-toggle):hover, .ML__virtual-keyboard-toggle:hover { color: var(--brass); }
+/* Per-field ☰ menu / keyboard-toggle icons are decluttered away (Chancellor:
+   "put them in the corner ... instead of the menu and math keyboard in
+   every text box") — one keyboard toggle now lives by Customize
+   (renderer.js) and drives every field via its focus/blur wiring there; the
+   field's own ☰ menu (trimmed of font/color/mode — see tuneMathFields in
+   view.js) stays reachable by right-click, MathLive's other built-in
+   trigger for the same menu. */
+math-field::part(menu-toggle), math-field::part(virtual-keyboard-toggle), .ML__virtual-keyboard-toggle { display: none; }
 math-field { --caret-color: var(--brass); --selection-background-color: rgba(var(--brass-rgb), 0.22); --contains-highlight-background-color: rgba(var(--brass-rgb), 0.12); }
 
 /* ---- gym plugin ----------------------------------------------------------- */

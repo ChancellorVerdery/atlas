@@ -16,29 +16,40 @@ import { MathfieldElement, convertLatexToMarkup } from 'mathlive'
 import 'mathlive/fonts.css'
 import 'mathlive/static.css'
 
-// No audio assets; the virtual keyboard only on explicit request (this is a
-// desktop app — typing IS the input method: sqrt → √, ^ → superscript, …).
+// No audio assets. The virtual keyboard is opt-in via the corner toggle next
+// to Customize (renderer.js) — every math-field ships
+// math-virtual-keyboard-policy="manual" so MathLive itself never auto-shows
+// it; that toggle's focus/blur wiring is the only thing that calls
+// mathVirtualKeyboard.show()/hide().
 MathfieldElement.soundsDirectory = null
 
-// A custom layer for the constructs a physical keyboard genuinely can't
+// Three custom layers for the constructs a physical keyboard genuinely can't
 // produce and that MathLive's built-in "symbols" layout only hides behind a
-// long-press (definite integral bounds) or doesn't include at all (sum and
-// product live on the "numeric" layout, which we don't load; matrices and
-// nth roots only exist in the desktop right-click Insert menu). Every key
-// taps directly to the full template — no long-press required to discover it.
-const CALC_LAYOUT = {
+// long-press (definite integral bounds, ∧/∨/⇒/⇔) or doesn't include at all
+// (sum and product live on the "numeric" layout, which we don't load;
+// matrices and nth roots only exist in the desktop right-click Insert menu).
+// Split by subject (Chancellor: "organize into a few labeled pages") so a
+// calculus-heavy session and a linear-algebra-heavy one aren't sharing one
+// crowded page. Every key taps directly to the full template — no
+// long-press required — EXCEPT constructs already reachable by typing plain
+// English-keyboard characters or MathLive's own word shortcuts (≤ via "<=",
+// ∀ via "AA", √ via "sqrt", …): those are deliberately left off so the
+// keyboard doesn't pad itself with redundant keys.
+const CALCULUS_LAYOUT = {
   label: '&int;&Sigma;&part;',
   labelClass: 'MLK__tex-math',
-  tooltip: 'Calculus — integrals, sums, derivatives, matrices',
+  tooltip: 'Calculus — integrals, sums, derivatives, limits',
   // Base keys show a clean illustrative glyph (no empty placeholder boxes)
   // via `latex`, but `insert` — the actual keystroke action — is the fully
-  // parameterized template. Every key carries `class: 'small'` and the big
-  // operators use `\textstyle` (bounds set inline beside the symbol, not
-  // stacked above/below): the keycap cells are only ~42px tall on the
-  // floating panel, so a display-style \sum with limits (~71px) would spill
-  // out the bottom of the last row and get clipped by the panel's rounded
-  // overflow. Long-press variants stay full display-style templates — those
-  // render at full size in the pop-up, not inside a keycap.
+  // parameterized template. Every key carries `class: 'small'` (uniform
+  // across all three custom pages, not just the tall ones) because the
+  // keycap cells are only ~42px tall on the floating panel, so a
+  // display-style \sum with limits (~71px) would spill out the bottom row
+  // and get clipped by the panel's rounded overflow; big operators
+  // additionally use `\textstyle` (bounds inline beside the symbol, not
+  // stacked above/below). Long-press variants stay full display-style
+  // templates — those render at full size in the pop-up, not inside a
+  // keycap.
   rows: [
     [
       {
@@ -80,14 +91,14 @@ const CALC_LAYOUT = {
       },
       { latex: '\\sqrt[n]{x}', class: 'small', insert: '\\sqrt[#?]{#?}', tooltip: 'Nth root' },
       {
-        latex: '\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}',
-        insert: '\\begin{pmatrix}#?&#?\\\\#?&#?\\end{pmatrix}',
-        tooltip: 'Matrix',
+        latex: '\\nabla f',
         class: 'small',
+        insert: '\\nabla#?',
+        tooltip: 'Gradient (nabla)',
         variants: [
-          { latex: '\\begin{bmatrix}#?&#?\\\\#?&#?\\end{bmatrix}', aside: 'brackets', class: 'small' },
-          { latex: '\\begin{vmatrix}#?&#?\\\\#?&#?\\end{vmatrix}', aside: 'determinant', class: 'small' },
-          { latex: '\\begin{pmatrix}#?&#?&#?\\\\#?&#?&#?\\\\#?&#?&#?\\end{pmatrix}', aside: '3×3', class: 'small' },
+          { latex: '\\nabla\\cdot\\vec F', insert: '\\nabla\\cdot#?', aside: 'divergence', class: 'small' },
+          { latex: '\\nabla\\times\\vec F', insert: '\\nabla\\times#?', aside: 'curl', class: 'small' },
+          { latex: '\\nabla^2 f', insert: '\\nabla^{2}#?', aside: 'Laplacian', class: 'small' },
         ],
       },
       { latex: '\\tbinom{n}{k}', class: 'small', insert: '\\binom{#?}{#?}', tooltip: 'Binomial coefficient' },
@@ -96,11 +107,142 @@ const CALC_LAYOUT = {
   ],
 }
 
+// Matrices/vectors/products moved here from the calculus page — a linear
+// algebra session shouldn't have to hunt through integral templates for a
+// determinant, and vice versa.
+const LINALG_LAYOUT = {
+  label: '[&#8945;]',
+  labelClass: 'MLK__tex-math',
+  tooltip: 'Linear algebra — matrices, vectors, dot & cross products',
+  rows: [
+    [
+      {
+        latex: '\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}',
+        insert: '\\begin{pmatrix}#?&#?\\\\#?&#?\\end{pmatrix}',
+        tooltip: 'Matrix',
+        class: 'small',
+        variants: [
+          { latex: '\\begin{bmatrix}#?&#?\\\\#?&#?\\end{bmatrix}', aside: 'brackets', class: 'small' },
+          { latex: '\\begin{vmatrix}#?&#?\\\\#?&#?\\end{vmatrix}', aside: 'determinant', class: 'small' },
+          { latex: '\\begin{pmatrix}#?&#?&#?\\\\#?&#?&#?\\\\#?&#?&#?\\end{pmatrix}', aside: '3×3', class: 'small' },
+          { latex: '\\begin{pmatrix}1&0\\\\0&1\\end{pmatrix}', aside: 'identity', class: 'small' },
+        ],
+      },
+      {
+        latex: '\\vec{v}',
+        class: 'small',
+        insert: '\\vec{#?}',
+        tooltip: 'Vector',
+        variants: [{ latex: '\\hat{v}', insert: '\\hat{#?}', aside: 'unit vector', class: 'small' }],
+      },
+      {
+        latex: 'a\\cdot b',
+        class: 'small',
+        insert: '#?\\cdot#?',
+        tooltip: 'Dot product',
+        variants: [{ latex: '\\cdot', insert: '\\cdot', aside: 'scalar dot', class: 'small' }],
+      },
+      {
+        latex: 'a\\times b',
+        class: 'small',
+        insert: '#?\\times#?',
+        tooltip: 'Cross product',
+        variants: [{ latex: '\\times', insert: '\\times', aside: 'cross/times', class: 'small' }],
+      },
+      {
+        latex: 'A^{\\mathsf{T}}',
+        class: 'small',
+        insert: '#?^{\\mathsf{T}}',
+        tooltip: 'Transpose',
+        variants: [
+          { latex: 'A^{\\dagger}', insert: '#?^{\\dagger}', aside: 'conjugate transpose', class: 'small' },
+          { latex: 'A^{-1}', insert: '#?^{-1}', aside: 'inverse', class: 'small' },
+        ],
+      },
+    ],
+    [
+      { latex: '\\lVert v \\rVert', class: 'small', insert: '\\lVert#?\\rVert', tooltip: 'Norm / magnitude' },
+      { latex: '\\frac{a}{b}', class: 'small', insert: '\\frac{#?}{#?}', tooltip: 'Fraction' },
+    ],
+  ],
+}
+
+// ∈ ∉ ⊆ ∪ ∩ ∀ ∃ ¬ ∧ ∨ ⇒ ⇔ and the common relations: all the "set theory &
+// logic" and "common relations" symbols the user asked for by name. Most
+// have a MathLive word-shortcut too (AA, EE, sube, uu, nn, …) but none of
+// those are printed on a physical keycap, so — unlike sqrt/sin/log, which
+// stay off the keyboard — they get direct taps here. Paired forms (∈/∉,
+// ∧/∨, ≤/≥, …) share one key via shift, the same way the built-in Greek
+// layer pairs lower/uppercase.
+const LOGICSETS_LAYOUT = {
+  label: '&isin;&forall;&not;',
+  labelClass: 'MLK__tex-math',
+  tooltip: 'Logic & sets — quantifiers, connectives, relations',
+  rows: [
+    [
+      { latex: '\\in', shift: '\\notin', class: 'small', tooltip: 'Element of / not an element of' },
+      {
+        latex: '\\subseteq',
+        shift: '\\supseteq',
+        class: 'small',
+        tooltip: 'Subset / superset (or equal)',
+        variants: [
+          { latex: '\\subset', aside: 'proper subset', class: 'small' },
+          { latex: '\\supset', aside: 'proper superset', class: 'small' },
+        ],
+      },
+      { latex: '\\cup', shift: '\\cap', class: 'small', tooltip: 'Union / intersection' },
+      { latex: '\\varnothing', class: 'small', tooltip: 'Empty set' },
+      {
+        latex: '\\forall',
+        shift: '\\exists',
+        class: 'small',
+        tooltip: 'For all / there exists',
+        variants: [{ latex: '\\nexists', aside: 'does not exist', class: 'small' }],
+      },
+    ],
+    [
+      { latex: '\\neg', class: 'small', tooltip: 'Logical not' },
+      { latex: '\\land', shift: '\\lor', class: 'small', tooltip: 'And / or' },
+      {
+        latex: '\\Rightarrow',
+        shift: '\\Leftrightarrow',
+        class: 'small',
+        tooltip: 'Implies / if and only if',
+        variants: [{ latex: '\\Leftarrow', aside: 'implied by', class: 'small' }],
+      },
+      {
+        latex: '\\to',
+        shift: '\\mapsto',
+        class: 'small',
+        tooltip: 'Maps to / arrow',
+        variants: [
+          { latex: '\\leftrightarrow', aside: 'iff arrow', class: 'small' },
+          { latex: '\\longrightarrow', aside: 'long arrow', class: 'small' },
+        ],
+      },
+      {
+        latex: '\\le',
+        shift: '\\ge',
+        class: 'small',
+        tooltip: 'Order & equivalence relations',
+        variants: [
+          { latex: '\\ne', aside: 'not equal', class: 'small' },
+          { latex: '\\approx', aside: 'approximately', class: 'small' },
+          { latex: '\\equiv', aside: 'equivalent', class: 'small' },
+          { latex: '\\propto', aside: 'proportional to', class: 'small' },
+        ],
+      },
+    ],
+  ],
+}
+
 // Virtual keyboard: only the layouts a physical keyboard CAN'T provide
-// (symbols + calc + greek — no alphabetic, no numeric), and it floats as a
-// movable panel instead of docking across the window (position via the CSS
-// vars below; the toolbar is the drag handle).
-window.mathVirtualKeyboard.layouts = ['symbols', CALC_LAYOUT, 'greek']
+// (symbols + calculus + linear algebra + logic/sets + greek — no
+// alphabetic, no numeric), and it floats as a movable panel instead of
+// docking across the window (position via the CSS vars below; the toolbar
+// is the drag handle).
+window.mathVirtualKeyboard.layouts = ['symbols', CALCULUS_LAYOUT, LINALG_LAYOUT, LOGICSETS_LAYOUT, 'greek']
 let kbDrag = null
 document.addEventListener('pointerdown', (e) => {
   const bar = e.target.closest?.('.MLK__toolbar')
@@ -208,6 +350,50 @@ export function fitEquations(rootEl) {
   }
 }
 
+// The field's ☰ menu (opened by right-click — its on-field button is hidden,
+// see styles.css) ships MathLive's full default: matrix row/col ops, matrix
+// border style, insert-matrix, a structural "insert" submenu (integral/sum/
+// derivative templates), math accents (vector arrows, dots, overline — not
+// a font feature), a mode switcher (math/text/raw-LaTeX-source), font
+// style/color/background-color submenus, and cut/copy(as 4 formats)/paste/
+// select-all. Chancellor: "disable all the font stuff — mode, font style,
+// color, background". Keep only the genuinely useful editing actions;
+// pruneMenuItems is an allowlist by id, not a denylist, so anything new a
+// MathLive upgrade adds shows up OFF by default rather than sneaking back
+// in the "font stuff" bucket.
+const MENU_KEEP_IDS = new Set([
+  'add-row-above', 'add-row-below', 'add-column-before', 'add-column-after',
+  'delete-row', 'delete-column',
+  'insert-matrix', 'insert', 'accent',
+  'cut', 'copy', 'paste', 'select-all',
+])
+// Pure and side-effect-free (see mathkbd.check.mjs) — takes whatever
+// mf.menuItems returns and filters it, so it works whether that's MathLive's
+// live default or (idempotently) an already-pruned array from a prior call.
+export function pruneMenuItems(items) {
+  const kept = (items ?? []).filter((it) =>
+    it.type === 'divider' || (it.id ? MENU_KEEP_IDS.has(it.id) : it.submenuClass === 'border-submenu')
+  )
+  // Filtering strands some dividers at the start/end or back-to-back —
+  // collapse those rather than leave orphaned separator lines in the menu.
+  const out = []
+  for (const it of kept) {
+    if (it.type === 'divider' && (!out.length || out[out.length - 1].type === 'divider')) continue
+    out.push(it)
+  }
+  if (out[out.length - 1]?.type === 'divider') out.pop()
+  // "Copy" ships 4 export formats (LaTeX/Typst/ASCII-math/MathML) — the
+  // "different types" the user doesn't want; only LaTeX ("math print that
+  // uses backslashes") stays. MathLive 0.110 gives the LaTeX and Typst
+  // entries the SAME id ("copy-latex" — an upstream duplicate), so filter on
+  // the LaTeX entry's keyboard shortcut instead, which is unique.
+  return out.map((it) =>
+    it.id === 'copy' && it.submenu
+      ? { ...it, submenu: it.submenu.filter((s) => s.keyboardShortcut === 'meta+C') }
+      : it
+  )
+}
+
 // MathLive disables the spacebar in math mode by default; give it a real
 // horizontal space so typing flows naturally in equation fields. Also patch
 // its inline-shortcut gaps (merge so the built-ins survive):
@@ -216,6 +402,9 @@ export function fitEquations(rootEl) {
 //    arccsc (and most inverse-hyperbolics) but is missing these three, so
 //    typing "arccot" gave "arc" as variables followed by \cot.
 // Shared by every page that mounts math-fields (Equations widgets, Study).
+// Idempotent — it re-runs on every render, and every step here (assigning
+// mode/inlineShortcuts/menuItems) is a plain overwrite, safe to repeat on
+// the same field or a freshly-mounted one.
 export function tuneMathFields(rootEl) {
   for (const mf of rootEl.querySelectorAll('math-field')) {
     mf.mathModeSpace = '\\;'
@@ -226,6 +415,16 @@ export function tuneMathFields(rootEl) {
       arcsinh: '\\operatorname{arcsinh}',
       arccoth: '\\operatorname{arccoth}',
     }
+    // Pin to math mode edited via LaTeX/backslash commands — the only mode
+    // the user wants (the ☰ menu's math/text/latex-source switcher is gone,
+    // see pruneMenuItems, but this also forecloses any other path in).
+    mf.mode = 'math'
+    // mf.menuItems throws until the element's connectedCallback has run;
+    // every math-field here was just parsed into a live rootEl via
+    // innerHTML, so the custom element upgrade (and thus the mount) already
+    // happened synchronously — this is a defensive guard, not an expected
+    // throw path.
+    try { mf.menuItems = pruneMenuItems(mf.menuItems) } catch { /* not mounted yet */ }
   }
 }
 

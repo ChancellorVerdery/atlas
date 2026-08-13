@@ -87,6 +87,56 @@ const authState = () => {
   try { return JSON.parse(localStorage.getItem('atlas.auth.v1')) || {} } catch { return {} }
 }
 
+// ---- math keyboard corner control -----------------------------------------
+// One toggle, next to Customize, replaces the per-field keyboard/menu
+// buttons that used to live in every math-field's corner (Chancellor:
+// "instead of the menu and math keyboard in every text box, put them in the
+// corner of the screen next to the customize button"). Every math-field
+// (Equations widgets AND Study — view.js's tuneMathFields tunes both, and
+// they share the one window.mathVirtualKeyboard singleton) mounts with
+// math-virtual-keyboard-policy="manual", so MathLive never auto-shows it —
+// this toggle's focus/blur wiring is the only thing that calls show()/hide().
+// OFF: never shows, even with the caret in a field. ON: shows the moment a
+// math-field is focused, hides the moment focus leaves one (clicking
+// straight from field A into field B keeps it open — see the focusout
+// handler's relatedTarget check).
+let kbEnabled = false
+const isMathField = (el) => !!el?.closest?.('math-field')
+function setKbEnabled(on) {
+  if (kbEnabled === on) return
+  kbEnabled = on
+  document.getElementById('mathkbd-toggle')?.classList.toggle('is-active', on)
+  if (on) { if (isMathField(document.activeElement)) window.mathVirtualKeyboard.show() }
+  else window.mathVirtualKeyboard.hide()
+}
+document.addEventListener('focusin', (e) => {
+  if (kbEnabled && isMathField(e.target)) window.mathVirtualKeyboard.show()
+})
+document.addEventListener('focusout', (e) => {
+  if (!isMathField(e.target)) return
+  const next = e.relatedTarget || document.activeElement
+  if (!isMathField(next)) window.mathVirtualKeyboard.hide()
+})
+// Mirrors the Customize button's own markup/placement (index.html) — built
+// here instead of there because index.html is the one shared shell file this
+// pass doesn't own. Always visible (unlike #customize, which hides on
+// widgetless full-window plugins — see render()'s cbtn block): Study is one
+// of those full-window plugins and it mounts math-fields too, so the toggle
+// can't be gated on Customize being available.
+{
+  const actions = document.querySelector('.topbar__actions')
+  if (actions) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.id = 'mathkbd-toggle'
+    btn.className = 'action-btn'
+    btn.dataset.act = 'toggle-mathkbd'
+    btn.title = 'Math keyboard'
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="13" rx="2.2"/><line x1="6" y1="10.3" x2="6" y2="10.3"/><line x1="9.7" y1="10.3" x2="9.7" y2="10.3"/><line x1="13.4" y1="10.3" x2="13.4" y2="10.3"/><line x1="17.1" y1="10.3" x2="17.1" y2="10.3"/><line x1="6" y1="14.8" x2="17.5" y2="14.8"/></svg><span>Math keys</span>`
+    actions.insertBefore(btn, actions.firstChild)
+  }
+}
+
 let customizing = false
 function setCustomizing(on) {
   if (customizing === on) return
@@ -98,7 +148,15 @@ function setCustomizing(on) {
     btn.querySelector('span').textContent = on ? 'Done' : 'Customize'
   }
   if (on) enterCustomize({ rerender: render, pageDef: route().def })
-  else exitCustomize()
+  else {
+    // Leaving Customize auto-closes the math keyboard (and, via the blur,
+    // any field ☰ menu left open — MathLive closes those on the field
+    // losing focus, the same as any other dropdown) rather than leaving it
+    // stranded on-screen over a page that no longer has editable fields.
+    if (isMathField(document.activeElement)) document.activeElement.blur()
+    exitCustomize()
+    setKbEnabled(false)
+  }
   render()
 }
 
@@ -518,6 +576,7 @@ document.body.addEventListener('click', (e) => {
     // resolves fine offline, where sync.request rejects instead of hanging.
     if (act.dataset.act === 'logout') { window.atlasLogout?.(); return }
     if (act.dataset.act === 'customize') { setCustomizing(!customizing); return }
+    if (act.dataset.act === 'toggle-mathkbd') { setKbEnabled(!kbEnabled); return }
     if (act.dataset.act === 'gmail-connect') {
       act.disabled = true
       connectGmail()
