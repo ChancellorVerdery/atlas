@@ -5,7 +5,7 @@
 // look like clock time), but a tightly-packed region gets its y-axis EXPANDED
 // so every card clears a readable minimum instead of overlapping into a pile.
 
-import { loadLadder, saveLadder, addFlex, removeFlex, buildPlan, dateKey, WEEKDAYS } from './ladder.js'
+import { loadLadder, saveLadder, addFlex, updateFlex, removeFlex, setGapOverride, buildPlan, dateKey, WEEKDAYS } from './ladder.js'
 import { ensureCalendar, createEvent, deleteEvent, tz } from './calendar.js'
 import { isConnected } from './email.js'
 
@@ -79,38 +79,50 @@ const parseDur = (v) => {
 }
 
 let seq = 0 // render generation — a stale async plan must not paint over a newer one
+// Editing an existing flex/set event reuses the add bar: its fields prefill
+// from the event, the Add button becomes Save, and a Cancel button appears.
+// Cleared on save, cancel, or navigating away.
+let editingId = null
 
 export function renderLadderPage(root, rerender) {
   const s = loadLadder()
   const mySeq = ++seq
+  // ef = the flex entry being edited, if any — prefills the bar below.
+  const ef = editingId ? s.flex.find((f) => f.id === editingId) : null
+  if (editingId && !ef) editingId = null // its block/day fell out of the window or was deleted
+  const anchorVal = ef ? (ef.anchorTag ? `tag:${ef.anchorTag}` : ef.anchorSeries ? `series:${ef.anchorSeries}` : ef.anchorId ? `id:${ef.anchorId}` : '') : ''
+  const sel = (v, cur) => v === cur ? ' selected' : ''
   root.innerHTML = `<div class="lad">
     <div class="lad-bar">
-      <input class="pw-field lad-title" id="lad-new-title" placeholder="Flexible event, e.g. Project work" aria-label="Event title">
-      <input class="pw-field wk-num" id="lad-new-dur" placeholder="h:mm" title="Duration (h:mm or minutes)" aria-label="Duration">
+      <input class="pw-field lad-title" id="lad-new-title" placeholder="Flexible event, e.g. Project work" aria-label="Event title" value="${esc(ef ? ef.title : '')}">
+      <input class="pw-field wk-num" id="lad-new-dur" placeholder="h:mm" title="Duration (h:mm or minutes)" aria-label="Duration" value="${ef && ef.kind !== 'set' ? esc(ef.minutes) : ''}">
       <select class="pw-field" id="lad-new-kind" aria-label="When">
-        <option value="week">Anytime this window</option>
-        <option value="day">Specific day</option>
-        <option value="recur">Every week on…</option>
-        <option value="attached">Attached to…</option>
-        <option value="set">Set event (fixed time)</option>
+        <option value="week"${sel('week', ef?.kind || 'week')}>Anytime this window</option>
+        <option value="day"${sel('day', ef?.kind)}>Specific day</option>
+        <option value="recur"${sel('recur', ef?.kind)}>Every week on…</option>
+        <option value="attached"${sel('attached', ef?.kind)}>Attached to…</option>
+        <option value="set"${sel('set', ef?.kind)}>Set event (fixed time)</option>
       </select>
-      <input class="pw-field" id="lad-new-date" type="date" value="${dateKey(Date.now())}" hidden aria-label="Day">
-      <input class="pw-field wk-num" id="lad-new-start" type="time" hidden aria-label="Start time" title="Start time">
-      <input class="pw-field wk-num" id="lad-new-end" type="time" hidden aria-label="End time" title="End time">
+      <input class="pw-field" id="lad-new-date" type="date" value="${esc(ef?.date || dateKey(Date.now()))}" hidden aria-label="Day">
+      <input class="pw-field wk-num" id="lad-new-start" type="time" value="${esc(ef?.start || '')}" hidden aria-label="Start time" title="Start time">
+      <input class="pw-field wk-num" id="lad-new-end" type="time" value="${esc(ef?.end || '')}" hidden aria-label="End time" title="End time">
+      <input class="pw-field lad-addr" id="lad-new-addr" placeholder="Address (optional — for drive time)" value="${esc(ef?.addr || '')}" hidden aria-label="Address">
       <select class="pw-field" id="lad-new-weekday" hidden aria-label="Weekday">
-        ${WEEKDAYS.map((d, i) => `<option value="${i}">${d}</option>`).join('')}
+        ${WEEKDAYS.map((d, i) => `<option value="${i}"${sel(i, ef?.weekday)}>${d}</option>`).join('')}
       </select>
       <select class="pw-field" id="lad-new-side" hidden aria-label="Attach side" title="Pair to the front or the back of the anchor">
-        <option value="after">After</option>
-        <option value="before">Before</option>
+        <option value="after"${sel('after', ef?.side || 'after')}>After</option>
+        <option value="before"${sel('before', ef?.side)}>Before</option>
       </select>
-      <select class="pw-field" id="lad-new-anchor" hidden aria-label="Anchor event" title="What this event is paired to"></select>
-      <select class="pw-field" id="lad-new-place" hidden aria-label="Where it happens" title="Where the paired block happens — 'at home' pulls the drive home in between">
-        <option value="home">at home</option>
-        <option value="same">at the same place</option>
-        <option value="none">no place</option>
+      <select class="pw-field" id="lad-new-anchor" hidden aria-label="Anchor event" title="What this event is paired to" data-want="${esc(anchorVal)}"></select>
+      <select class="pw-field" id="lad-new-place" hidden aria-label="Where it happens" title="Where the paired block happens — 'at home'/'at the office' pulls that drive in between">
+        <option value="home"${sel('home', ef?.place || 'home')}>at home</option>
+        <option value="office"${sel('office', ef?.place)}>at the office</option>
+        <option value="same"${sel('same', ef?.place)}>at the same place</option>
+        <option value="none"${sel('none', ef?.place)}>no place</option>
       </select>
-      <button type="button" class="gym-btn" data-lad="add">Add</button>
+      <button type="button" class="gym-btn" data-lad="add">${ef ? 'Save changes' : 'Add'}</button>
+      <button type="button" class="gym-btn lad-cancel-edit" data-lad="cancel-edit"${ef ? '' : ' hidden'}>Cancel</button>
       <button type="button" class="gym-btn lad-push-all" data-lad="push-all" title="Push every day of the plan to your Google calendars">Push all to calendar</button>
       <span class="gf-status" id="lad-status">Planning…</span>
     </div>
@@ -118,16 +130,20 @@ export function renderLadderPage(root, rerender) {
     <div class="lad-scroll"><div class="lad-canvas" id="lad-canvas"></div></div>
   </div>`
 
-  root.querySelector('#lad-new-kind').onchange = (e) => {
-    const k = e.target.value
+  const kindSel = root.querySelector('#lad-new-kind')
+  const syncKindVisibility = () => {
+    const k = kindSel.value
     root.querySelector('#lad-new-date').hidden = !(k === 'day' || k === 'set')
     root.querySelector('#lad-new-start').hidden = k !== 'set'
     root.querySelector('#lad-new-end').hidden = k !== 'set'
+    root.querySelector('#lad-new-addr').hidden = k !== 'set'
     root.querySelector('#lad-new-dur').hidden = k === 'set' // a set event's length is its start→end, not a duration
     root.querySelector('#lad-new-weekday').hidden = k !== 'recur'
     root.querySelector('#lad-new-title').placeholder = k === 'set' ? 'Set event, e.g. Dentist' : 'Flexible event, e.g. Project work'
     for (const id of ['lad-new-side', 'lad-new-anchor', 'lad-new-place']) root.querySelector('#' + id).hidden = k !== 'attached'
   }
+  kindSel.onchange = syncKindVisibility
+  syncKindVisibility() // also applies when editing preloads a non-default kind
   root.onclick = (e) => {
     const el = e.target.closest('[data-lad]')
     if (!el) return
@@ -137,19 +153,28 @@ export function renderLadderPage(root, rerender) {
       const minutes = parseDur(root.querySelector('#lad-new-dur').value)
       if (!title.trim() || (kind !== 'set' && !minutes)) return
       const anchorSel = root.querySelector('#lad-new-anchor')
-      const added = addFlex(loadLadder(), {
+      const fields = {
         title, minutes, kind,
         date: root.querySelector('#lad-new-date').value,
         start: root.querySelector('#lad-new-start').value,
         end: root.querySelector('#lad-new-end').value,
+        addr: root.querySelector('#lad-new-addr').value,
         weekday: root.querySelector('#lad-new-weekday').value,
         side: root.querySelector('#lad-new-side').value,
         anchor: anchorSel.value,
         anchorLabel: anchorSel.selectedOptions[0]?.textContent || '',
         place: root.querySelector('#lad-new-place').value,
-      })
-      if (added) renderLadderPage(root, rerender)
+      }
+      const saved = editingId ? updateFlex(loadLadder(), editingId, fields) : addFlex(loadLadder(), fields)
+      if (saved) { editingId = null; renderLadderPage(root, rerender) }
+    } else if (el.dataset.lad === 'cancel-edit') {
+      editingId = null
+      renderLadderPage(root, rerender)
+    } else if (el.dataset.lad === 'edit-flex') {
+      editingId = el.dataset.id
+      renderLadderPage(root, rerender)
     } else if (el.dataset.lad === 'del-flex') {
+      if (editingId === el.dataset.id) editingId = null
       removeFlex(loadLadder(), el.dataset.id)
       renderLadderPage(root, rerender)
     } else if (el.dataset.lad === 'push-day') {
@@ -160,6 +185,12 @@ export function renderLadderPage(root, rerender) {
       const days = lastPlan ? [...Array(lastPlan.days).keys()].map((i) => dateKey(lastPlan.windowStart + i * 86400000)) : []
       pushDays(days, root, rerender)
     }
+  }
+  root.onchange = (e) => {
+    const el = e.target.closest('[data-lad="gap-override"]')
+    if (!el) return
+    setGapOverride(loadLadder(), el.dataset.id, el.value)
+    renderLadderPage(root, rerender)
   }
 
   buildPlan().then((plan) => {
@@ -190,7 +221,10 @@ function drawPlan(root, plan, s) {
     // recurringEventId), so you pair to EVERY occurrence, not one instance
     const series = new Map()
     for (const b of plan.blocks) if (b.type === 'cal' && b.recurringId && !series.has(b.recurringId)) series.set(b.recurringId, b.title)
-    const keep = anchorSel.value
+    // keep = whatever's already selected (re-render after a push, etc); want =
+    // the value an edit-in-progress wants prefilled (set once by
+    // renderLadderPage, consumed here since the options don't exist yet then)
+    const keep = anchorSel.value || anchorSel.dataset.want
     anchorSel.innerHTML = `<optgroup label="Every…">
         <option value="tag:gym">every gym session</option>
         <option value="tag:shift">every work shift</option>
@@ -204,6 +238,7 @@ function drawPlan(root, plan, s) {
         ${specific.map((b) => `<option value="id:${esc(b.id)}">${esc(b.title)} · ${esc(dayLabel(b.start))} ${time12(b.start)}</option>`).join('')}
       </optgroup>`
     if (keep && [...anchorSel.options].some((o) => o.value === keep)) anchorSel.value = keep
+    delete anchorSel.dataset.want
   }
   const { y, total } = buildYMap(plan.blocks, plan.windowStart, plan.windowEnd)
   if (window.__ladder === plan) window.__ladder.y = y // test hook: query mapped positions
@@ -257,13 +292,30 @@ function drawPlan(root, plan, s) {
       const place = b.toPlace || (b.toType === 'sleep' ? 'home' : null)
       const dest = place === 'home' ? 'home' : place === 'work' ? 'to work' : place === 'gym' ? 'to the gym' : `to ${esc(b.toTitle)}`
       const destName = place === 'home' ? 'home' : place === 'work' ? 'work' : place === 'gym' ? 'the gym' : esc(b.toTitle)
-      html += `<div class="lad-card lad-card--drive lad-drive--to-${esc(b.toType)}" style="top:${top}px;height:${h}px" title="Drive ${destName} · ${time12(b.start)}–${time12(b.end)} (${b.mins} min drive + ${b.minutes - b.mins} min cushion)">
-        <span class="lad-card__title">${time12(b.start)} – ${time12(b.end)} drive ${dest}</span></div>`
+      // Gaps whose choice was actually decided (gapId set — the leg that
+      // arrives at the real next block, not a synthetic there-and-back "out"
+      // leg) get a small override control: force wait/home/office/straight,
+      // or clear back to Auto. Reads/writes s.gapOverrides via setGapOverride.
+      const gapCtl = b.gapId ? `<select class="lad-gap-ovr" data-lad="gap-override" data-id="${esc(b.gapId)}" title="Override how this gap between events is spent">
+        <option value=""${b.gapForced ? '' : ' selected'}>Auto · ${esc(b.gapChoice)}</option>
+        <option value="wait"${b.gapForced && b.gapChoice === 'wait' ? ' selected' : ''}>Wait there</option>
+        <option value="home"${b.gapForced && b.gapChoice === 'home' ? ' selected' : ''}>Go home</option>
+        <option value="office"${b.gapForced && b.gapChoice === 'office' ? ' selected' : ''}>Go to office</option>
+        <option value="straight"${b.gapForced && b.gapChoice === 'straight' ? ' selected' : ''}>Straight there</option>
+      </select>` : ''
+      html += `<div class="lad-card lad-card--drive lad-drive--to-${esc(b.toType)}${gapCtl ? ' lad-card--drive-ovr' : ''}" style="top:${top}px;height:${h}px" title="Drive ${destName} · ${time12(b.start)}–${time12(b.end)} (${b.mins} min drive + ${b.minutes - b.mins} min cushion)">
+        <span class="lad-card__title">${time12(b.start)} – ${time12(b.end)} drive ${dest}</span>${gapCtl}</div>`
       continue
     }
-    const del = b.flexId && flexById.has(b.flexId)
-      ? `<button type="button" class="pw-item-remove lad-card__x" data-lad="del-flex" data-id="${esc(b.flexId)}" title="Remove flexible event">×</button>` : ''
+    const editable = b.flexId && flexById.has(b.flexId)
     const compact = h < 34
+    // The delete × sits dead-center on the y-axis for a short (compact) card —
+    // .lad-card__x's plain top:4px offset looks fine on a normal-height card
+    // (anchored by the title line near the top) but on a card barely taller
+    // than the button itself, that fixed offset pushes it visibly off-center
+    // and can even clip it against the card's overflow:hidden bottom edge.
+    const del = editable
+      ? `<button type="button" class="pw-item-remove lad-card__x${compact ? ' lad-card__x--mid' : ''}" data-lad="del-flex" data-id="${esc(b.flexId)}" title="Remove flexible event">×</button>` : ''
     // Calendar cards show their event's location; red when it couldn't be
     // geocoded (so the user knows to add an alias in Settings). The happy-path
     // line needs room; the NOT-FOUND warning always shows, even on short cards.
@@ -276,7 +328,11 @@ function drawPlan(root, plan, s) {
     const pair = b.attached ? `⧉ ` : ''
     const pairTip = b.attached ? ` — attached ${esc(b.side)} “${esc(b.anchorTitle)}”` : ''
     const compactAttachedTime = compact && b.attached ? ` · ${time12(b.start)}–${time12(b.end)}` : ''
-    html += `<div class="lad-card lad-card--${esc(b.type)}${b.attached ? ' lad-card--attached' : ''}" style="top:${top}px;height:${h}px" title="${esc(b.title)} · ${time12(b.start)}–${time12(b.end)}${b.place ? ` · ${esc(b.place)}` : ''}${pairTip}">
+    // Editable cards (anything created within the Ladder — flex/day/recur/
+    // week/attached/set) open the add bar pre-filled for editing on click;
+    // the delete × (its own data-lad) still wins when that's what's clicked.
+    const editAttr = editable ? ` data-lad="edit-flex" data-id="${esc(b.flexId)}"` : ''
+    html += `<div class="lad-card lad-card--${esc(b.type)}${b.attached ? ' lad-card--attached' : ''}${editable ? ' lad-card--editable' : ''}" style="top:${top}px;height:${h}px"${editAttr} title="${esc(b.title)} · ${time12(b.start)}–${time12(b.end)}${b.place ? ` · ${esc(b.place)}` : ''}${pairTip}${editable ? ' — click to edit' : ''}">
       ${del}
       <span class="lad-card__title">${pair}${esc(b.title)}${compactAttachedTime}</span>
       ${compact ? '' : `<span class="lad-card__time">${time12(b.start)} – ${time12(b.end)} · ${durTxt}${b.attached ? ` · with ${esc(b.anchorTitle)}` : ''}</span>`}
@@ -425,6 +481,19 @@ export function renderLadderSettings(container, rerender) {
       <input class="pw-field wk-num" type="number" min="0" step="1" data-lad-set="buffer" value="${esc(s.buffer)}" aria-label="Drive buffer minutes">
     </div>
 
+    <p class="gym-group">Between-event travel (a gap can wait where you are, or send you home/to the office and back)</p>
+    <div class="set-row">
+      <div class="set-row__meta"><span class="set-row__name">Trip-home dwell floor</span>
+        <span class="set-row__sub">A gap only routes you home or to the office if you'd actually get at least this much real time there, after both drive legs — otherwise the planner just keeps you where you are.</span></div>
+      <input class="pw-field wk-num" type="number" min="0" step="5" data-lad-set="dwellFloorMin" value="${esc(s.dwellFloorMin)}" aria-label="Dwell floor minutes">
+    </div>
+    <div class="set-row">
+      <div class="set-row__meta"><span class="set-row__name">Round-trip drive cap</span>
+        <span class="set-row__sub">The round trip home/to office must cost less than this share of the gap (0–1) to be worth it — e.g. 0.5 means under half the gap spent driving.</span></div>
+      <input class="pw-field wk-num" type="number" min="0.05" max="1" step="0.05" data-lad-set="roundTripFrac" value="${esc(s.roundTripFrac)}" aria-label="Round-trip fraction cap">
+    </div>
+    <p class="gym-sub">Overrides per gap live right on its drive card in the timeline. Job type (shift vs. salary — shift never routes home/office mid-shift) is set in <a href="#/work/settings">Work → Settings</a>.</p>
+
     <p class="gym-group">Meals (flexible — placed near their preferred time)</p>
     ${s.meals.map((m) => `<div class="gym-add-row" data-meal-id="${esc(m.id)}">
       <input class="pw-field" data-lad-meal="name" value="${esc(m.name)}" aria-label="Meal name">
@@ -481,7 +550,10 @@ export function renderLadderSettings(container, rerender) {
     const set = e.target.closest('[data-lad-set]')
     if (set && set.dataset.ladSet in s2) {
       const k = set.dataset.ladSet
-      s2[k] = k === 'windowDays' || k === 'buffer' ? Math.max(k === 'windowDays' ? 1 : 0, Number(set.value) || 0) : set.value
+      if (k === 'windowDays') s2[k] = Math.max(1, Number(set.value) || 0)
+      else if (k === 'buffer' || k === 'dwellFloorMin') s2[k] = Math.max(0, Number(set.value) || 0)
+      else if (k === 'roundTripFrac') s2[k] = Math.min(1, Math.max(0.05, Number(set.value) || 0))
+      else s2[k] = set.value
       saveLadder(s2)
       return
     }

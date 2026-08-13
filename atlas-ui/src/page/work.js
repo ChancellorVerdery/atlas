@@ -17,6 +17,11 @@ export function loadWork() {
   if (!Array.isArray(s.upcoming)) s.upcoming = [] // scheduled future shifts {id, date, start, end, gcalId}
   if (typeof s.address !== 'string') s.address = '' // workplace, used by the Ladder planner for drive times
   if (typeof s.calId !== 'string') s.calId = '' // the dedicated "Atlas Work" Google calendar id
+  // 'shift' (serving, on-call — locked in for the whole block, never leaves
+  // mid-shift) vs 'salary' (desk job — may step out and back to the office
+  // between events). Consumed by the Ladder's gap-travel heuristic. Default
+  // 'shift': Chancellor's a service worker.
+  if (s.jobType !== 'shift' && s.jobType !== 'salary') s.jobType = 'shift'
   return s
 }
 export function saveWork(s) { localStorage.setItem(KEY, JSON.stringify(s)) }

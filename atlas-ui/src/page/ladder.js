@@ -47,6 +47,17 @@ export function loadLadder() {
   s.flex = s.flex.filter((f) => isObj(f) && f.id && f.title && Number(f.minutes) > 0)
   if (!isObj(s.geo)) s.geo = {} // address (lowercased) → {lat, lon} | null (null = geocode failed, cached)
   if (!isObj(s.drives)) s.drives = {} // "lat,lon>lat,lon" → minutes
+  // Gap-travel heuristic thresholds (see chooseGapTravel) — user-redefinable
+  // defaults, not hardcoded constants, per Chancellor's call.
+  if (!Number.isFinite(Number(s.dwellFloorMin)) || s.dwellFloorMin < 0) s.dwellFloorMin = 45 // real minutes at home/office, after both drive legs, to be worth the trip
+  if (!Number.isFinite(Number(s.roundTripFrac)) || s.roundTripFrac <= 0 || s.roundTripFrac > 1) s.roundTripFrac = 0.5 // round trip must cost less than this share of the gap
+  if (!isObj(s.gapOverrides)) s.gapOverrides = {} // arriving block id → forced 'wait'|'home'|'office'|'straight'
+  // ponytail: keyed by the arriving block's id, which is stable for cal/shift/
+  // set blocks (real ids) but for meal/gym/week-flex blocks embeds the day
+  // index relative to the CURRENT window start — an override on one of those
+  // won't survive the window rolling to a new "day 0". Fine for the common
+  // case (a specific calendar event or shift); a future pass could key gym/
+  // meal overrides some other stable way if that turns out to matter.
   // Re-round on every load, not just when freshly fetched: a cache HIT
   // returns whatever's stored verbatim (routeMinutes never re-touches it),
   // so a value cached before this rounding rule existed — or from any other
@@ -75,10 +86,12 @@ export function saveLadder(s) { localStorage.setItem(KEY, JSON.stringify(s)) }
 // kind 'attached' pairs the event to another block's front or back edge —
 // anchor is either "tag:<blockType>" (every gym session / shift / calendar
 // event) or "id:<planBlockId>" (one specific upcoming event). place decides
-// where it happens: 'home' (the drive home gets pulled in between), 'same'
-// (at the anchor's location), or 'none'.
-export function addFlex(s, { title, minutes, kind, date, start, end, weekday, side, anchor, anchorLabel, place }) {
-  const f = { id: uid('lf'), title: title.trim(), minutes: Math.round(Number(minutes)), kind }
+// where it happens: 'home' (the drive home gets pulled in between), 'office'
+// (same, but to the Work plugin's work address), 'same' (at the anchor's
+// location), or 'none'. kind 'set' can carry its own free-typed `addr` (a
+// user-editable location), so a set event can chain into drive times too.
+function buildFlexFields({ title, minutes, kind, date, start, end, weekday, side, anchor, anchorLabel, place, addr }) {
+  const f = { title: (title || '').trim(), minutes: Math.round(Number(minutes)), kind }
   if (kind === 'day') f.date = date
   if (kind === 'recur') f.weekday = Number(weekday)
   if (kind === 'set') {
@@ -87,10 +100,11 @@ export function addFlex(s, { title, minutes, kind, date, start, end, weekday, si
     const a = hmToMin(start), b = hmToMin(end)
     if (!date || a == null || b == null || !(b > a)) return null
     f.date = date; f.start = start; f.end = end; f.minutes = b - a
+    f.addr = (addr || '').trim()
   }
   if (kind === 'attached') {
     f.side = side === 'before' ? 'before' : 'after'
-    f.place = ['home', 'same'].includes(place) ? place : 'none'
+    f.place = ['home', 'office', 'same'].includes(place) ? place : 'none'
     if (typeof anchor !== 'string') return null
     if (anchor.startsWith('tag:')) f.anchorTag = anchor.slice(4)
     else if (anchor.startsWith('series:')) { f.anchorSeries = anchor.slice(7); f.anchorLabel = anchorLabel || '' }
@@ -99,12 +113,39 @@ export function addFlex(s, { title, minutes, kind, date, start, end, weekday, si
   }
   if (!f.title || !(f.minutes > 0)) return null
   if (kind === 'day' && !f.date) return null
+  return f
+}
+export function addFlex(s, fields) {
+  const built = buildFlexFields(fields)
+  if (!built) return null
+  const f = { id: uid('lf'), ...built }
   s.flex.push(f)
   saveLadder(s)
   return f
 }
+// Same validation/shape as addFlex, but replaces an existing entry in place
+// (id kept) — the "edit this event" path in ladderui.js.
+export function updateFlex(s, id, fields) {
+  const built = buildFlexFields(fields)
+  if (!built) return null
+  const i = s.flex.findIndex((f) => f.id === id)
+  if (i === -1) return null
+  s.flex[i] = { id, ...built }
+  saveLadder(s)
+  return s.flex[i]
+}
 export function removeFlex(s, id) {
   s.flex = s.flex.filter((f) => f.id !== id)
+  saveLadder(s)
+}
+
+// Per-gap manual override — wins over chooseGapTravel's automatic pick for
+// the gap that arrives at block `blockId`. choice='' (or anything not in the
+// enum) clears the override back to automatic.
+export function setGapOverride(s, blockId, choice) {
+  if (!blockId) return
+  if (['wait', 'home', 'office', 'straight'].includes(choice)) s.gapOverrides[blockId] = choice
+  else delete s.gapOverrides[blockId]
   saveLadder(s)
 }
 
@@ -201,6 +242,36 @@ function placeNear(gaps, pref, dur, notBefore = -Infinity) {
   return best
 }
 
+// ---- gap travel heuristic ---------------------------------------------------------
+
+// Decides how a gap between two located events gets spent: WAIT at the
+// previous location (the default — one direct drive right before the next
+// event starts), a there-and-back trip to `base` ('home' or 'office'), or
+// STRAIGHT through when the gap barely covers the direct drive at all (no
+// slack to plan around, so "waiting" wouldn't mean anything). A there-and-back
+// only wins when it leaves real dwell time at the base AFTER both drive legs
+// (dwellFloorMin) AND the round trip itself doesn't eat too much of the gap
+// (roundTripFrac) — both are Ladder settings the user can redefine.
+// base=null (no home/office candidate available — mid-shift, or neither
+// configured/reachable) always resolves to 'wait'/'straight', never
+// 'home'/'office'; that's how the shift-vs-salary + Work-not-configured
+// fallback is enforced — this function never sees a jobType, the caller in
+// buildPlan just doesn't offer a base when one shouldn't be offered.
+export function chooseGapTravel({ gapMinutes, driveToBaseMin, driveBaseToNextMin, driveDirectMin, dwellFloorMin, roundTripFrac, base }) {
+  // Number.isFinite (not a bare >= 0 check) on purpose: `null >= 0` is true in
+  // JS (null coerces to 0), which would silently treat "no known route" as a
+  // free/instant drive instead of bailing out.
+  if (!Number.isFinite(driveDirectMin) || driveDirectMin < 0) return 'wait' // no known direct route — nothing to plan around
+  const idle = gapMinutes - driveDirectMin
+  if (idle <= 0) return 'straight' // the gap barely covers the direct drive — just go
+  if (base && Number.isFinite(driveToBaseMin) && Number.isFinite(driveBaseToNextMin)) {
+    const roundTrip = driveToBaseMin + driveBaseToNextMin
+    const dwell = gapMinutes - roundTrip
+    if (dwell >= dwellFloorMin && roundTrip <= gapMinutes * roundTripFrac) return base
+  }
+  return 'wait'
+}
+
 // ---- the plan --------------------------------------------------------------------
 
 // → { blocks, unplaced, warnings, windowStart, windowEnd, days }
@@ -223,6 +294,12 @@ export async function buildPlan(now = new Date()) {
 
   const homeLoc = s.home ? await geocode(s, s.home) : null
   if (s.home && !homeLoc) warnings.push(`Couldn't locate home address “${s.home}”.`)
+  // "office/base" for the gap-travel heuristic and attached.place='office' —
+  // the Work plugin's work address. Work not enabled/configured just leaves
+  // this null, which the heuristic and placeAttachments both fall back
+  // through gracefully (home, or no place at all).
+  const officeLoc = work.address ? await geocode(s, work.address) : null
+  if (work.address && !officeLoc) warnings.push(`Couldn't locate work address “${work.address}”.`)
 
   const dayMs = (i) => windowStart + i * 86400000
 
@@ -262,15 +339,16 @@ export async function buildPlan(now = new Date()) {
     blocks.push({ id: `shift-${sh.id}`, type: 'shift', title: 'Work', start, end, addr: work.address || null, loc: null })
   }
 
-  // -- fixed: user-set events created here (immovable like a calendar event, but
-  // local; no location, so no drive chaining — a set event just holds its slot)
+  // -- fixed: user-set events created here (immovable like a calendar event,
+  // but local — and editable within the Ladder). An optional address (typed
+  // in the add/edit bar) lets it chain into drive times like a calendar event.
   for (const f of s.flex) {
     if (f.kind !== 'set' || !f.date) continue
     const day = new Date(f.date + 'T00:00:00').getTime()
     const start = atTime(day, hmToMin(f.start) ?? 0)
     const end = atTime(day, hmToMin(f.end) ?? 0)
     if (end <= start || end <= windowStart || start >= windowEnd) continue
-    blocks.push({ id: `set-${f.id}`, type: 'set', title: f.title, start, end, addr: null, loc: null, flexId: f.id })
+    blocks.push({ id: `set-${f.id}`, type: 'set', title: f.title, start, end, addr: f.addr || null, loc: null, flexId: f.id })
   }
 
   // geocode fixed-block addresses (cached — usually instant)
@@ -387,9 +465,11 @@ export async function buildPlan(now = new Date()) {
   let gymExtraBefore = 0, gymExtraAfter = 0
   for (const f of attachedDefs.filter((x) => x.anchorTag === 'gym')) {
     let leg = 0
-    if (f.place === 'home' && gymLoc && homeLoc) leg = ((await routeMinutes(s, gymLoc, homeLoc)) ?? 0) + Number(s.buffer)
-    if (f.side === 'before') gymExtraBefore += f.minutes + (f.place === 'home' ? leg : 0)
-    else gymExtraAfter += f.minutes + (f.place === 'home' ? leg : 0)
+    const fLoc = f.place === 'home' ? homeLoc : f.place === 'office' ? officeLoc : null
+    const hasLeg = fLoc != null && gymLoc != null
+    if (hasLeg) leg = ((await routeMinutes(s, gymLoc, fLoc)) ?? 0) + Number(s.buffer)
+    if (f.side === 'before') gymExtraBefore += f.minutes + (hasLeg ? leg : 0)
+    else gymExtraAfter += f.minutes + (hasLeg ? leg : 0)
   }
   // -- attached events: paired to an anchor block's front or back edge; error
   // when an immovable block leaves no room for the pairing.
@@ -406,12 +486,14 @@ export async function buildPlan(now = new Date()) {
       }
       for (const anchor of anchors) {
         const dur = f.minutes * MIN
-        const addr = f.place === 'home' ? (s.home || null) : f.place === 'same' ? anchor.addr : null
-        const loc = f.place === 'home' ? homeLoc : f.place === 'same' ? anchor.loc : null
+        const placeLoc = f.place === 'home' ? homeLoc : f.place === 'office' ? officeLoc : null
+        const placeAddr = f.place === 'home' ? (s.home || null) : f.place === 'office' ? (work.address || null) : null
+        const addr = placeLoc ? placeAddr : f.place === 'same' ? anchor.addr : null
+        const loc = placeLoc || (f.place === 'same' ? anchor.loc : null)
         // the drive leg between anchor and this block, when it changes location
         let leg = 0
-        if (f.place === 'home' && homeLoc && anchor.loc && anchor.addr !== s.home) {
-          const mins = await routeMinutes(s, anchor.loc, homeLoc)
+        if (placeLoc && anchor.loc && anchor.addr !== placeAddr) {
+          const mins = await routeMinutes(s, anchor.loc, placeLoc)
           if (mins != null) leg = (mins + Number(s.buffer)) * MIN
         }
         // stack outward past any attachment already paired to this anchor+side
@@ -419,7 +501,7 @@ export async function buildPlan(now = new Date()) {
         let start, end
         if (f.side === 'before') {
           const edge = Math.min(anchor.start, ...siblings.map((b) => b.start))
-          end = edge - (f.place === 'home' ? leg : 0)
+          end = edge - leg // leg is already 0 unless place is home/office and it actually moves
           start = end - dur
         } else {
           const edge = Math.max(anchor.end, ...siblings.map((b) => b.end))
@@ -470,9 +552,9 @@ export async function buildPlan(now = new Date()) {
       // came before it ("Tight" warning + visual overlap). Reserving the full
       // train pushes the gym to a later gap instead — e.g. after the class.
       const nxt = blocks.filter((b) => b.loc && b.start >= g.end).sort((a, z) => a.start - z.start)[0]
-      const trainEndsHome = attachedDefs.some((f) => f.anchorTag === 'gym' && f.side !== 'before' && f.place === 'home')
-      const outFrom = trainEndsHome ? homeLoc : gymLoc
-      const outFromAddr = trainEndsHome ? s.home : gym.address
+      const trainEndsAt = attachedDefs.find((f) => f.anchorTag === 'gym' && f.side !== 'before' && (f.place === 'home' || f.place === 'office'))
+      const outFrom = trainEndsAt ? (trainEndsAt.place === 'home' ? homeLoc : officeLoc) : gymLoc
+      const outFromAddr = trainEndsAt ? (trainEndsAt.place === 'home' ? s.home : work.address) : gym.address
       const outLeg = (outFrom && nxt && nxt.loc && nxt.addr !== outFromAddr)
         ? ((await routeMinutes(s, outFrom, nxt.loc)) ?? 0) + Number(s.buffer) : 0
       const startAt = Math.max(g.start + (driveIn + gymExtraBefore) * MIN, winStart)
@@ -490,11 +572,16 @@ export async function buildPlan(now = new Date()) {
 
   await placeAttachments(attachedDefs.filter(isGymAnchored))
 
-  // -- drive pass: one drive block before every located block whose location
-  // differs from where the chain currently is
-  // A destination that IS one of the settings-defined places (home/work/gym)
-  // gets that canonical name instead of the event's own title — "drive to the
-  // gym", not "drive to Push day".
+  // -- drive pass: for every located block whose location differs from where
+  // the chain currently is, decide how the gap before it gets spent —
+  // WAIT at the previous location (the old, only behavior: one direct drive
+  // right before the next event), a there-and-back trip HOME or to the
+  // OFFICE (Work plugin's address), or STRAIGHT through when there's no
+  // slack at all. chooseGapTravel is the automatic heuristic; a per-gap
+  // override in s.gapOverrides (set from a small control on the drive card in
+  // ladderui.js) wins when present. A destination that IS one of the
+  // settings-defined places (home/work/gym) gets that canonical name instead
+  // of the event's own title — "drive to the gym", not "drive to Push day".
   const norm = (a) => String(a || '').trim().toLowerCase()
   const placeLabel = (addr) => {
     const a = norm(addr)
@@ -509,7 +596,10 @@ export async function buildPlan(now = new Date()) {
   // it's actually part of getting to bed. If the last place you had to be ended
   // more than an hour before that drive would start, the evening is free time
   // (gym at noon, bed at midnight) and the drive is noise; drop it. A late last
-  // event (work till 11:30) leaves ~no slack, so its drive home stays.
+  // event (work till 11:30) leaves ~no slack, so its drive home stays. A
+  // there-and-back is never AUTO-offered into bedtime either (same free-evening
+  // reasoning would apply to it, and running both would double-count) — the
+  // gap just falls back to the ordinary wait/direct path below.
   const FREE_SLACK = 60 * MIN
   const intoBedtime = (b) => b.type === 'sleep' || (b.attached && b.side === 'before' && String(b.anchorId || '').startsWith('sleep-'))
   let cur = { loc: homeLoc, addr: s.home || 'home' }
@@ -518,19 +608,54 @@ export async function buildPlan(now = new Date()) {
   const drives = []
   for (const b of blocks) {
     if (b.loc && cur.loc && b.addr !== cur.addr) {
-      const mins = await routeMinutes(s, cur.loc, b.loc)
-      if (mins != null) {
-        const total = mins + Number(s.buffer)
-        const dStart = b.start - total * MIN
-        if (intoBedtime(b) && dStart - curEnd > FREE_SLACK) {
-          // free evening → you drifted home on your own time, no scheduled drive
-        } else {
-          // toId/toType/toTitle bind the drive to the block it arrives at, so the
-          // UI can attach it (same lane, destination accent, no gap). toPlace is
-          // the canonical place word when the destination is a settings location.
-          drives.push({ id: `drive-${b.id}`, type: 'drive', title: `Drive · ${mins}+${s.buffer} min`, start: dStart, end: b.start, minutes: total, mins, toId: b.id, toType: b.type, toTitle: b.title, toPlace: placeLabel(b.addr) })
-          if (dStart < prevEnd) warnings.push(`Tight: the drive to “${b.title}” overlaps what's before it.`)
+      const direct = await routeMinutes(s, cur.loc, b.loc)
+      if (direct != null) {
+        const gapMinutes = Math.max(0, (b.start - curEnd) / MIN)
+        // a shift worker never leaves mid-shift; a salary worker's default
+        // "back to" place during the day is the office — everyone else's
+        // (or a salary worker with no work address configured) is home
+        const midShift = work.jobType === 'shift' && blocks.some((sb) => sb.type === 'shift' && sb.start <= curEnd && sb.end >= b.start)
+        const base = intoBedtime(b) || midShift || !Number.isFinite(curEnd) ? null
+          : work.jobType === 'salary' && officeLoc ? 'office'
+          : homeLoc ? 'home' : null
+        const baseLoc = base === 'home' ? homeLoc : base === 'office' ? officeLoc : null
+        const baseAddr = base === 'home' ? (s.home || 'home') : base === 'office' ? work.address : null
+        const toBase = baseLoc && cur.addr !== baseAddr ? await routeMinutes(s, cur.loc, baseLoc) : null
+        const fromBase = baseLoc && b.addr !== baseAddr ? await routeMinutes(s, baseLoc, b.loc) : null
+        const forced = s.gapOverrides[b.id]
+        const choice = ['wait', 'home', 'office', 'straight'].includes(forced) ? forced
+          : chooseGapTravel({ gapMinutes, driveToBaseMin: toBase, driveBaseToNextMin: fromBase, driveDirectMin: direct, dwellFloorMin: Number(s.dwellFloorMin), roundTripFrac: Number(s.roundTripFrac), base })
+
+        // toId/toType/toTitle bind a drive to the block it arrives at, so the
+        // UI can attach it (same lane, destination accent, no gap). toPlace is
+        // the canonical place word when the destination is a settings location.
+        const emitDirect = () => {
+          const total = direct + Number(s.buffer)
+          const dStart = b.start - total * MIN
+          if (intoBedtime(b) && dStart - curEnd > FREE_SLACK) {
+            // free evening → you drifted home on your own time, no scheduled drive
+          } else {
+            drives.push({ id: `drive-${b.id}`, type: 'drive', title: `Drive · ${direct}+${s.buffer} min`, start: dStart, end: b.start, minutes: total, mins: direct, toId: b.id, toType: b.type, toTitle: b.title, toPlace: placeLabel(b.addr), gapId: b.id, gapChoice: choice, gapForced: forced === choice })
+            if (dStart < prevEnd) warnings.push(`Tight: the drive to “${b.title}” overlaps what's before it.`)
+          }
         }
+
+        if ((choice === 'home' || choice === 'office') && toBase != null && fromBase != null) {
+          const leg1Total = toBase + Number(s.buffer)
+          const leg2Total = fromBase + Number(s.buffer)
+          const leg1End = curEnd + leg1Total * MIN
+          const leg2Start = b.start - leg2Total * MIN
+          if (leg1End <= leg2Start) { // real dwell time between the legs — otherwise fall back below
+            const placeWord = choice === 'office' ? 'work' : 'home'
+            if (cur.addr !== baseAddr) {
+              drives.push({ id: `drive-${b.id}-out`, type: 'drive', title: `Drive · ${toBase}+${s.buffer} min`, start: curEnd, end: leg1End, minutes: leg1Total, mins: toBase, toId: null, toType: placeWord, toTitle: choice === 'office' ? 'the office' : 'home', toPlace: placeWord })
+            }
+            if (b.addr !== baseAddr) {
+              drives.push({ id: `drive-${b.id}`, type: 'drive', title: `Drive · ${fromBase}+${s.buffer} min`, start: leg2Start, end: b.start, minutes: leg2Total, mins: fromBase, toId: b.id, toType: b.type, toTitle: b.title, toPlace: placeLabel(b.addr), gapId: b.id, gapChoice: choice, gapForced: forced === choice })
+              if (leg2Start < prevEnd) warnings.push(`Tight: the drive to “${b.title}” overlaps what's before it.`)
+            }
+          } else emitDirect()
+        } else emitDirect()
       } else warnings.push(`No route found to “${b.title}”.`)
     }
     if (b.loc) { cur = { loc: b.loc, addr: b.addr }; curEnd = b.end }

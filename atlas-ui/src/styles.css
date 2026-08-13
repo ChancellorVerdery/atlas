@@ -2071,6 +2071,7 @@ html[data-page="ladder"] .content { padding: 0; overflow: hidden; display: flex;
   padding: 10px 16px; border-bottom: 1px solid var(--line); flex: none;
 }
 .lad-title { flex: 1 1 180px; max-width: 300px; }
+.lad-bar .lad-addr { flex: 1 1 200px; max-width: 280px; }
 .lad-bar select { flex: 0 1 auto; width: auto; max-width: 190px; }
 .lad-bar input[type="date"] { flex: 0 0 148px; }
 .lad-bar #lad-status { margin-left: auto; }
@@ -2125,6 +2126,12 @@ html[data-page="ladder"] .content { padding: 0; overflow: hidden; display: flex;
 .lad-card__loc { font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lad-card__loc--bad { color: var(--neg); }
 .lad-card__x { position: absolute; top: 4px; right: 4px; z-index: 3; }
+/* Compact cards (h < 34px, see MIN_CARD_H/compact in ladderui.js) are barely
+   taller than the button itself — a fixed top offset reads off-center (and
+   can clip against the card's overflow:hidden) once the card shrinks to the
+   y-map's floor height. Center on the card's own y-axis instead. */
+.lad-card__x--mid { top: 50%; transform: translateY(-50%); }
+.lad-card--editable { cursor: pointer; }
 .lad-card--cal { border-left: 3px solid #7986cb; }
 .lad-card--shift { border-left: 3px solid #e67c73; }
 .lad-card--gym { border-left: 3px solid var(--pos); }
@@ -2168,8 +2175,21 @@ html[data-page="ladder"] .content { padding: 0; overflow: hidden; display: flex;
 .lad-drive--to-gym { border-left-color: var(--pos); }
 .lad-drive--to-meal { border-left-color: #f6bf26; }
 .lad-drive--to-flex { border-left-color: var(--brass); }
+.lad-drive--to-home { border-left-color: var(--ink-faint); }
+.lad-drive--to-work { border-left-color: #e67c73; }
+/* Per-gap override select, floated at the drive card's right edge — same
+   corner language as .lad-card__x, sized to sit inside even a thin card.
+   The card reserves room on the right so its own (ellipsis-truncated) title
+   never sits underneath it. */
+.lad-card--drive-ovr .lad-card__title { padding-right: 84px; }
+.lad-gap-ovr {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%); z-index: 3;
+  font-size: 9.5px; max-width: 80px; padding: 1px 3px;
+  border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg); color: var(--ink-dim);
+}
 
 .lad-settings .lad-addr { min-width: 260px; }
+.lad-cancel-edit { color: var(--ink-faint); }
 .gym-times { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 12px; }
 .gym-times-hint { font-size: 11px; color: var(--ink-faint); min-width: 0; }
 .gym-hours { display: flex; align-items: center; gap: 7px; }

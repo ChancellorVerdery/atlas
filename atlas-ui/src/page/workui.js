@@ -303,6 +303,14 @@ export function renderWorkSettings(container, rerender) {
       <input class="pw-field" id="wk-address" value="${esc(s.address)}" placeholder="Street, city…" aria-label="Work address">
     </div>
     <div class="set-row">
+      <div class="set-row__meta"><span class="set-row__name">Job type</span>
+        <span class="set-row__sub">Shift (serving, on-call): the Ladder never routes you home or to the office mid-shift — you're locked in. Salary/desk: between events during the day, the Ladder assumes you head back to the office.</span></div>
+      <select class="pw-field" id="wk-jobtype" aria-label="Job type">
+        <option value="shift"${s.jobType === 'shift' ? ' selected' : ''}>Shift (e.g. serving)</option>
+        <option value="salary"${s.jobType === 'salary' ? ' selected' : ''}>Salary / desk</option>
+      </select>
+    </div>
+    <div class="set-row">
       <div class="set-row__meta"><span class="set-row__name">Open-ended shifts</span>
         <span class="set-row__sub">For jobs with no set out time (serving, on-call): clock in with just a start time — Atlas projects your out time from past shifts on that weekday, rounded up to 15 minutes.</span></div>
       ${sw('open', s.openEnded)}
@@ -316,6 +324,12 @@ export function renderWorkSettings(container, rerender) {
     else s2.openEnded = !s2.openEnded
     saveWork(s2)
     renderWorkSettings(container, rerender)
+    rerender?.()
+  }
+  container.querySelector('#wk-jobtype').onchange = (e) => {
+    const s2 = loadWork()
+    s2.jobType = e.target.value === 'salary' ? 'salary' : 'shift'
+    saveWork(s2)
     rerender?.()
   }
   container.oninput = (e) => {
