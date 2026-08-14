@@ -61,6 +61,11 @@ final class LocalServer {
     // Forwarded to the Atlas server's uiapi with the session token.
     static let proxyPrefixes = ["/canvas-proxy", "/finance-api"]
 
+    // Claude subscription-OAuth (PKCE) — the token exchange must carry the
+    // code_verifier and can't run in the browser (CORS), so LocalServer brokers
+    // it natively on both platforms. Same client as the server broker.
+    static let oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+
     private let queue = DispatchQueue(label: "atlas.localserver")
     private var listener: NWListener?
     private(set) var port: UInt16 = 0
@@ -280,6 +285,16 @@ final class LocalServer {
             respond(ctx, HTTPResponse(status: 204))
             return
         }
+        // Claude OAuth token broker — async URLSession round-trip to Anthropic.
+        if req.path.hasPrefix("/ai-oauth/claude/") {
+            claudeOAuth(req, ctx)
+            return
+        }
+        // Native iCloud (or local-Documents fallback) notes storage.
+        if req.path.hasPrefix("/icloud/notes/") {
+            respond(ctx, Self.notesRoute(req))
+            return
+        }
         if Self.proxyPrefixes.contains(where: { Self.boundaryMatch(req.target, $0) }) {
             Task {
                 let resp = await Uiapi.forward(req)
@@ -296,6 +311,175 @@ final class LocalServer {
         ctx.conn.send(content: resp.serialize(), completion: .contentProcessed { _ in
             ctx.conn.cancel()
         })
+    }
+
+    // ---- Claude OAuth token broker ---------------------------------------------
+
+    // POST /ai-oauth/claude/{exchange,refresh}: the web (ai.js) posts the PKCE
+    // fields; we forward to Anthropic's token endpoint and hand back the three
+    // fields the client stores. NEVER logs tokens or the raw provider payload.
+    private func claudeOAuth(_ req: HTTPRequest, _ ctx: Conn) {
+        guard req.method == "POST" else { respond(ctx, .json(405, ["error": "POST only"])); return }
+        let sub = String(req.path.dropFirst("/ai-oauth/claude/".count))
+        let obj = (try? JSONSerialization.jsonObject(with: req.body)) as? [String: Any] ?? [:]
+        var payload: [String: Any]
+        switch sub {
+        case "exchange":
+            guard let code = obj["code"] as? String, let verifier = obj["verifier"] as? String else {
+                respond(ctx, .json(400, ["error": "missing code or verifier"])); return
+            }
+            payload = [
+                "grant_type": "authorization_code",
+                "code": code,
+                "state": obj["state"] as? String ?? "",
+                "client_id": Self.oauthClientID,
+                "redirect_uri": "https://console.anthropic.com/oauth/code/callback",
+                "code_verifier": verifier,
+            ]
+        case "refresh":
+            guard let refresh = obj["refresh"] as? String else {
+                respond(ctx, .json(400, ["error": "missing refresh token"])); return
+            }
+            payload = [
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+                "client_id": Self.oauthClientID,
+            ]
+        default:
+            respond(ctx, .json(404, ["error": "unknown ai-oauth endpoint"])); return
+        }
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload),
+              let url = URL(string: "https://console.anthropic.com/v1/oauth/token") else {
+            respond(ctx, .json(500, ["error": "bad request"])); return
+        }
+        var up = URLRequest(url: url)
+        up.httpMethod = "POST"
+        up.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        up.httpBody = bodyData
+        URLSession.shared.dataTask(with: up) { [weak self] data, resp, err in
+            guard let self else { return }
+            let out = Self.claudeTokenResponse(data, resp, err)
+            self.queue.async { self.respond(ctx, out) }
+        }.resume()
+    }
+
+    static func claudeTokenResponse(_ data: Data?, _ resp: URLResponse?, _ err: Error?) -> HTTPResponse {
+        if err != nil { return .json(502, ["error": "couldn't reach Anthropic"]) }
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 502
+        let obj = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+        guard status == 200, let access = obj["access_token"] as? String else {
+            let msg = (obj["error_description"] as? String) ?? (obj["error"] as? String) ?? "token request failed (\(status))"
+            return .json(status == 400 || status == 401 ? 400 : 502, ["error": msg])
+        }
+        // refresh_token is optional on the refresh path (the client keeps its
+        // existing one when the provider doesn't rotate it) — required only on
+        // exchange, where the provider always returns one.
+        let out: [String: Any] = ["access": access, "refresh": obj["refresh_token"] as? String ?? "", "expires": obj["expires_in"] ?? 0]
+        let body = (try? JSONSerialization.data(withJSONObject: out)) ?? Data()
+        return HTTPResponse(status: 200, headers: [("Content-Type", "application/json")], body: body)
+    }
+
+    // ---- iCloud notes storage --------------------------------------------------
+
+    // The app's iCloud Documents ubiquity container (<container>/Documents/Notes),
+    // or the local Documents dir when iCloud is unavailable so the routes still
+    // work (un-synced) and nothing crashes.
+    static func notesBase() -> URL {
+        let fm = FileManager.default
+        let cloud = fm.url(forUbiquityContainerIdentifier: nil)?
+            .appendingPathComponent("Documents/Notes")
+        let base = cloud ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Notes")
+        try? fm.createDirectory(at: base, withIntermediateDirectories: true)
+        return base.standardizedFileURL
+    }
+
+    // Resolve a client-supplied relative path safely inside base; nil on traversal.
+    static func notesResolve(_ rel: String, base: URL) -> URL? {
+        guard !rel.contains("..") else { return nil }
+        let trimmed = rel.hasPrefix("/") ? String(rel.dropFirst()) : rel
+        guard !trimmed.isEmpty else { return nil }
+        let file = base.appendingPathComponent(trimmed).standardizedFileURL
+        guard file.path == base.path || file.path.hasPrefix(base.path + "/") else { return nil }
+        return file
+    }
+
+    // Emit the SAME flat shape as the /notes-api sidecar tree so notesui.js
+    // (which reads {dirs:[relPaths], notes:[{path}]}) stays unchanged — not a
+    // nested children[] array.
+    static func notesFlatten(_ dir: URL, base: URL, dirs: inout [String], notes: inout [[String: Any]]) {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return }
+        for item in items.sorted(by: {
+            $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending
+        }) {
+            let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let rel = String(item.standardizedFileURL.path.dropFirst(base.path.count + 1))
+            if isDir {
+                dirs.append(rel)
+                notesFlatten(item, base: base, dirs: &dirs, notes: &notes)
+            } else if item.pathExtension.lowercased() == "md" {
+                notes.append(["path": rel])
+            }
+        }
+    }
+
+    static func notesRoute(_ req: HTTPRequest) -> HTTPResponse {
+        let base = notesBase()
+        let coordinator = NSFileCoordinator()
+        switch req.path {
+        case "/icloud/notes/tree":
+            guard req.method == "GET" else { return HTTPResponse(status: 405) }
+            var dirs: [String] = []
+            var notes: [[String: Any]] = []
+            var err: NSError?
+            coordinator.coordinate(readingItemAt: base, options: [], error: &err) { url in
+                notesFlatten(url, base: url, dirs: &dirs, notes: &notes)
+            }
+            let obj: [String: Any] = ["dirs": dirs, "notes": notes]
+            let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{\"dirs\":[],\"notes\":[]}".utf8)
+            return HTTPResponse(status: 200, headers: [("Content-Type", "application/json")], body: data)
+        case "/icloud/notes/read":
+            guard req.method == "GET" else { return HTTPResponse(status: 405) }
+            let rel = URLComponents(string: req.target)?.queryItems?.first { $0.name == "path" }?.value ?? ""
+            guard let file = notesResolve(rel, base: base) else { return .json(400, ["error": "bad path"]) }
+            var out: Data?
+            var err: NSError?
+            coordinator.coordinate(readingItemAt: file, options: [], error: &err) { url in
+                out = try? Data(contentsOf: url)
+            }
+            guard let data = out else {
+                return HTTPResponse(status: 404, headers: [("Content-Type", "text/plain")], body: Data("not found".utf8))
+            }
+            return HTTPResponse(status: 200, headers: [("Content-Type", "text/markdown; charset=utf-8")], body: data)
+        case "/icloud/notes/save":
+            guard req.method == "POST",
+                  let obj = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
+                  let rel = obj["path"] as? String, let content = obj["content"] as? String,
+                  let file = notesResolve(rel, base: base) else { return .json(400, ["error": "bad request"]) }
+            try? FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            var ok = false
+            var err: NSError?
+            coordinator.coordinate(writingItemAt: file, options: .forReplacing, error: &err) { url in
+                do { try Data(content.utf8).write(to: url); ok = true } catch { ok = false }
+            }
+            return ok ? HTTPResponse(status: 200) : .json(500, ["error": "write failed"])
+        case "/icloud/notes/delete":
+            guard req.method == "POST",
+                  let obj = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
+                  let rel = obj["path"] as? String,
+                  let file = notesResolve(rel, base: base) else { return .json(400, ["error": "bad request"]) }
+            var err: NSError?
+            coordinator.coordinate(writingItemAt: file, options: .forDeleting, error: &err) { url in
+                try? FileManager.default.removeItem(at: url)
+            }
+            return HTTPResponse(status: 200)
+        default:
+            return HTTPResponse(status: 404, headers: [("Content-Type", "text/plain")], body: Data("not found".utf8))
+        }
     }
 
     // ---- static files ---------------------------------------------------------

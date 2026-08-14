@@ -12,6 +12,8 @@ import { snapshotZones, toLayoutPoint, resolveTarget, resolveRowTarget } from '.
 import { isKindEnabled, KIND_PLUGIN } from './plugins.js'
 import { activePages } from './pages.js'
 import { drawChart, fixAccentSubscript } from './view.js'
+import { isMobile } from '../platform.js'
+import { confirmDelete } from './confirm.js'
 
 let ctx = null       // { rerender, contentEl, pageDef }
 let dragState = null // { source:'palette'|'widget'|'row', kind?, widgetId?, rowId?, snapshot, target, lastSig, rafPending }
@@ -110,6 +112,12 @@ export function enterCustomize({ rerender, pageDef }) {
   contentEl.addEventListener('mousedown', onMouseDown)
   document.addEventListener('mousemove', onResizeMove)
   document.addEventListener('mouseup', onResizeUp)
+  // Mobile long-press drag: native HTML5 DnD never fires from touch in iOS
+  // WKWebView, so a parallel touch path drives the same drag machinery.
+  document.addEventListener('touchstart', onTouchStart, { passive: true })
+  document.addEventListener('touchmove', onTouchMove, { passive: false })
+  document.addEventListener('touchend', onTouchEnd)
+  document.addEventListener('touchcancel', onTouchCancel)
 }
 
 export function exitCustomize() {
@@ -126,6 +134,12 @@ export function exitCustomize() {
   ctx.contentEl.removeEventListener('mousedown', onMouseDown)
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeUp)
+  document.removeEventListener('touchstart', onTouchStart)
+  document.removeEventListener('touchmove', onTouchMove)
+  document.removeEventListener('touchend', onTouchEnd)
+  document.removeEventListener('touchcancel', onTouchCancel)
+  cancelTouchDrag()
+  document.body.classList.remove('touch-dragging')
   document.body.classList.remove('resizing-col', 'resizing-row', 'eq-reordering')
   eqDrag = null
   clearPreview()
@@ -477,16 +491,24 @@ function onDragOver(e) {
   e.preventDefault()
   e.dataTransfer.dropEffect = dragState.source === 'palette' ? 'copy' : 'move'
   dragState.outside = false
+  scheduleGhost(e.clientX, e.clientY)
+}
+
+// Resolve the drop target for a cursor position and preview it. Shared by the
+// mouse (dragover) and mobile long-press (pointer) paths — both read the same
+// frozen snapshot and place the same ghost.
+function scheduleGhost(clientX, clientY) {
+  if (!dragState || !ctx) return
   // Hysteresis: the ghost reflows the live page while zones stay frozen at
   // the dragstart snapshot, so chasing the visible ghost would resolve to a
   // different target and yank it away. While the cursor is inside the live
   // ghost, the preview is already showing exactly what a drop will do — hold.
-  if (cursorInGhost(e.clientX, e.clientY)) return
+  if (cursorInGhost(clientX, clientY)) return
   // Coalesce, don't drop: always record the newest coords — a burst of
   // dragovers within one frame must end with the LAST position processed,
   // or the preview freezes wherever the first event of the burst was.
-  dragState.pendingX = e.clientX
-  dragState.pendingY = e.clientY
+  dragState.pendingX = clientX
+  dragState.pendingY = clientY
   if (dragState.rafPending) return
   dragState.rafPending = true
   requestAnimationFrame(() => {
@@ -508,17 +530,23 @@ function onDragOver(e) {
 function onDrop(e) {
   if (!dragState || !ctx) return
   e.preventDefault()
-  const s = dragState
+  commitDrop(dragState, e.clientX, e.clientY)
+}
+
+// Commit a drop at a cursor position: resolve the final target, finish the
+// drag, and apply the mutation. Shared by the mouse (drop) and mobile
+// long-press (pointerup) paths.
+function commitDrop(s, clientX, clientY) {
   // Same hysteresis as dragover: dropping on the visible ghost commits what
   // the ghost previews. Checked before finishDrag() removes the ghost.
-  const onGhost = cursorInGhost(e.clientX, e.clientY)
+  const onGhost = cursorInGhost(clientX, clientY)
   finishDrag()
   let t
   if (onGhost && s.lastTarget) t = s.lastTarget
   else {
     // Resolve fresh from the actual drop point (same frozen snapshot the
     // preview used) — the last dragover's rAF may not have run yet.
-    const { x, y } = toLayoutPoint(ctx.contentEl, e.clientX, e.clientY)
+    const { x, y } = toLayoutPoint(ctx.contentEl, clientX, clientY)
     t = s.source === 'row'
       ? { type: 'rowmove', ...resolveRowTarget(s.snapshot, y) }
       : resolveTarget(s.snapshot, x, y)
@@ -539,6 +567,98 @@ function finishDrag() {
   clearPreview()
   ctx?.contentEl.querySelectorAll('.is-dragging').forEach((el) => el.classList.remove('is-dragging'))
   dragState = null
+}
+
+// ---- mobile long-press drag -----------------------------------------------
+
+// Native HTML5 DnD (dragstart/dragover/drop) never fires from touch in iOS
+// WKWebView, so on mobile a long-press starts a drag driven by touch events
+// that feeds the SAME dragState + ghost machinery: scheduleGhost() previews
+// and commitDrop() commits, exactly as the mouse path does.
+// ponytail: reuse dragState/hitzones/ghost verbatim — this only supplies the
+// pointer coords the missing native events would have carried.
+let touchDrag = null // { timer, startX, startY, source, kind?, widgetId?, rowId?, dimEl, active, lastX, lastY }
+const LONGPRESS_MS = 450
+const LONGPRESS_SLOP = 10 // px of finger travel before the press-and-hold aborts to a scroll
+
+function onTouchStart(e) {
+  if (!ctx || !isMobile() || touchDrag || e.touches.length !== 1) return
+  const el = e.target
+  // Editing controls, buttons, and the resize/eq grips keep their own handling.
+  if (el.closest?.('input,textarea,select,button,math-field,.pcol-resize,.prow-resize,.prow-hresize,.pw-eq-grip')) return
+  const pal = el.closest?.('.palette__item')
+  const handle = el.closest?.('.prow-handle')
+  const widgetEl = !pal && !handle && el.closest?.('.pwidget')
+  let src
+  if (pal) src = { source: 'palette', kind: pal.dataset.kind }
+  else if (handle) src = { source: 'row', rowId: handle.closest('.prow')?.dataset.rowId }
+  else if (widgetEl && ctx.contentEl.contains(widgetEl)) src = { source: 'widget', widgetId: widgetEl.dataset.widgetId }
+  else return
+  const t = e.touches[0]
+  const dimEl = src.source === 'widget' ? widgetEl : src.source === 'row' ? handle.closest('.prow') : null
+  touchDrag = { ...src, startX: t.clientX, startY: t.clientY, lastX: t.clientX, lastY: t.clientY, dimEl, active: false }
+  touchDrag.timer = setTimeout(activateTouchDrag, LONGPRESS_MS)
+}
+
+// The long-press fired: freeze the zone snapshot and light up the drag, then
+// start previewing under the finger. From here touchmove is preventDefault'd
+// so the page can't scroll out from under the drag.
+function activateTouchDrag() {
+  const t = touchDrag
+  if (!t || !ctx) return
+  t.active = true
+  dragState = { source: t.source, kind: t.kind, widgetId: t.widgetId, rowId: t.rowId }
+  dragState.snapshot = snapshotZones(ctx.contentEl, pageNow(), { excludeWidgetId: dragState.widgetId })
+  document.body.classList.add('touch-dragging')
+  t.dimEl?.classList.add('is-dragging') // same dim the mouse path uses = visual grab feedback
+  navigator.vibrate?.(10)               // haptic on shells that support it (no-op in WKWebView)
+  scheduleGhost(t.lastX, t.lastY)
+}
+
+function onTouchMove(e) {
+  const t = touchDrag
+  if (!t) return
+  const p = e.touches[0]
+  if (!t.active) {
+    // Still waiting on the hold: a finger that travels past the slop is a
+    // scroll, not a grab — abort so the page scrolls normally.
+    if (Math.abs(p.clientX - t.startX) > LONGPRESS_SLOP || Math.abs(p.clientY - t.startY) > LONGPRESS_SLOP) cancelTouchDrag()
+    return
+  }
+  e.preventDefault() // hold the page still while dragging (listener is passive:false)
+  t.lastX = p.clientX
+  t.lastY = p.clientY
+  scheduleGhost(p.clientX, p.clientY)
+}
+
+function onTouchEnd(e) {
+  const t = touchDrag
+  if (!t) return
+  const active = t.active
+  const p = e.changedTouches?.[0]
+  const x = p ? p.clientX : t.lastX
+  const y = p ? p.clientY : t.lastY
+  cancelTouchDrag()
+  if (!active) return
+  document.body.classList.remove('touch-dragging')
+  if (dragState) commitDrop(dragState, x, y)
+}
+
+function onTouchCancel() {
+  const t = touchDrag
+  if (!t) return
+  const active = t.active
+  cancelTouchDrag()
+  if (!active) return
+  document.body.classList.remove('touch-dragging')
+  finishDrag()
+}
+
+// Tear down the long-press without committing (timer abort, cancel, or exit).
+function cancelTouchDrag() {
+  if (!touchDrag) return
+  clearTimeout(touchDrag.timer)
+  touchDrag = null
 }
 
 // ---- ghost preview --------------------------------------------------------
@@ -665,12 +785,15 @@ function onInput(e) {
   }
 }
 
-function onClick(e) {
+async function onClick(e) {
   const btn = e.target.closest('[data-act]')
   if (!btn || !ctx) return
   const act = btn.dataset.act
   const id = btn.closest('.pwidget')?.dataset.widgetId
   if (!['delete-widget', 'add-item', 'remove-item'].includes(act)) return
+  if (act === 'delete-widget') {
+    if (!(await confirmDelete('Delete this widget?'))) return
+  }
   const page = pageNow()
   if (act === 'delete-widget') {
     removeWidget(page, id)

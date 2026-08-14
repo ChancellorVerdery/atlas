@@ -19,6 +19,7 @@ import {
   importAllReady as jobsImportAllReady, bindFileInput,
 } from './studyjobs.js'
 import { fitEquations } from './view.js'
+import { confirmDelete } from './confirm.js'
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -443,10 +444,30 @@ function saveCard() {
 
 // ---- events -----------------------------------------------------------------
 
-function onClick(e) {
+async function onClick(e) {
   const el = e.target.closest('[data-st]')
   if (!el) return
   const act = el.dataset.st
+
+  // Checked first: tab-del's span nests inside the tab-select button, so a
+  // tap on the × must never also fall through to the tab-select branch.
+  if (act === 'tab-del') {
+    e.stopPropagation()
+    const s0 = loadFlashcards()
+    const t = s0.tabs.find((x) => x.id === el.dataset.id)
+    if (!t) return
+    if (!(await confirmDelete(`Delete “${t.name}” with its cards?`))) return
+    const s = loadFlashcards()
+    s.tabs = s.tabs.filter((x) => x.id !== t.id)
+    s.active = s.tabs[0]?.id || ''
+    ui.fc = null
+    // the dead course's jobs go too — their results have nowhere to import
+    for (const j of jobs.filter((x) => x.tabId === t.id)) removeJob(j.id).catch(() => {})
+    saveFlashcards(s)
+    refreshJobs()
+    return render()
+  }
+
   const s = loadFlashcards()
   const tab = curTab(s)
 
@@ -468,19 +489,6 @@ function onClick(e) {
       render()
     }
     return
-  }
-  if (act === 'tab-del') {
-    e.stopPropagation()
-    const t = s.tabs.find((x) => x.id === el.dataset.id)
-    if (!t || !confirm(`Delete “${t.name}” with its cards?`)) return
-    s.tabs = s.tabs.filter((x) => x.id !== t.id)
-    s.active = s.tabs[0]?.id || ''
-    ui.fc = null
-    // the dead course's jobs go too — their results have nowhere to import
-    for (const j of jobs.filter((x) => x.tabId === t.id)) removeJob(j.id).catch(() => {})
-    saveFlashcards(s)
-    refreshJobs()
-    return render()
   }
   if (act === 'tool') { ui.tool = el.dataset.tool; return render() }
   if (!tab) return

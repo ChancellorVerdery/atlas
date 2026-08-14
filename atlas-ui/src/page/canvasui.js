@@ -57,7 +57,12 @@ const uiFor = (wid) => { if (!ui.has(wid)) ui.set(wid, {}); return ui.get(wid) }
 
 const PALETTE = ['#7986cb', '#33b679', '#e67c73', '#e0b15c', '#74d6c4', '#b39ddb', '#f6bf26', '#8e24aa']
 const courseColor = (c) => PALETTE[Math.max(0, data.courses.indexOf(c)) % PALETTE.length]
-const courseCode = courseLabel // nickname-aware everywhere a course is named
+
+// All-or-nothing course labels. Every course-naming site funnels through
+// courseCode, so flipping labelMode ticks the WHOLE page from nicknames to codes
+// at once — never a mix. reflowLabels (below) decides the mode by measurement.
+let labelMode = 'nick' // 'nick' | 'code'
+const courseCode = (c) => courseLabel(c, labelMode, loadCanvas().labels)
 const hiddenCourses = () => loadCanvas().hiddenCourses.map(String)
 const visibleCourses = () => {
   const hidden = hiddenCourses()
@@ -80,9 +85,10 @@ export function hydrateCanvasWidgets(contentEl) {
   // Paint the cached copy first — the page is then never a wall of "Loading…",
   // and the refresh below swaps in fresh data when it lands.
   const hadCache = !!data
-  if (hadCache) for (const m of mounts) fillMount(m)
+  if (hadCache) { for (const m of mounts) fillMount(m); scheduleReflow(contentEl) }
+  observeLabels(contentEl)
   canvasData()
-    .then(() => { for (const m of contentEl.querySelectorAll('[data-cv-widget]')) fillMount(m) })
+    .then(() => { for (const m of contentEl.querySelectorAll('[data-cv-widget]')) fillMount(m); scheduleReflow(contentEl) })
     .catch((err) => {
       // With a cached copy on screen, a failed refresh is not worth replacing
       // real (if stale) grades with an error message.
@@ -105,6 +111,43 @@ const refillWid = (wid) => {
 const refillKind = (kind) => {
   if (!data) return
   for (const m of document.querySelectorAll(`[data-cv-widget="${kind}"]`)) fillMount(m)
+}
+
+// Course-label reflow: show nicknames when they all fit, else tick every .cv-ctag
+// over to its code. The mode is decided from the nickname baseline so growing the
+// element reverts the switch. Mirrors view.js's .chart-mount ResizeObserver idiom;
+// the width guard ignores height-only changes (including our own refills), so the
+// re-fill below can't loop.
+let labelRO = null, labelRoot = null, labelW = -1, labelPending = false
+function refillAllMounts(root) {
+  if (!data) return
+  for (const m of root.querySelectorAll('[data-cv-widget]')) fillMount(m)
+}
+function anyTagOverflows(root) {
+  for (const t of root.querySelectorAll('.cv-ctag')) if (t.scrollWidth > t.clientWidth + 1) return true
+  return false
+}
+function reflowLabels(root) {
+  if (!data || !root.querySelector('.cv-ctag')) return
+  if (labelMode !== 'nick') { labelMode = 'nick'; refillAllMounts(root) }
+  if (anyTagOverflows(root)) { labelMode = 'code'; refillAllMounts(root) }
+}
+function scheduleReflow(root) {
+  if (labelPending) return
+  labelPending = true
+  requestAnimationFrame(() => { labelPending = false; reflowLabels(root) })
+}
+function observeLabels(root) {
+  if (labelRoot !== root) { labelRO?.disconnect(); labelRO = null; labelW = -1 }
+  labelRoot = root
+  if (labelRO) return
+  labelRO = new ResizeObserver((entries) => {
+    const w = Math.round(entries[0].contentRect.width)
+    if (w === labelW) return
+    labelW = w
+    scheduleReflow(root)
+  })
+  labelRO.observe(root)
 }
 
 // ---- builders --------------------------------------------------------------------
@@ -483,10 +526,13 @@ export function renderCanvasSettings(container) {
     canvasData().then(() => {
       const s2 = loadCanvas()
       const hidden = s2.hiddenCourses.map(String)
+      const labels = s2.labels
       el.innerHTML = data.courses.map((c) => `
-        <div class="cv-semedit${hidden.includes(String(c.id)) ? ' cv-course-off' : ''}">
+        <div class="cv-semedit cv-labelrow${hidden.includes(String(c.id)) ? ' cv-course-off' : ''}">
           <label class="gym-check" title="Show this course in widgets"><input type="checkbox" data-cv-course-on="${c.id}"${hidden.includes(String(c.id)) ? '' : ' checked'}></label>
-          <span class="cv-credit-name" title="${esc(c.original_name || c.name)}">${esc(courseLabel(c))}${c.original_name ? ` <span class="cv-credit-orig">${esc(c.original_name)}</span>` : ''}</span>
+          <span class="cv-credit-name" title="${esc(c.original_name || c.name)}">${esc(c.name)}</span>
+          <input class="pw-field cv-labelin" data-cv-nick="${c.id}" value="${esc(labels[c.id]?.nick ?? '')}" placeholder="${esc(c.name)}" aria-label="Nickname for ${esc(c.name)}">
+          <input class="pw-field cv-labelin" data-cv-code="${c.id}" value="${esc(labels[c.id]?.code ?? '')}" placeholder="${esc(c.course_code || 'code')}" aria-label="Short code for ${esc(c.name)}">
           <input class="pw-field cv-num" type="number" min="0" step="0.5" data-cv-credit="${c.id}" value="${esc(s2.credits[c.id] ?? '')}" placeholder="3" aria-label="Credit hours for ${esc(c.name)}">
         </div>`).join('') || note('No active courses found.')
     }).catch((err) => { el.innerHTML = note(esc(err.message)) })
@@ -554,6 +600,15 @@ export function renderCanvasSettings(container) {
     }
     const credit = e.target.closest('[data-cv-credit]')
     if (credit) { s2.credits[credit.dataset.cvCredit] = credit.value; saveCanvas(s2); return }
+    const label = e.target.closest('[data-cv-nick],[data-cv-code]')
+    if (label) {
+      const nick = label.dataset.cvNick
+      const id = nick ?? label.dataset.cvCode
+      const cur = { ...(s2.labels[id] || {}), [nick != null ? 'nick' : 'code']: label.value.trim() }
+      if (!cur.nick && !cur.code) delete s2.labels[id]; else s2.labels[id] = cur
+      saveCanvas(s2)
+      return
+    }
     const cls = e.target.closest('[data-cv-class]')
     if (cls) {
       const block = cls.closest('[data-sem-id]')

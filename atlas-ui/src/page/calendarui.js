@@ -4,6 +4,7 @@
 // Google Calendar API; recurring instances arrive expanded from the server.
 
 import { isMobile } from '../platform.js'
+import { confirmDelete } from './confirm.js'
 import { loadEmail, saveEmail, isConnected, connectGmail, AuthError } from './email.js'
 import { cachedValue, writeCache } from './datacache.js'
 import {
@@ -89,9 +90,9 @@ export function renderCalendarPage(root, rerender) {
   const s = loadEmail()
   if (!isConnected(s)) { renderConnect(s); return }
   const cs = loadCal()
-  // Mobile lands on a single day (a 7-col month grid doesn't fit a phone
-  // width); the pills still let the user pick month/week from there.
-  st.view = isMobile() ? 'day' : cs.view
+  // Mobile respects the saved view exactly like desktop; responsive CSS
+  // (.cal--mobile container queries) shrinks month/week/day to phone width.
+  st.view = cs.view
   st.cursor = startOfDay(new Date())
   root.innerHTML = `
     <div class="cal">
@@ -675,7 +676,7 @@ function saveEditor() {
 
 // ---- clicks -------------------------------------------------------------------
 
-function onClick(e) {
+async function onClick(e) {
   const x = e.target.closest('[data-cal-x]')
   if (x) {
     const k = Number(x.dataset.k)
@@ -685,7 +686,7 @@ function onClick(e) {
     if (x.dataset.calX === 'edit') { ev.recurringEventId ? askScope('Edit', k) : openEditor({ mode: 'edit', e: ev }) }
     if (x.dataset.calX === 'delete') {
       if (ev.recurringEventId) askScope('Delete', k)
-      else if (confirm('Delete this event?')) doDelete(ev, 'one')
+      else if (await confirmDelete('Delete this event?')) doDelete(ev, 'one')
     }
     return
   }

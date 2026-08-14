@@ -8,6 +8,7 @@ import {
 } from './work.js'
 import { ensureCalendar, createEvent, deleteEvent, tz } from './calendar.js'
 import { isConnected } from './email.js'
+import { confirmDelete } from './confirm.js'
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -179,7 +180,7 @@ export function bindWork(rerender) {
   document.body.addEventListener('input', onWorkInput)
 }
 
-function onWorkClick(e) {
+async function onWorkClick(e) {
   const pill = e.target.closest('[data-wk-range]')
   if (pill) {
     setRange(loadWork(), pill.dataset.wid, pill.dataset.wkRange)
@@ -207,7 +208,8 @@ function onWorkClick(e) {
     closeShift(s, act.dataset.id, { end, hours, tips: row.querySelector('.wk-tips-in')?.value })
     rerenderApp?.()
   } else if (a === 'del-shift') {
-    removeShift(s, act.dataset.id)
+    if (!(await confirmDelete('Delete this shift?'))) return
+    removeShift(loadWork(), act.dataset.id)
     rerenderApp?.()
   } else if (a === 'edit-shift') {
     editingShifts.add(act.dataset.id)
@@ -257,10 +259,12 @@ function onWorkClick(e) {
     rerenderApp?.()
     if (sh.gcalId && s.calId) deleteEvent(s.calId, sh.gcalId).catch(() => {})
   } else if (a === 'del-upcoming') {
-    const sh = s.upcoming.find((x) => x.id === act.dataset.id)
-    removeUpcoming(s, act.dataset.id)
+    if (!(await confirmDelete('Remove this shift?'))) return
+    const s2 = loadWork()
+    const sh = s2.upcoming.find((x) => x.id === act.dataset.id)
+    removeUpcoming(s2, act.dataset.id)
     rerenderApp?.()
-    if (sh?.gcalId && s.calId) deleteEvent(s.calId, sh.gcalId).catch(() => {})
+    if (sh?.gcalId && s2.calId) deleteEvent(s2.calId, sh.gcalId).catch(() => {})
   } else if (a === 'pg') {
     const state = st(act.dataset.wid, () => ({ page: 0 }))
     state.page = Math.max(0, state.page + Number(act.dataset.d)) // upper bound is clamped at render

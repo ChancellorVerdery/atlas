@@ -17,13 +17,18 @@ export function loadCanvas() {
   if (!Array.isArray(s.semesters)) s.semesters = [] // {id, name, gpa, credits}
   if (!Array.isArray(s.dismissed)) s.dismissed = [] // "courseId:assignmentId" hidden overdue
   if (!Array.isArray(s.hiddenCourses)) s.hiddenCourses = [] // courseIds excluded from every widget
+  if (!s.labels || typeof s.labels !== 'object') s.labels = {} // courseId → {nick, code} (user-set, Atlas-local)
   return s
 }
 
-// When the user set a nickname in Canvas, the API returns it as `name` and
-// moves the real name to `original_name` — prefer the nickname everywhere,
-// falling back to the short course code for compact spots.
-export const courseLabel = (c) => (c.original_name ? c.name : c.course_code || c.name)
+// The user can set a per-course nickname and a per-course code in Atlas (Canvas's
+// own course_code like 'MATH-1241-001' is ugly). The widgets render every course
+// in one of two modes, all-or-nothing: NICK shows the nickname (user's, else the
+// Canvas name), CODE shows the code (user's, else Canvas's course_code).
+export const courseNick = (c, labels = loadCanvas().labels) => labels[c.id]?.nick || c.name
+export const courseCodeOf = (c, labels = loadCanvas().labels) => labels[c.id]?.code || c.course_code || c.name
+export const courseLabel = (c, mode = 'nick', labels = loadCanvas().labels) =>
+  (mode === 'code' ? courseCodeOf(c, labels) : courseNick(c, labels))
 export function saveCanvas(s) { localStorage.setItem(KEY, JSON.stringify(s)) }
 export const canvasConnected = (s = loadCanvas()) => !!(s.host && s.token)
 

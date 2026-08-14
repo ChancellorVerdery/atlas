@@ -7,6 +7,7 @@ import {
   debtSeries, currentDebt, bedtimePlan, nightMinutesFor,
 } from './sleep.js'
 import { barChart, lineChart } from './chart.js'
+import { confirmDelete } from './confirm.js'
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -143,7 +144,7 @@ export function bindSleep(rerender) {
   document.body.addEventListener('change', onSleepChange)
 }
 
-function onSleepClick(e) {
+async function onSleepClick(e) {
   const star = e.target.closest('[data-sl-star]')
   if (star) {
     const state = st(star.dataset.wid)
@@ -155,6 +156,11 @@ function onSleepClick(e) {
   }
   const act = e.target.closest('[data-sl-act]')
   if (!act) return
+  if (act.dataset.slAct === 'del') {
+    if (!(await confirmDelete('Delete this sleep entry?'))) return
+    removeLog(loadSleep(), act.dataset.id)
+    return rerenderApp?.()
+  }
   const s = loadSleep()
   if (act.dataset.slAct === 'add') {
     const box = act.closest('.sl-add')
@@ -169,9 +175,6 @@ function onSleepClick(e) {
     })
     if (!added) return
     state.quality = 0
-    rerenderApp?.()
-  } else if (act.dataset.slAct === 'del') {
-    removeLog(s, act.dataset.id)
     rerenderApp?.()
   }
 }

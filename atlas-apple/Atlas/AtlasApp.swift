@@ -27,7 +27,9 @@ struct AtlasApp: App {
             #if os(macOS)
             .frame(minWidth: 960, minHeight: 640)
             #else
-            .ignoresSafeArea(.container, edges: .bottom)
+            // Full screen top-to-bottom: the web content owns the notch/home
+            // -indicator insets via CSS env(safe-area-inset-*) (viewport-fit=cover).
+            .ignoresSafeArea(.container, edges: .all)
             #endif
         }
         .onChange(of: phase) { _, now in

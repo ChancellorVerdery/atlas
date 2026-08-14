@@ -32,6 +32,13 @@
 
 * { box-sizing: border-box; }
 
+/* Scrollbars hidden app-wide (content stays scrollable) — no visible track or
+   thumb on any scroller, desktop or mobile. Elements keep horizontal scrolling
+   only where they set overflow-x themselves (.cp-classes, .st-flash__content);
+   the page itself never scrolls sideways (see .content overflow-x:hidden). */
+* { scrollbar-width: none; }
+::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 html, body { height: 100%; }
 
 body {
@@ -259,14 +266,11 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
   background: rgba(var(--brass-rgb), 0.1);
 }
 
-.content { position: relative; flex: 1; overflow: auto; padding: 40px; }
-.content::-webkit-scrollbar { width: 11px; }
-.content::-webkit-scrollbar-thumb {
-  background: rgba(var(--ink-rgb), 0.1);
-  border-radius: 10px;
-  border: 3px solid transparent;
-  background-clip: content-box;
-}
+/* Vertical scroll only — overflow-x:hidden guarantees no page ever scrolls
+   left/right (the widget row model collapses to a column on mobile). Scrollbar
+   hidden (scrollbar-width:none + the webkit rule) but the area stays scrollable. */
+.content { position: relative; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 40px; scrollbar-width: none; }
+.content::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 /* ---- empty state -------------------------------------------------------- */
 
@@ -387,7 +391,7 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
   font-size: 24px;
   color: var(--ink);
 }
-.modal__body { flex: 1; overflow: auto; font-size: 14px; line-height: 1.7; color: var(--ink-dim); white-space: pre-wrap; }
+.modal__body { flex: 1; overflow: auto; font-size: 14px; line-height: 1.7; color: var(--ink-dim); white-space: pre-wrap; scrollbar-width: none; }
 /* Opts out of the JS-applied window-aspect lock (renderer.js's
    syncModalAspect): no forced aspect-ratio, so the box's height is driven by
    its own content up to max-height instead of by the window's shape — the
@@ -396,13 +400,20 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
    its usual layout room; .modal__body's overflow:auto stays too, as a
    fallback for a window too short to fit even this. */
 .modal--fit { max-height: 92vh; }
-.modal__body::-webkit-scrollbar { width: 11px; }
-.modal__body::-webkit-scrollbar-thumb {
-  background: rgba(var(--ink-rgb), 0.1);
-  border-radius: 10px;
-  border: 3px solid transparent;
-  background-clip: content-box;
+.modal__body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* Confirm-modal action row (confirm.js) + its two buttons. .btn-danger is the
+   destructive confirm (--neg), .btn-cancel the ghost dismiss. */
+.modal__actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+.btn-danger, .btn-cancel {
+  padding: 9px 16px; border-radius: 10px; border: 1px solid transparent;
+  font-family: "Hanken Grotesk", system-ui, sans-serif; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: 0.15s;
 }
+.btn-danger { border-color: rgba(var(--neg-rgb), 0.5); background: rgba(var(--neg-rgb), 0.12); color: var(--neg); }
+.btn-danger:hover { background: rgba(var(--neg-rgb), 0.2); }
+.btn-cancel { border-color: var(--line-2); background: transparent; color: var(--ink-dim); }
+.btn-cancel:hover { color: var(--ink); background: rgba(var(--ink-rgb), 0.05); }
 
 /* ---- chart modal (click any bar/line chart to view it large + hover) ---- */
 
@@ -1063,6 +1074,19 @@ math-field { --caret-color: var(--brass); --selection-background-color: rgba(var
 .gym-btn--sm { padding: 3px 10px; font-size: 11px; }
 .gym-btn--ghost { border-color: var(--line-2); background: transparent; color: var(--ink-dim); }
 .gym-btn--ghost:hover { color: var(--ink); background: rgba(var(--ink-rgb), 0.05); }
+
+/* Set logger (weight | reps | ×) + set-history rows (date | small chart).
+   Class names coordinate with the gym JS agent's markup; ponytail: if it emits
+   other names only these blocks need renaming. Inputs reuse .pw-field. */
+.gym-sets { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.gym-set-row { display: flex; align-items: center; gap: 8px; }
+.gym-set-row .pw-field, .gym-set-row .gym-w, .gym-set-row .gym-r { flex: 0 0 72px; padding: 6px 8px; font-size: 12.5px; }
+.gym-set-row__lbl { flex: none; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-faint); }
+.gym-set-row .pw-item-remove, .gym-set-row .pw-delete, .gym-set-row .gym-set-x { margin-left: auto; }
+.gym-hist-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.gym-hist-row:last-child { border-bottom: none; }
+.gym-hist-row__date { flex: 0 0 96px; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-dim); }
+.gym-hist-row__chart { flex: 1; min-width: 0; }
 .btn-gym-complete {
   display: block;
   width: 100%;
@@ -1572,9 +1596,22 @@ html[data-page="calendar"] .content { padding: 0; overflow: hidden; display: fle
 }
 .cal-month__grid { display: grid; grid-template-columns: repeat(7, 1fr); grid-template-rows: repeat(6, 1fr); flex: 1; min-height: 0; }
 .cal-cell { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 4px; min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: 2px; cursor: pointer; container-type: inline-size; }
-/* Narrow month cells (small viewport / zoomed in): drop the trailing time so
-   the event title keeps a readable width instead of collapsing to one glyph. */
+/* Narrow month cells (small viewport / phone): progressively shrink chrome so a
+   full month grid fits phone width instead of scrolling sideways. First drop the
+   trailing time, then tighten chip padding/font, then the day number — the title
+   (.cal-chip__t) already ellipsizes so it stays readable throughout. */
 @container (max-width: 118px) { .cal-chip__time { display: none; } }
+@container (max-width: 90px) {
+  .cal-cell { padding: 3px; }
+  .cal-chip { padding: 1px 4px; font-size: 10.5px; gap: 4px; }
+  .cal-chip::before { width: 5px; height: 5px; }
+  .cal-more { font-size: 9.5px; padding: 1px 4px; }
+}
+@container (max-width: 64px) {
+  .cal-cell { padding: 2px; gap: 1px; }
+  .cal-chip { padding: 1px 3px; font-size: 10px; gap: 3px; }
+  .cal-cell__num { width: 18px; height: 18px; font-size: 10.5px; }
+}
 .cal-cell:nth-child(7n) { border-right: none; }
 .cal-cell:hover { background: rgba(var(--ink-rgb), 0.025); }
 .cal-cell--other { background: color-mix(in srgb, var(--bg) 45%, transparent); }
@@ -1628,6 +1665,13 @@ html[data-page="calendar"] .content { padding: 0; overflow: hidden; display: fle
 .cal-day-col {
   flex: 1; min-width: 0; position: relative; border-left: 1px solid var(--line); cursor: pointer;
   background: repeating-linear-gradient(to bottom, transparent 0 43px, var(--line) 43px 44px);
+  container-type: inline-size;
+}
+/* Narrow day columns (phone week view): shrink block chrome and floor the
+   timed-block height so short events stay a tappable ~30px tall. */
+@container (max-width: 90px) {
+  .cal-block { padding: 2px 4px; font-size: 10.5px; min-height: 30px; }
+  .cal-block__time { font-size: 8.5px; }
 }
 .cal-block {
   position: absolute; overflow: hidden; text-align: left; cursor: pointer;
@@ -1867,6 +1911,14 @@ input[type="date"].pw-field, input[type="time"].pw-field { color-scheme: dark; }
 }
 .cv-addclass:hover { color: var(--ink); }
 .cv-semedit .pw-field:disabled { opacity: 0.6; }
+
+/* Per-course nickname/code editor rows (item 6): reuse .cv-semedit's flex row;
+   min-width:0 stops the two label inputs' placeholders from forcing overflow,
+   and on mobile the row wraps so name | nick | code | credits stack readably. */
+.cv-labelin { min-width: 0; }
+body.is-mobile .cv-labelrow { flex-wrap: wrap; }
+body.is-mobile .cv-labelrow .cv-credit-name { flex: 1 1 100%; }
+body.is-mobile .cv-labelin { flex: 1 1 40%; }
 
 /* ---- Work plugin --------------------------------------------------------- */
 
@@ -2465,8 +2517,11 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 .st-tab--add { padding: 5px 11px; color: var(--ink-faint); }
 .st-tab--edit { padding: 0; }
 .st-tab__in { background: none; border: none; color: var(--brass); font: inherit; font-size: 13px; padding: 5px 14px; width: 14ch; outline: none; }
-.st-tab__x { color: var(--ink-faint); font-size: 14px; line-height: 1; }
-.st-tab__x:hover { color: var(--ink); }
+/* Its own padded hit box so a tap lands on the close, not the parent tab
+   (the JS layer adds stopPropagation). Negative margin keeps the visual size
+   close to before while the hit area grows. */
+.st-tab__x { display: inline-flex; align-items: center; justify-content: center; padding: 3px 5px; margin: -3px -5px -3px -1px; border-radius: 6px; color: var(--ink-faint); font-size: 14px; line-height: 1; }
+.st-tab__x:hover { color: var(--ink); background: rgba(var(--ink-rgb), 0.08); }
 .st-tools { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* fit-to-page (Study chat + Flashcards): the content area stops scrolling and
@@ -2625,10 +2680,29 @@ body.is-mobile .sidebar {
 }
 body.is-mobile.nav-open .sidebar { transform: none; }
 
-body.is-mobile .topbar { padding: 18px 16px 14px; flex-wrap: wrap; gap: 12px; }
+/* Topbar layout (item 4): nav button top-left, crumb centered beside it on
+   row 1, title/tabs (.topbar__lead) forced onto row 2 full-width & left-aligned.
+   justify-content:flex-start (not space-between) keeps the crumb hugging the
+   button. Safe-area top/left (item 3) keeps the nav button clear of the notch. */
+body.is-mobile .topbar {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px 12px;
+  padding: max(18px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 14px max(16px, env(safe-area-inset-left));
+}
+body.is-mobile .topbar > .crumb { margin: 0; }
+body.is-mobile .topbar__lead { flex: 1 0 100%; width: 100%; text-align: left; }
 body.is-mobile .title { font-size: 30px; }
-body.is-mobile .content { padding: 18px 16px; }
+body.is-mobile .content { padding: 18px max(16px, env(safe-area-inset-right)) 18px max(16px, env(safe-area-inset-left)); }
 body.is-mobile .prow-title-input { max-width: 100%; }
+
+/* Safe-area insets (item 3): keep chrome clear of the notch / home indicator
+   under viewport-fit=cover. max() so the inset only ever grows the existing
+   padding, and these envs are 0 off-device — harmless on desktop. */
+body.is-mobile .sidebar__head { padding-top: max(36px, env(safe-area-inset-top)); padding-left: max(18px, env(safe-area-inset-left)); }
+body.is-mobile .sidebar__body { padding-left: max(18px, env(safe-area-inset-left)); }
+body.is-mobile .sidebar__foot { padding-bottom: max(18px, env(safe-area-inset-bottom)); padding-left: max(18px, env(safe-area-inset-left)); }
 
 /* --- widget model: never side by side --- */
 body.is-mobile .prow-body { flex-direction: column; gap: 12px; }
@@ -2638,6 +2712,17 @@ body.is-mobile .pcol { flex: 1 1 auto !important; width: 100%; }
 /* the horizontal-drag handles no longer control anything in a forced column */
 body.is-mobile .pcol-resize,
 body.is-mobile .prow-hresize { display: none; }
+
+/* Customize drag grip: the desktop -28px side gutter falls in the content's
+   16px padding and gets clipped on a phone, so float a bigger, easy-to-grab
+   pill at the row's top-left corner instead (item 6). */
+body.is-mobile .prow-handle {
+  left: 0; top: 0; bottom: auto;
+  width: 40px; height: 34px;
+  background: rgba(var(--ink-rgb), 0.06);
+  font-size: 16px;
+  z-index: 4;
+}
 
 /* --- Email: master/detail → one pane --- */
 body.is-mobile .mail-body { position: relative; }
@@ -2655,7 +2740,9 @@ body.is-mobile .mail-body.mail--view-open .mail-view { display: flex; width: 100
 body.is-mobile .mail-body.mail--view-open .mail-list { display: none; }
 /* back button reuses .mail-btn--ghost (already styled); compose FAB: */
 body.is-mobile .mail-fab {
-  position: fixed; right: 16px; bottom: 16px; z-index: 80;
+  position: fixed; z-index: 80;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(16px + env(safe-area-inset-bottom));
   width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--brass); color: var(--on-accent);
@@ -2671,14 +2758,23 @@ body.is-mobile .cal-nav {
   width: min(80vw, 260px); background: var(--panel);
   box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
 }
-/* the day/agenda list fills the width; a month/week grid is wider than a phone,
-   so it scrolls inside cal-grid instead of stretching the page */
-body.is-mobile .cal-grid { width: 100%; overflow-x: auto; }
-body.is-mobile .cal--mobile .cal-month { min-width: 620px; }
+/* Month/week/day all fit phone width now via the container-query shrink on
+   .cal-cell (month) and .cal-day-col (week/day) — no min-width scroll hack. A
+   narrower time gutter buys the day columns more room. */
+body.is-mobile .cal-grid { width: 100%; }
+body.is-mobile .cal-gutter { width: 42px; flex-basis: 42px; }
 
 /* --- Equations: full width (equation widgets stack via the .pcol rule) --- */
 body.is-mobile math-field.pw-mathfield,
 body.is-mobile .pw-mathfield { width: 100%; }
+/* On mobile .pline is a column, so its cross-axis is width. The hug list
+   (align-self:flex-start ~522) then shrink-wraps these widgets' WIDTH; stretch
+   them to span the full screen instead. Only the container stretches — the
+   equation glyphs (.eq-render / math-field font) keep their natural size. */
+body.is-mobile .pwidget--eqcard,
+body.is-mobile .pwidget--eqlist,
+body.is-mobile .pwidget--card,
+body.is-mobile .pwidget--list { align-self: stretch; }
 
 /* --- General polish --- */
 body.is-mobile .modal-overlay { padding: 12px; }
@@ -2687,6 +2783,27 @@ body.is-mobile .modal { max-width: 96vw; max-height: 92vh; padding: 20px 18px; o
 body.is-mobile .action-btn,
 body.is-mobile .mail-btn,
 body.is-mobile .page-tab { min-height: 40px; }
+/* Delete/close X's: 40px hit box on mobile (the broken-X root cause was a hit
+   area smaller than a fingertip). Scoped to mobile so desktop X's stay small. */
+body.is-mobile .pw-item-remove,
+body.is-mobile .pw-delete,
+body.is-mobile .st-tab__x,
+body.is-mobile .nt-chip__x { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+/* Settings rows stack on mobile so the action button never overlaps the
+   description text (side-by-side .set-row was colliding at phone width). */
+body.is-mobile .set-row { flex-direction: column; align-items: stretch; gap: 10px; }
+body.is-mobile .set-row__meta { width: 100%; }
+/* Calendar cells: the @container(max-width) rules can't style .cal-cell itself
+   (an element isn't styled by its own container query), so tighten padding
+   directly on mobile, and narrow the week/day columns a touch. */
+body.is-mobile .cal-cell { padding: 2px; }
+body.is-mobile .cal-day-col { min-width: 0; }
+body.is-mobile .cal-gutter { width: 34px; }
 /* last line of defence against a sideways page scroll */
 body.is-mobile { overflow-x: hidden; }
 body.is-mobile img, body.is-mobile video { max-width: 100%; }
+
+/* The confirm-delete modal must layer ABOVE any open #app-modal (gym/chart/
+   calendar), which sits at z-index 60. It has its own id so it never removes
+   the modal underneath it. */
+.confirm-overlay { z-index: 90; }

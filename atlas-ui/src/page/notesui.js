@@ -8,8 +8,11 @@
 
 import {
   loadNotesStore, saveNotesStore, pickFolder, fetchTree, convertNote, saveNote,
+  readNote, deleteNote,
   appleNotesTree, appleNotesFetch, fileURL, revealFile, WIKI_RE, EMBED_RE, IMG_RE,
 } from './notes.js'
+import { isNative, isNativeIOS } from '../platform.js'
+import { confirmDelete } from './confirm.js'
 import { isAIConfigured, loadAI } from './ai.js'
 // ponytail: AI is single-provider (Claude) now; capability routing collapsed to "is AI connected"
 const providerForCapability = () => isAIConfigured(loadAI())
@@ -49,7 +52,8 @@ window.addEventListener('hashchange', () => {
 
 export function renderNotesPage(root) {
   const s = loadNotesStore()
-  if (!s.dir) {
+  const native = isNative() // native stores in iCloud — no user-picked folder
+  if (!s.dir && !native) {
     root.innerHTML = `<div class="nt">
       <div class="gf-empty">
         <p class="gym-empty">Pick your notes folder and Atlas turns anything you upload — handwriting, screenshots, PDFs, links — into markdown notes with wiki-links.</p>
@@ -63,8 +67,8 @@ export function renderNotesPage(root) {
   root.innerHTML = `<div class="nt">
     <div class="gf-bar">
       <button type="button" class="gym-btn" data-nt="new" ${noAI ? 'disabled' : ''}>+ New note</button>
-      <button type="button" class="gym-btn gym-btn--ghost" data-nt="pick">Change folder…</button>
-      <span class="gf-dir" title="${esc(s.dir)}">${esc(dirName(s.dir))}</span>
+      ${native ? '' : '<button type="button" class="gym-btn gym-btn--ghost" data-nt="pick">Change folder…</button>'}
+      <span class="gf-dir" title="${native ? 'iCloud' : esc(s.dir)}">${native ? 'iCloud' : esc(dirName(s.dir))}</span>
       <span class="gf-status" id="nt-status">${noAI ? esc(NO_AI_MSG) : ''}</span>
     </div>
     <div class="nt-queue" id="nt-queue"></div>
@@ -129,7 +133,12 @@ function treeHTML(node) {
   const dirs = [...node.dirs.entries()].sort(([a], [b]) => a.localeCompare(b))
   const notes = [...node.notes].sort((a, b) => a.path.localeCompare(b.path))
   return dirs.map(([name, child]) => `<details class="nt-dir" open><summary>${esc(name)}</summary>${treeHTML(child)}</details>`).join('')
-    + notes.map((n) => `<button type="button" class="nt-note${pg.open === n.path ? ' is-open' : ''}" data-nt="open" data-path="${esc(n.path)}">${esc(noteName(n.path))}</button>`).join('')
+    // ponytail: the row's flex layout is inline because styles.css is another
+    // agent's file — a .nt-note-row rule is the upgrade path. The × deletes.
+    + notes.map((n) => `<div class="nt-note-row" style="display:flex;align-items:center;gap:2px">`
+      + `<button type="button" class="nt-note${pg.open === n.path ? ' is-open' : ''}" style="flex:1;min-width:0" data-nt="open" data-path="${esc(n.path)}">${esc(noteName(n.path))}</button>`
+      + `<button type="button" class="nt-chip__x" data-nt="note-del" data-path="${esc(n.path)}" aria-label="Delete note">×</button>`
+      + `</div>`).join('')
 }
 
 function renderTree() {
@@ -199,9 +208,7 @@ async function openNote(rel) {
   if (!view) return
   view.innerHTML = '<p class="cal-wnote">Loading…</p>'
   try {
-    const r = await fetch(fileURL(s.dir, rel))
-    if (!r.ok) throw new Error((await r.json()).error || `read failed (${r.status})`)
-    const text = await r.text()
+    const text = await readNote(s.dir, rel) // iCloud when native, graph middleware on web
     if (pg.open !== rel || !document.getElementById('nt-view')) return // clicked away mid-fetch
     view.innerHTML = `
       <div class="nt-view__head">
@@ -226,6 +233,27 @@ function followWiki(target) {
   else setStatus(`No note yet for “${target}”`)
 }
 
+// Destructive — gate on confirmDelete (the tree × sits one pixel from the note
+// button, so it's easy to hit by accident). Deletes from the active backend
+// (iCloud when native), then refreshes the tree and clears the viewer if the
+// deleted note was open.
+async function deleteNoteFlow(rel) {
+  if (!(await confirmDelete(`Delete “${noteName(rel)}”?`))) return
+  const s = loadNotesStore()
+  try {
+    await deleteNote(s.dir, rel)
+    if (pg.open === rel) {
+      pg.open = null
+      const view = document.getElementById('nt-view')
+      if (view) view.innerHTML = '<p class="cal-wnote">Select a note to read it.</p>'
+    }
+    await loadTree(s.dir)
+    setStatus(`Deleted ${noteName(rel)}`)
+  } catch (err) {
+    setStatus(err.message)
+  }
+}
+
 // ---- page click delegation ----------------------------------------------------------
 
 function onPageClick(e) {
@@ -247,6 +275,7 @@ function onPageClick(e) {
     })
   } else if (act === 'new') openUpload()
   else if (act === 'open') openNote(el.dataset.path)
+  else if (act === 'note-del') deleteNoteFlow(el.dataset.path)
   else if (act === 'wiki') { e.preventDefault(); followWiki(el.dataset.target) }
   else if (act === 'reveal') revealFile(s.dir, el.dataset.path)
   else if (act === 'q-review') {
@@ -596,6 +625,12 @@ function onModalClick(e) {
 // Convert = enqueue: the modal closes immediately and the job runs in the
 // background (queue strip at the top of the page shows progress).
 function doConvert() {
+  // iOS has no sidecar, so the AI converter can't run there. Reading, editing,
+  // and deleting iCloud notes still work — only new-note conversion needs the Mac.
+  if (isNativeIOS()) {
+    up.error = 'Creating a note from uploads needs the Mac app — its AI converter isn’t available on iPhone/iPad. You can still read, edit, and delete your iCloud notes here.'
+    return renderUpload()
+  }
   if (!providerForCapability('notes')) {
     up.error = NO_AI_MSG
     return renderUpload()

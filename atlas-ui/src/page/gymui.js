@@ -6,11 +6,12 @@ import {
   loadGym, saveGym, DAYS, DAY_LABELS, todayKey, toDisplayWeight, toKgWeight,
   addWorkout, removeWorkout, addExercise, removeExercise,
   workoutById, exerciseById, exercisesOf,
-  logSet, removeLastSet, logsFor,
+  logSet, removeSetAt, removeLogsForDate, logsFor, est1RM,
   exerciseSeries, generalScore, generalSeries,
   currentWorkout, upcomingWorkouts, completeWorkout,
 } from './gym.js'
 import { lineChart } from './chart.js'
+import { confirmDelete } from './confirm.js'
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -81,15 +82,25 @@ export function gymWidgetHTML(w, cz, secCtx) {
   const today = todayKey()
   const logRow = (e, side) => {
     const entry = logsFor(g, e.id, today, side)
-    const chips = entry ? entry.sets.map((x) => setChip(x, g.unit)).join(', ') : ''
-    return `<div class="gym-log-row" data-ex-id="${esc(e.id)}"${side ? ` data-side="${side}"` : ''}>
+    const sets = entry?.sets ?? []
+    const sideAttr = side ? ` data-side="${side}"` : ''
+    // Input controls sit LEFT-aligned (no flex:1 spacer in this row now).
+    const inputRow = `<div class="gym-log-row" data-ex-id="${esc(e.id)}"${sideAttr}>
       ${side ? `<span class="gym-side">${side}</span>` : ''}
-      <span class="gym-chips">${esc(chips) || '<span class="gym-chips--none">no sets yet</span>'}</span>
       ${cz ? '' : `<input class="pw-field gym-w" type="number" min="0" step="0.5" placeholder="${g.unit}" aria-label="Weight (${g.unit})">
       <input class="pw-field gym-r" type="number" min="1" step="1" placeholder="reps" aria-label="Reps">
-      <button type="button" class="gym-btn" data-gym-act="log-set">Log</button>
-      ${entry?.sets.length ? `<button type="button" class="gym-btn gym-btn--ghost" data-gym-act="undo-set" title="Remove last set">↩</button>` : ''}`}
+      <button type="button" class="gym-btn" data-gym-act="log-set">Log</button>`}
     </div>`
+    // One row per set (weight | reps), each with its own plain-x delete.
+    const rows = sets.map((s, i) => `<div class="gym-set-row">
+      <span class="gym-set-w">${s.weight > 0 ? `${toDisplayWeight(s.weight, g.unit)} ${g.unit}` : 'body'}</span>
+      <span class="gym-set-r">${s.reps} reps</span>
+      ${cz ? '' : `<button type="button" class="pw-item-remove" data-gym-act="del-set" data-ex-id="${esc(e.id)}"${sideAttr} data-date="${today}" data-idx="${i}" title="Remove set">x</button>`}
+    </div>`).join('')
+    const list = sets.length
+      ? `<div class="gym-sets">${rows}</div>`
+      : `<p class="gym-chips--none">no sets yet</p>`
+    return inputRow + list
   }
   return head('Current workout') + `<div class="gym-big">${esc(w0.name)}</div>` +
     (exs.length ? exs.map((e) =>
@@ -122,20 +133,22 @@ export function bindGym(rerender) {
   document.body.addEventListener('click', onGymClick)
 }
 
-function onGymClick(e) {
+async function onGymClick(e) {
   const act = e.target.closest('[data-gym-act]')
   if (act) {
     const g = loadGym()
     const a = act.dataset.gymAct
-    if (a === 'log-set' || a === 'undo-set') {
+    if (a === 'log-set') {
       const row = act.closest('.gym-log-row')
       const side = row.dataset.side || null
-      if (a === 'log-set') {
-        const weight = toKgWeight(row.querySelector('.gym-w').value, g.unit) // canonical kg
-        const reps = row.querySelector('.gym-r').value
-        if (!Number(reps)) return
-        logSet(g, row.dataset.exId, side, weight, reps)
-      } else removeLastSet(g, row.dataset.exId, side)
+      const weight = toKgWeight(row.querySelector('.gym-w').value, g.unit) // canonical kg
+      const reps = row.querySelector('.gym-r').value
+      if (!Number(reps)) return
+      logSet(g, row.dataset.exId, side, weight, reps)
+      rerenderApp?.()
+    } else if (a === 'del-set') {
+      if (!(await confirmDelete('Delete this set?'))) return
+      removeSetAt(loadGym(), act.dataset.exId, act.dataset.side || null, act.dataset.date, Number(act.dataset.idx))
       rerenderApp?.()
     } else if (a === 'complete') {
       const card = act.closest('.pwidget')
@@ -166,12 +179,23 @@ function openExerciseModal(exId) {
     if (!byDate.has(l.date)) byDate.set(l.date, [])
     byDate.get(l.date).push(l)
   }
-  const history = [...byDate.entries()].map(([date, entries]) =>
-    `<tr><td>${esc(date)}</td><td>${entries
-      .sort((a, b) => (a.side ?? '') < (b.side ?? '') ? -1 : 1)
+  // Each day = a row: date + set summary on the left, a small chart of that
+  // day's sets (est. 1RM per set) on the right, plus a delete for bad logs.
+  const history = [...byDate.entries()].map(([date, entries]) => {
+    const ordered = entries.sort((a, b) => ((a.side ?? '') < (b.side ?? '') ? -1 : 1))
+    const summary = ordered
       .map((l) => `${l.side ? `<b>${l.side}:</b> ` : ''}${esc(l.sets.map((x) => setChip(x, g.unit)).join(', '))}`)
-      .join(' &nbsp; ')}</td></tr>`
-  ).join('')
+      .join(' &nbsp; ')
+    const daySets = ordered.flatMap((l) => l.sets)
+    const pts = daySets.map((s, i) => ({ label: `${i + 1}`, value: toDisplayWeight(est1RM(s), g.unit) }))
+    const chart = pts.length ? lineChart(pts, { w: 150, h: 46, xLabel: '', yLabel: '' }) : ''
+    return `<div class="gym-history-row" data-date="${esc(date)}">
+      <div class="gym-history-when"><span class="gym-history-date">${esc(shortDate(date))}</span>
+        <span class="gym-history-sets">${summary}</span></div>
+      <div class="gym-history-chart">${chart}</div>
+      <button type="button" class="pw-item-remove" data-gym-act="del-log-date" data-date="${esc(date)}" title="Delete this day">x</button>
+    </div>`
+  }).join('')
 
   const o = document.createElement('div')
   o.className = 'modal-overlay'
@@ -181,7 +205,7 @@ function openExerciseModal(exId) {
     <div class="modal__body">
       <div class="gym-modal-chart"></div>
       <p class="gym-group">Set history</p>
-      ${history ? `<table class="gym-history">${history}</table>` : `<p class="gym-empty">No sets logged yet.</p>`}
+      ${history ? `<div class="gym-history">${history}</div>` : `<p class="gym-empty">No sets logged yet.</p>`}
       <p class="gym-group">Edit exercise</p>
       <div class="gym-edit">
         <input class="pw-field gym-edit-name" value="${esc(ex.name)}" aria-label="Exercise name">
@@ -207,6 +231,15 @@ function openExerciseModal(exId) {
   const close = () => { o.remove(); document.removeEventListener('keydown', onKey) }
   const onKey = (e) => { if (e.key === 'Escape') close() }
   o.addEventListener('click', (e) => { if (e.target === o) close() })
+  o.addEventListener('click', async (e) => {
+    const del = e.target.closest('[data-gym-act="del-log-date"]')
+    if (!del) return
+    if (!(await confirmDelete("Delete this day's logs?"))) return
+    removeLogsForDate(loadGym(), exId, del.dataset.date)
+    close()
+    openExerciseModal(exId) // re-render the modal with the day removed
+    rerenderApp?.()
+  })
   document.addEventListener('keydown', onKey)
   o.querySelector('.gym-edit-save').addEventListener('click', () => {
     const g2 = loadGym()

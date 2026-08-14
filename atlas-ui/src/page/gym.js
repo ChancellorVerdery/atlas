@@ -117,6 +117,19 @@ export function removeLastSet(g, exerciseId, side, date = todayKey()) {
   if (!entry.sets.length) g.logs = g.logs.filter((l) => l !== entry)
   saveGym(g)
 }
+// Drop one set by index; empties the day's entry away when its last set goes.
+export function removeSetAt(g, exerciseId, side, date, idx) {
+  const entry = g.logs.find((l) => l.exerciseId === exerciseId && l.date === date && (l.side ?? null) === (side ?? null))
+  if (!entry) return
+  entry.sets.splice(idx, 1)
+  if (!entry.sets.length) g.logs = g.logs.filter((l) => l !== entry)
+  saveGym(g)
+}
+// Delete a whole logged day for an exercise (all sides) — for accidental logs.
+export function removeLogsForDate(g, exerciseId, date) {
+  g.logs = g.logs.filter((l) => !(l.exerciseId === exerciseId && l.date === date))
+  saveGym(g)
+}
 export const logsFor = (g, exerciseId, date, side = null) =>
   g.logs.find((l) => l.exerciseId === exerciseId && l.date === date && (l.side ?? null) === side)
 

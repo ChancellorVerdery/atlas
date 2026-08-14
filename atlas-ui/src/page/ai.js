@@ -140,8 +140,9 @@ export async function ensureFreshClaude(s = loadAI()) {
     body: JSON.stringify({ refresh: oauth.refresh }),
   })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) return s
-  s.providers.claude = { oauth: { access: j.access, refresh: j.refresh, expires: Date.now() + Number(j.expires) * 1000 } }
+  if (!r.ok || !j.access) return s
+  // Keep the existing refresh token if the provider didn't rotate one this time.
+  s.providers.claude = { oauth: { access: j.access, refresh: j.refresh || oauth.refresh, expires: Date.now() + Number(j.expires) * 1000 } }
   saveAI(s)
   return s
 }

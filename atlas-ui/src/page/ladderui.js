@@ -8,6 +8,7 @@
 import { loadLadder, saveLadder, addFlex, updateFlex, removeFlex, setGapOverride, buildPlan, dateKey, WEEKDAYS } from './ladder.js'
 import { ensureCalendar, createEvent, deleteEvent, tz } from './calendar.js'
 import { isConnected } from './email.js'
+import { confirmDelete } from './confirm.js'
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -144,7 +145,7 @@ export function renderLadderPage(root, rerender) {
   }
   kindSel.onchange = syncKindVisibility
   syncKindVisibility() // also applies when editing preloads a non-default kind
-  root.onclick = (e) => {
+  root.onclick = async (e) => {
     const el = e.target.closest('[data-lad]')
     if (!el) return
     if (el.dataset.lad === 'add') {
@@ -174,6 +175,7 @@ export function renderLadderPage(root, rerender) {
       editingId = el.dataset.id
       renderLadderPage(root, rerender)
     } else if (el.dataset.lad === 'del-flex') {
+      if (!(await confirmDelete('Remove this flexible event?'))) return
       if (editingId === el.dataset.id) editingId = null
       removeFlex(loadLadder(), el.dataset.id)
       renderLadderPage(root, rerender)

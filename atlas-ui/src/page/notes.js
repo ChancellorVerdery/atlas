@@ -7,6 +7,7 @@
 // syncing would force a backend mapper change.
 
 import { loadAI, ensureFreshClaude, credsForClaude, credsHeader } from './ai.js'
+import { isNative } from '../platform.js'
 
 const KEY = 'atlas.notes.v1'
 
@@ -46,11 +47,31 @@ export async function pickFolder() {
 }
 
 // {dirs: ['Physics', 'Physics/Labs', …], notes: [{path: 'Physics/Waves.md', mtime}]}
+// On Apple devices (isNative) STORAGE is the app's iCloud container via the
+// native LocalServer /icloud/notes/* endpoints — same JSON shape, so notesui
+// stays unchanged; web/macOS-dev keeps the /notes-api sidecar.
 export async function fetchTree(dir) {
+  if (isNative()) {
+    const r = await fetch('/icloud/notes/tree')
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.error || `tree failed (${r.status})`)
+    return j
+  }
   const r = await fetch(`/notes-api/tree?${q(dir)}`)
   const j = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(j.error || `tree failed (${r.status})`)
   return j
+}
+
+// A saved note's markdown text. Native reads it from iCloud by relative path;
+// web reads through the sandboxed graph middleware (the same /graph-api/file
+// endpoint the viewer already uses for images).
+export async function readNote(dir, rel) {
+  const r = await fetch(isNative()
+    ? `/icloud/notes/read?path=${encodeURIComponent(rel)}`
+    : fileURL(dir, rel))
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `read failed (${r.status})`)
+  return r.text()
 }
 
 // {dir, files: [{name, media_type, data(b64)}], text?, url?} → {title, markdown}
@@ -60,7 +81,26 @@ export async function fetchTree(dir) {
 export const convertNote = (payload) => postAI('/notes-api/convert', payload)
 
 // {dir, subdir, filename, markdown, uploads: [{name, data(b64)}]} → {ok, path}
-export const saveNote = (payload) => post('/notes-api/save', payload)
+// Native writes to iCloud, whose save contract is just {path, content} — so
+// original uploads/attachments are NOT carried there (the iCloud endpoint has
+// no attachment slot). ponytail: dropping originals on native is the deliberate
+// ceiling; an /icloud/notes/save that accepted uploads is the upgrade path.
+export async function saveNote(payload) {
+  if (isNative()) {
+    const rel = (payload.subdir ? payload.subdir.replace(/\/+$/, '') + '/' : '')
+      + payload.filename.replace(/\.md$/i, '') + '.md'
+    const j = await post('/icloud/notes/save', { path: rel, content: payload.markdown })
+    return { ok: true, path: j.path || rel }
+  }
+  return post('/notes-api/save', payload)
+}
+
+// Delete a saved note by its path relative to the notes root. Native deletes
+// from iCloud; web hits the sidecar delete route.
+export async function deleteNote(dir, rel) {
+  if (isNative()) return post('/icloud/notes/delete', { path: rel })
+  return post('/notes-api/delete', { dir, path: rel })
+}
 
 // Apple Notes import: the account → folder → note tree (each note carries a
 // STABLE id — never keyed by title, which can collide silently), and one

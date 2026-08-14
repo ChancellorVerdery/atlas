@@ -123,7 +123,9 @@ function setKbEnabled(on) {
   else window.mathVirtualKeyboard.hide()
 }
 document.addEventListener('focusin', (e) => {
-  if (kbEnabled && mathAllowed() && isMathField(e.target)) window.mathVirtualKeyboard.show()
+  // Mobile uses the native Apple keyboard only — the virtual math keyboard
+  // never shows there, so it can't cover the native one.
+  if (kbEnabled && !isMobile() && mathAllowed() && isMathField(e.target)) window.mathVirtualKeyboard.show()
 })
 document.addEventListener('focusout', (e) => {
   if (!isMathField(e.target)) return
@@ -136,7 +138,12 @@ document.addEventListener('focusout', (e) => {
 // widgetless full-window plugins — see render()'s cbtn block): Study is one
 // of those full-window plugins and it mounts math-fields too, so the toggle
 // can't be gated on Customize being available.
+// Mobile skips the toggle entirely — the native Apple keyboard is the only
+// keyboard there (see the focusin gate and render()'s visibility check).
 {
+  // ponytail: always create the toggle; render()'s visibility check and the
+  // focusin gate hide/disable it on mobile — so a desktop window that started
+  // narrow (mobile) then widened past 820px still gets it without a reload.
   const actions = document.querySelector('.topbar__actions')
   if (actions) {
     const btn = document.createElement('button')
@@ -365,7 +372,7 @@ const aiConnectionsHTML = () => {
             : `<button type="button" class="gym-btn" data-act="ai-oauth-start">Connect with Claude</button>`}
         </div>
       </div>
-      ${on ? '' : `<div class="ai-conn__oauth" id="ai-oauth" hidden>
+      ${on ? '' : `<div class="ai-conn__oauth" id="ai-oauth"${claudeOAuthAwaiting ? '' : ' hidden'}>
         <input type="text" class="pw-field ai-conn__field" id="ai-oauth-code" placeholder="Paste the code from your browser" autocomplete="off" spellcheck="false">
         <button type="button" class="gym-btn" data-act="ai-oauth-finish">Finish</button>
         <span class="ai-conn__status ai-conn__status--off" id="ai-oauth-err"></span>
@@ -400,7 +407,7 @@ const accountsHTML = () => {
       <div class="set-gmail">${gmail}</div>
     </div>
     ${aiConnectionsHTML()}
-    <div class="set-row">
+    ${localStorage.getItem('atlas.devMode') === '1' ? `<div class="set-row">
       <div class="set-row__meta">
         <span class="set-row__name">Backup &amp; restore</span>
         <span class="set-row__sub">Export every Atlas setting, plugin, and board to one file, or restore from one. The file can include saved API keys (e.g. Plaid, Canvas) — keep it private. Your Google connection lives on the server and is not part of the export.</span>
@@ -411,7 +418,7 @@ const accountsHTML = () => {
         <input type="file" id="import-file" accept="application/json,.json" hidden>
         <span class="set-row__sub set-data__status" id="data-status"></span>
       </div>
-    </div>
+    </div>` : ''}
     <div class="set-row">
       <div class="set-row__meta">
         <span class="set-row__name">Account</span>
@@ -427,6 +434,8 @@ const accountsHTML = () => {
 // Backup = every atlas.* localStorage key. Restore REPLACES all current atlas.*
 // data (a true restore, not a merge — keys absent from the backup are cleared),
 // after a confirm, then reloads so every plugin re-reads its store.
+// Dev-only now: the Backup & restore set-row only renders when
+// atlas.devMode === '1', so these are inert (no UI to trigger them) otherwise.
 const DATA_PREFIX = 'atlas.'
 const atlasKeys = () => {
   const ks = []
@@ -522,6 +531,42 @@ function restoreScrollAnchor(contentEl, anchor) {
   contentEl.scrollTop += (el.getBoundingClientRect().top - top) - anchor.offset
 }
 
+// Claude OAuth needs to open the consent URL on the SAME tick as the click —
+// on iOS an `await` before window.open loses the user-gesture and the system
+// browser never opens. So when the Accounts page renders and Claude isn't
+// connected, mint the authorize URL ahead of time (beginClaudeOAuth also
+// stashes the PKCE verifier+state locally, which completeClaudeOAuth reads),
+// and the click handler opens the stashed URL synchronously.
+let claudeOAuthStash = null
+let claudeOAuthAwaiting = false // paste field stays shown across background re-renders
+function precomputeClaudeOAuth() {
+  if (isClaudeConnected(loadAI())) { claudeOAuthStash = null; claudeOAuthAwaiting = false; return }
+  // Don't re-mint on every render: beginClaudeOAuth rotates the PKCE
+  // verifier+state, which would invalidate a code the user is mid-way through
+  // pasting when a background event (sync/hydrate/prefetch) triggers render().
+  if (claudeOAuthStash) return
+  beginClaudeOAuth().then((res) => { claudeOAuthStash = res }).catch(() => { claudeOAuthStash = null })
+}
+
+// The breadcrumb moves between two homes by breakpoint (setHead still writes it
+// by #crumb id from wherever it lands): on mobile it's a direct .topbar child
+// right after #nav-toggle so styles can put them on row 1 together; on desktop
+// it sits inside .topbar__lead above the title. Same element, no duplication.
+function placeCrumb() {
+  const crumb = document.getElementById('crumb')
+  const topbar = document.querySelector('.topbar')
+  const lead = document.querySelector('.topbar__lead')
+  if (!crumb || !topbar || !lead) return
+  if (isMobile()) {
+    const navBtn = document.getElementById('nav-toggle')
+    if (crumb.parentElement !== topbar || crumb.previousElementSibling !== navBtn) {
+      topbar.insertBefore(crumb, navBtn ? navBtn.nextSibling : topbar.firstChild)
+    }
+  } else if (crumb.parentElement !== lead || crumb !== lead.firstElementChild) {
+    lead.insertBefore(crumb, lead.firstElementChild)
+  }
+}
+
 let currentPageId = null
 function render() {
   const r = route()
@@ -531,6 +576,7 @@ function render() {
   document.documentElement.dataset.page = r.name === 'settings' ? 'settings' : r.sub ? `${r.def.id}-${r.sub}` : r.def.id
   renderNav(r)
   renderPageTabs(r)
+  placeCrumb() // keep the breadcrumb in its breakpoint-correct home each render
   const content = document.getElementById('content')
   if (r.name === 'settings') {
     const label = SETTINGS_TABS.find(([t]) => t === r.tab)[1]
@@ -538,6 +584,7 @@ function render() {
     content.innerHTML = r.tab === 'appearance' ? `<div class="page">${themeSettingsHTML()}</div>`
       : r.tab === 'plugins' ? `<div class="page page--plugins">${pluginsSettingsHTML()}</div>`
       : accountsHTML()
+    if (r.tab === 'accounts') precomputeClaudeOAuth() // ready a URL for a synchronous window.open
     observeCharts(content) // drops stale chart-mount observations
   } else if (r.sub === 'settings') {
     setHead(r.def.label, `${r.def.crumb} / Settings`)
@@ -575,7 +622,8 @@ function render() {
   // leaving one hides both the toggle and the keyboard itself.
   const mkbtn = document.getElementById('mathkbd-toggle')
   if (mkbtn) {
-    const allowed = MATHKBD_PAGES.has(r.def?.id)
+    // Mobile never gets the virtual math keyboard (native Apple keyboard only).
+    const allowed = MATHKBD_PAGES.has(r.def?.id) && !isMobile()
     mkbtn.style.display = allowed ? '' : 'none'
     if (!allowed) window.mathVirtualKeyboard.hide()
   }
@@ -625,11 +673,24 @@ document.body.addEventListener('click', (e) => {
     if (act.dataset.act === 'import-data') { document.getElementById('import-file')?.click(); return }
     if (act.dataset.act === 'ai-oauth-start') {
       // Open Claude's consent page (the native shell routes window.open to the
-      // system browser), then reveal the paste-the-code field.
+      // system browser), then reveal the paste-the-code field. The URL is
+      // precomputed on render (precomputeClaudeOAuth) so window.open fires
+      // SYNCHRONOUSLY on the click — iOS discards a window.open that follows an
+      // await. Only if the precompute hasn't landed yet do we fall back to the
+      // async path (which won't open the browser on iOS, but is the desktop
+      // behaviour and a rare miss on mobile).
+      if (claudeOAuthStash) {
+        window.open(claudeOAuthStash.url)
+        claudeOAuthAwaiting = true
+        document.getElementById('ai-oauth')?.removeAttribute('hidden')
+        return
+      }
       act.disabled = true
       beginClaudeOAuth()
         .then((res) => {
+          claudeOAuthStash = res
           window.open(res.url)
+          claudeOAuthAwaiting = true
           document.getElementById('ai-oauth')?.removeAttribute('hidden')
         })
         .catch(() => {})
@@ -644,13 +705,13 @@ document.body.addEventListener('click', (e) => {
       act.disabled = true
       completeClaudeOAuth(code)
         .then((ok) => {
-          if (ok) render()
+          if (ok) { claudeOAuthAwaiting = false; claudeOAuthStash = null; render() }
           else { act.disabled = false; if (err) err.textContent = 'That code didn’t work — try again.' }
         })
         .catch((e) => { act.disabled = false; if (err) err.textContent = e?.message || 'Couldn’t connect. Try again.' })
       return
     }
-    if (act.dataset.act === 'ai-disconnect') { disconnectClaude(); render(); return }
+    if (act.dataset.act === 'ai-disconnect') { claudeOAuthAwaiting = false; claudeOAuthStash = null; disconnectClaude(); render(); return }
   }
   if (customizing) return
   const r = route()
