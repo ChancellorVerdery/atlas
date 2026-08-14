@@ -85,8 +85,10 @@ export function gymWidgetHTML(w, cz, secCtx) {
     const sets = entry?.sets ?? []
     const sideAttr = side ? ` data-side="${side}"` : ''
     // Input controls sit LEFT-aligned (no flex:1 spacer in this row now).
-    const inputRow = `<div class="gym-log-row" data-ex-id="${esc(e.id)}"${sideAttr}>
-      ${side ? `<span class="gym-side">${side}</span>` : ''}
+    // The side reads as a full word ABOVE the inputs — a bare "L"/"R" beside
+    // the field was easy to misread as part of the input.
+    const inputRow = (side ? `<p class="gym-side">${side === 'L' ? 'Left' : 'Right'}</p>` : '') +
+      `<div class="gym-log-row" data-ex-id="${esc(e.id)}"${sideAttr}>
       ${cz ? '' : `<input class="pw-field gym-w" type="number" min="0" step="0.5" placeholder="${g.unit}" aria-label="Weight (${g.unit})">
       <input class="pw-field gym-r" type="number" min="1" step="1" placeholder="reps" aria-label="Reps">
       <button type="button" class="gym-btn" data-gym-act="log-set">Log</button>`}

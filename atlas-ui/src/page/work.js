@@ -14,6 +14,7 @@ export function loadWork() {
   s.openEnded = !!s.openEnded // shifts may be logged with no out time
   if (!Array.isArray(s.shifts)) s.shifts = [] // {id, date, start, end, hours, tips, wage}
   if (!s.ranges || typeof s.ranges !== 'object') s.ranges = {} // widgetId → selected income period, persisted across reload
+  if (!s.histPer || typeof s.histPer !== 'object') s.histPer = {} // widgetId → shifts per page in the history widget
   if (!Array.isArray(s.upcoming)) s.upcoming = [] // scheduled future shifts {id, date, start, end, gcalId}
   if (typeof s.address !== 'string') s.address = '' // workplace, used by the Ladder planner for drive times
   if (typeof s.calId !== 'string') s.calId = '' // the dedicated "Atlas Work" Google calendar id
@@ -29,6 +30,15 @@ export function saveWork(s) { localStorage.setItem(KEY, JSON.stringify(s)) }
 export const rangeFor = (s, widgetId) => PERIODS.some(([k]) => k === s.ranges[widgetId]) ? s.ranges[widgetId] : 'week'
 export function setRange(s, widgetId, period) {
   s.ranges[widgetId] = period
+  saveWork(s)
+}
+
+export const HISTORY_PER_CHOICES = [5, 10, 20, 50, 100]
+export const HISTORY_PER_DEFAULT = 10
+export const historyPer = (s, widgetId) =>
+  HISTORY_PER_CHOICES.includes(Number(s.histPer?.[widgetId])) ? Number(s.histPer[widgetId]) : HISTORY_PER_DEFAULT
+export function setHistoryPer(s, widgetId, n) {
+  s.histPer[widgetId] = Number(n)
   saveWork(s)
 }
 

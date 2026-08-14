@@ -20,8 +20,8 @@ import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/
 import { renderNotesPage } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
 import { renderFlashcardsPage } from './page/flashcardsui.js'
-import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus } from './page/email.js'
-import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
+import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus, primeGoogleConfig } from './page/email.js'
+import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL, effectiveMode } from './page/theme.js'
 import { openThemeModal } from './page/themeui.js'
 import { loadAI, isClaudeConnected, beginClaudeOAuth, completeClaudeOAuth, disconnectClaude } from './page/ai.js'
 import { isMobile, initPlatform } from './platform.js'
@@ -331,18 +331,18 @@ const themeSettingsHTML = () => {
   return `<div class="set-row">
     <div class="set-row__meta">
       <span class="set-row__name">Colour scheme</span>
-      <span class="set-row__sub">Applies everywhere — pages, widgets, the logo, and the app icon. Custom sets the scheme's own colours; light mode uses its own surfaces and keeps the accent.</span>
+      <span class="set-row__sub">Applies everywhere — pages, widgets, the logo, and the app icon. Auto follows your device's light/dark setting. Custom sets the scheme's own colours.</span>
     </div>
     <div class="set-theme">
       <div class="set-theme__row">
-        <span class="set-theme__modes">${mode('dark', 'Dark')}${mode('light', 'Light')}</span>
+        <span class="set-theme__modes">${mode('dark', 'Dark')}${mode('light', 'Light')}${mode('auto', 'Auto')}</span>
         <img class="set-theme__logo" src="${esc(logoDataURL(t))}" alt="" width="40" height="40">
       </div>
       <div class="set-theme__presets">
         ${Object.entries(PRESETS).map(([id, p]) => swatch(id, p)).join('')}
         ${swatch(CUSTOM, {
           label: 'Custom',
-          panel: t.custom[t.mode === 'light' ? 'lightPanel' : 'darkPanel'],
+          panel: t.custom[effectiveMode(t.mode) === 'light' ? 'lightPanel' : 'darkPanel'],
           accent: t.custom.accent, signal: t.custom.signal,
         })}
       </div>
@@ -584,7 +584,7 @@ function render() {
     content.innerHTML = r.tab === 'appearance' ? `<div class="page">${themeSettingsHTML()}</div>`
       : r.tab === 'plugins' ? `<div class="page page--plugins">${pluginsSettingsHTML()}</div>`
       : accountsHTML()
-    if (r.tab === 'accounts') precomputeClaudeOAuth() // ready a URL for a synchronous window.open
+    if (r.tab === 'accounts') { precomputeClaudeOAuth(); primeGoogleConfig() } // ready URLs for a synchronous window.open
     observeCharts(content) // drops stale chart-mount observations
   } else if (r.sub === 'settings') {
     setHead(r.def.label, `${r.def.crumb} / Settings`)
@@ -943,6 +943,9 @@ window.addEventListener('atlas:sync-update', (e) => {
 // moment later — re-render once so anything changed on another device appears
 // without a manual reload.
 window.addEventListener('atlas:hydrated', render)
+// Ready the Google auth URL early so a Connect tap can open the system browser
+// on the same tick (an await between tap and window.open is dropped by iOS).
+window.addEventListener('atlas:hydrated', () => { primeGoogleConfig() })
 // Cached remote data landed for a plugin the user is already looking at.
 window.addEventListener('atlas:prefetched', render)
 if (!location.hash) location.replace('#/dashboard')

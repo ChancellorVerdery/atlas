@@ -24,6 +24,15 @@ const MODES = {
 }
 export const DEFAULT_MODE = 'dark'
 
+// 'auto' isn't a palette — it's a pointer at the OS setting (iOS/macOS
+// appearance), resolved to a real MODES key on every read so everything
+// downstream keeps seeing only dark|light.
+export const AUTO_MODE = 'auto'
+const systemMode = () =>
+  (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'
+export const isModeChoice = (m) => m === AUTO_MODE || !!MODES[m]
+export const effectiveMode = (m) => (m === AUTO_MODE ? systemMode() : (MODES[m] ? m : DEFAULT_MODE))
+
 // Each scheme brings its own surfaces for BOTH modes — a light mode doesn't
 // have to be white any more than a dark one has to be black, and a tinted
 // ground (Rose's papyrus, Moss's raw linen) is what stops eight schemes from
@@ -172,7 +181,7 @@ export function loadTheme() {
   }
   delete t.accent
   if (t.preset !== CUSTOM && !PRESETS[t.preset]) t.preset = DEFAULT_PRESET
-  if (!MODES[t.mode]) t.mode = DEFAULT_MODE
+  if (!isModeChoice(t.mode)) t.mode = DEFAULT_MODE
   t.custom = normaliseCustom(t.custom)
   return t
 }
@@ -205,7 +214,7 @@ export const customSeed = (t = loadTheme()) =>
 
 export function resolve(t = loadTheme()) {
   const p = t.preset === CUSTOM ? schemeFromCustom(normaliseCustom(t.custom)) : (PRESETS[t.preset] || PRESETS[DEFAULT_PRESET])
-  const mode = MODES[t.mode] ? t.mode : DEFAULT_MODE
+  const mode = effectiveMode(t.mode) // 'auto' follows the OS appearance
   const m = MODES[mode]
   const { bg, panel } = p[mode]
   return {
@@ -409,4 +418,10 @@ export function applyTheme(t = loadTheme(), { icon = true } = {}) {
   for (const el of document.querySelectorAll('.brand__img, .auth-card__logo, .set-theme__logo')) el.src = url
   if (icon) pushAppIcon(t)
   return t
+}
+
+// Repaint when the OS appearance flips, but only while the user is on 'auto'.
+if (typeof window !== 'undefined' && window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: light)')
+    .addEventListener('change', () => { if (loadTheme().mode === AUTO_MODE) applyTheme() })
 }

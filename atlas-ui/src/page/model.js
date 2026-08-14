@@ -8,6 +8,8 @@
 // localStorage is the single source of truth: callers loadPage() fresh,
 // mutate, and the mutation helpers save — no long-lived shared page object.
 
+import { isMobile } from '../platform.js'
+
 const DEFAULT_KEY = 'atlas.page.v1'
 // Which storage key a loaded page object belongs to — kept OUT of the object
 // itself so it never leaks into the serialized JSON.
@@ -43,6 +45,11 @@ export function savePage(page) {
 // clone of the desktop layout) and independent of the desktop key from then
 // on — editing the mobile layout never touches desktop's, and vice versa.
 export const mobileKey = (k) => k + '.mobile'
+// The key the CURRENT device actually renders from. Anything that mutates a
+// page (customize) must resolve it the same way the renderer did — writing to
+// the desktop key while mobile displays the .mobile one silently loses every
+// edit (deletes, drops, resizes) on the phone.
+export const pageKeyFor = (storageKey) => (isMobile() ? mobileKey(storageKey) : storageKey)
 export function loadPageMobile(storageKey, seedFn) {
   const mk = mobileKey(storageKey)
   if (localStorage.getItem(mk) == null) {

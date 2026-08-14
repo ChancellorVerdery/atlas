@@ -103,22 +103,32 @@ export async function connectGmail() {
 // fires and this promise never settles — no timeout; the connect screen just
 // stays until they retry. Add an AbortSignal/timeout if that proves confusing.
 const NATIVE_REDIRECT = 'http://127.0.0.1:5180/oauth/google/callback'
-async function connectGmailNative() {
-  const cfg = await sync.request('google.config', {})
-  if (!cfg.configured) throw new Error('Google isn’t configured on the Atlas server yet.')
-  const state = crypto.randomUUID?.() || Math.random().toString(36).slice(2)
-  const scope = Array.isArray(cfg.scopes) ? cfg.scopes.join(' ') : cfg.scopes
-  const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+
+// The config is fetched AHEAD of the click (primeGoogleConfig, called when a
+// page showing a Connect button renders). On iOS an `await` between the tap and
+// window.open loses the user-gesture and the system browser silently never
+// opens — so the click path must reach window.open with zero awaits.
+let googleCfg = null
+export async function primeGoogleConfig() {
+  try { googleCfg = await sync.request('google.config', {}) } catch { /* offline: the click re-fetches */ }
+  return googleCfg
+}
+
+const googleAuthURL = (cfg, state) =>
+  'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
     client_id: cfg.clientId,
     redirect_uri: NATIVE_REDIRECT,
     response_type: 'code',
-    scope,
+    scope: Array.isArray(cfg.scopes) ? cfg.scopes.join(' ') : cfg.scopes,
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
     state,
   })
-  return new Promise((resolve, reject) => {
+
+function connectGmailNative() {
+  const state = crypto.randomUUID?.() || Math.random().toString(36).slice(2)
+  const settled = new Promise((resolve, reject) => {
     window.__atlasOAuthCallback = async (provider, code, cbState) => {
       if (provider !== 'google') return
       try {
@@ -128,8 +138,19 @@ async function connectGmailNative() {
         resolve(d.address)
       } catch (e) { reject(e) }
     }
-    // The native shell routes accounts.google.com to the system browser.
-    window.open(url, '_blank')
+  })
+  // The native shell routes accounts.google.com to the system browser.
+  if (googleCfg?.configured) {
+    window.open(googleAuthURL(googleCfg, state), '_blank') // same tick as the tap
+    return settled
+  }
+  // Not primed (offline at render, or a page that doesn't prime): fetch then
+  // open. Works on macOS; on iOS this is the gesture-losing path, so priming
+  // is what makes the button reliable there.
+  return primeGoogleConfig().then((cfg) => {
+    if (!cfg?.configured) throw new Error('Google isn’t configured on the Atlas server yet.')
+    window.open(googleAuthURL(cfg, state), '_blank')
+    return settled
   })
 }
 

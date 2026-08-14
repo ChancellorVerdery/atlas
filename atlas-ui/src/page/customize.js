@@ -7,7 +7,7 @@
 // payload — no MIME sniffing. One setData() call remains because Firefox
 // won't start a drag with an empty data store.
 
-import { loadPage, savePage, newWidget, findWidget, findSection, insertWidget, moveWidget, moveRow, removeWidget, setColWidths, setRowWidth, setRowHeight } from './model.js'
+import { loadPage, savePage, pageKeyFor, newWidget, findWidget, findSection, insertWidget, moveWidget, moveRow, removeWidget, setColWidths, setRowWidth, setRowHeight } from './model.js'
 import { snapshotZones, toLayoutPoint, resolveTarget, resolveRowTarget } from './hitzones.js'
 import { isKindEnabled, KIND_PLUGIN } from './plugins.js'
 import { activePages } from './pages.js'
@@ -55,7 +55,10 @@ const KIND_META = {
 }
 
 // The page currently being customized (its storage, not the default's).
-const pageNow = () => loadPage(ctx.pageDef.storageKey)
+// pageKeyFor: on mobile the renderer draws the .mobile key, so every customize
+// mutation must target that same key — otherwise edits land on the desktop
+// layout and appear to do nothing on the phone.
+const pageNow = () => loadPage(pageKeyFor(ctx.pageDef.storageKey))
 
 // Widget palette markup for a page's customizable kinds — grouped by owning
 // plugin and ordered to match the navigator (activePages()), so behavior 4
@@ -109,6 +112,7 @@ export function enterCustomize({ rerender, pageDef }) {
   contentEl.addEventListener('input', onInput)
   contentEl.addEventListener('change', onChange) // math-field fires 'change' on blur
   contentEl.addEventListener('click', onClick)
+  document.addEventListener('click', onPaletteClick) // palette lives in #nav, not contentEl
   contentEl.addEventListener('mousedown', onMouseDown)
   document.addEventListener('mousemove', onResizeMove)
   document.addEventListener('mouseup', onResizeUp)
@@ -131,6 +135,7 @@ export function exitCustomize() {
   ctx.contentEl.removeEventListener('input', onInput)
   ctx.contentEl.removeEventListener('change', onChange)
   ctx.contentEl.removeEventListener('click', onClick)
+  document.removeEventListener('click', onPaletteClick)
   ctx.contentEl.removeEventListener('mousedown', onMouseDown)
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeUp)
@@ -783,6 +788,28 @@ function onInput(e) {
   if (f.widget.kind === 'graph' && name !== 'title') {
     drawChart(field.closest('.pwidget').querySelector('.chart-mount'))
   }
+}
+
+// Tapping a palette widget adds it to the end of the board — dragging from a
+// sidebar onto a target is fiddly with a thumb, so tap-to-add then drag it into
+// place. Registered on the document because the palette lives in #nav, outside
+// contentEl (where the other customize listeners are bound).
+function onPaletteClick(e) {
+  if (!ctx) return
+  const item = e.target.closest?.('.palette__item')
+  if (!item || !item.dataset.kind) return
+  const page = pageNow()
+  const w = newWidget(item.dataset.kind)
+  // Append below everything as its own row: predictable, and never disturbs an
+  // existing side-by-side line the user already arranged.
+  insertWidget(page, w, { type: 'newrow', index: page.rows.length })
+  savePage(page)
+  ctx.rerender()
+  // Scroll the new widget into view so a tap at the top of a long board isn't
+  // silently appended off-screen.
+  requestAnimationFrame(() => {
+    document.querySelector(`[data-widget-id="${CSS.escape(w.id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  })
 }
 
 async function onClick(e) {

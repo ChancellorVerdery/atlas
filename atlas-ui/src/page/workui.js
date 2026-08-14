@@ -5,6 +5,7 @@ import {
   loadWork, saveWork, todayKey, fmtTime, isOpen, shiftHours, shiftEnd, shiftEarned,
   addShift, closeShift, updateShift, removeShift, projectedEnd, parseClock, parseHM, PERIODS, incomeFor, tipShare,
   rangeFor, setRange, addUpcoming, removeUpcoming, setUpcomingGcal,
+  historyPer, setHistoryPer, HISTORY_PER_CHOICES,
 } from './work.js'
 import { ensureCalendar, createEvent, deleteEvent, tz } from './calendar.js'
 import { isConnected } from './email.js'
@@ -15,7 +16,7 @@ const esc = (s) =>
 
 export const WK_KINDS = ['wkincome', 'wkshifts', 'wktipshare', 'wkupcoming', 'wkhistory']
 
-const HISTORY_PAGE = 10 // logged shifts per page in the history widget
+// shifts per page is user-set per widget — see historyPer/setHistoryPer in work.js
 
 const money = (n) => '$' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtH = (n) => (Math.round(n * 100) / 100).toString()
@@ -138,17 +139,21 @@ export function workWidgetHTML(w, cz) {
   if (w.kind === 'wkhistory') {
     const all = loggedShifts(s)
     if (!all.length) return head('Shift history') + `<p class="gym-empty">No logged shifts yet.</p>`
-    const pages = Math.ceil(all.length / HISTORY_PAGE)
+    const per = historyPer(s, w.id) // user-set shifts per page
+    const pages = Math.ceil(all.length / per)
     const state = st(w.id, () => ({ page: 0 }))
     state.page = Math.min(Math.max(state.page, 0), pages - 1) // deletions can shrink past the last page
-    const from = state.page * HISTORY_PAGE
-    const shown = all.slice(from, from + HISTORY_PAGE)
+    const from = state.page * per
+    const shown = all.slice(from, from + per)
     return head('Shift history') +
       `<div class="wk-rows wk-rows--log">${shown.map(row).join('')}</div>
       <div class="wk-page">
         <button type="button" class="gym-btn gym-btn--sm" data-wk-act="pg" data-wid="${esc(w.id)}" data-d="-1" ${state.page ? '' : 'disabled'} title="Newer shifts">‹</button>
         <span class="gym-sub">${from + 1}–${from + shown.length} of ${all.length}</span>
         <button type="button" class="gym-btn gym-btn--sm" data-wk-act="pg" data-wid="${esc(w.id)}" data-d="1" ${state.page < pages - 1 ? '' : 'disabled'} title="Older shifts">›</button>
+        ${cz ? '' : `<select class="pw-field pw-field--sm wk-per" data-wk-per data-wid="${esc(w.id)}" title="Shifts per page" aria-label="Shifts per page">
+          ${HISTORY_PER_CHOICES.map((n) => `<option value="${n}"${n === per ? ' selected' : ''}>${n} / page</option>`).join('')}
+        </select>`}
       </div>`
   }
 
@@ -178,6 +183,17 @@ export function bindWork(rerender) {
   rerenderApp = rerender
   document.body.addEventListener('click', onWorkClick)
   document.body.addEventListener('input', onWorkInput)
+  document.body.addEventListener('change', onWorkChange)
+}
+
+function onWorkChange(e) {
+  const sel = e.target.closest('[data-wk-per]')
+  if (!sel) return
+  const s = loadWork()
+  setHistoryPer(s, sel.dataset.wid, sel.value)
+  const state = ui.get(sel.dataset.wid)
+  if (state) state.page = 0 // a bigger page size can leave the old index past the end
+  rerenderApp?.()
 }
 
 async function onWorkClick(e) {

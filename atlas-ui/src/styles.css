@@ -230,7 +230,13 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
 /* Plugin-scoped tab bar under the page title (e.g. Gym: Board | Settings). */
 .page-tabs { display: flex; gap: 6px; margin-top: 10px; }
 .page-tabs:empty { display: none; }
+/* inline-flex (not inline): an inline <a> ignores min-height and box sizing, so
+   tabs rendered at slightly different heights. Every tab is now the same box —
+   the active one differs only in colour/border/background, never in size. */
 .page-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 5px 13px;
   border: 1px solid var(--line-2);
   border-radius: 999px;
@@ -238,6 +244,7 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
   text-decoration: none;
   font-size: 12px;
   font-weight: 500;
+  line-height: 1.2;
   transition: 0.15s;
 }
 .page-tab:hover { color: var(--ink); background: rgba(var(--ink-rgb), 0.05); }
@@ -1046,12 +1053,14 @@ math-field { --caret-color: var(--brass); --selection-background-color: rgba(var
 .gym-exercise { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
 .gym-ex-title { margin: 0 0 7px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .gym-log-row { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+/* The side reads as a full word ABOVE its input row (was a bare L/R chip beside
+   the weight field, which looked like part of the input). */
 .gym-side {
-  flex: none;
-  width: 20px;
-  text-align: center;
-  font-family: "IBM Plex Mono", monospace;
+  margin: 8px 0 3px;
   font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--signal);
 }
 .gym-chips { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2781,8 +2790,7 @@ body.is-mobile .modal-overlay { padding: 12px; }
 body.is-mobile .modal { max-width: 96vw; max-height: 92vh; padding: 20px 18px; overflow: auto; }
 /* tap targets */
 body.is-mobile .action-btn,
-body.is-mobile .mail-btn,
-body.is-mobile .page-tab { min-height: 40px; }
+body.is-mobile .mail-btn { min-height: 40px; }
 /* Delete/close X's: 40px hit box on mobile (the broken-X root cause was a hit
    area smaller than a fingertip). Scoped to mobile so desktop X's stay small. */
 body.is-mobile .pw-item-remove,
@@ -2807,3 +2815,36 @@ body.is-mobile img, body.is-mobile video { max-width: 100%; }
    calendar), which sits at z-index 60. It has its own id so it never removes
    the modal underneath it. */
 .confirm-overlay { z-index: 90; }
+
+/* "No assignments yet." lines up with the assignment rows above it, which are
+   .cv-arow--btn (padding: 5px 6px) — the note had no left padding. */
+.cv-group .cal-wnote { padding-left: 6px; }
+
+/* Shift-history page size picker */
+.wk-per { margin-left: auto; font-size: 11.5px; padding: 2px 6px; }
+
+/* Study transcript scrolls vertically only — a long unbroken token (a URL, a
+   pasted equation) used to widen the pane and let the chat slide left/right. */
+.st-msgs { overflow-x: hidden; }
+.st-msg { overflow-wrap: anywhere; max-width: min(46rem, 100%); }
+.st-msg pre, .st-msg code { white-space: pre-wrap; word-break: break-word; }
+
+/* Ladder: a smaller delete keeps it off the event text, and the title reserves
+   room for it so a long name truncates instead of running underneath. */
+.lad-card__x { width: 16px; height: 16px; font-size: 11px; }
+.lad-card__title { padding-right: 20px; }
+body.is-mobile .lad-card__x { min-width: 22px; min-height: 22px; width: 22px; height: 22px; }
+body.is-mobile .lad-card__title { padding-right: 26px; }
+
+/* Mobile: the colour-scheme grid was a fixed 3 x 132px (~404px) — wider than a
+   phone, so the first column was cut off the left edge. Two fluid columns fit. */
+body.is-mobile .set-theme { align-items: stretch; }
+body.is-mobile .set-theme__row { justify-content: flex-start; }
+body.is-mobile .set-theme__presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Tabs keep desktop proportions on mobile (the 40px min-height bloated them);
+   still a comfortable tap target, and identical whether active or not. */
+body.is-mobile .page-tab { min-height: 34px; font-size: 12.5px; padding: 6px 14px; }
+body.is-mobile .page-tabs { flex-wrap: wrap; gap: 8px; }
+/* The widget delete sits on the widget's corner — a 40px circle there overhangs
+   into the neighbouring widget, so keep it modest and tuck it back in. */
+body.is-mobile .pw-delete { min-width: 30px; min-height: 30px; width: 30px; height: 30px; top: -6px; right: -6px; }
