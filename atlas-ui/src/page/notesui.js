@@ -10,7 +10,9 @@ import {
   loadNotesStore, saveNotesStore, pickFolder, fetchTree, convertNote, saveNote,
   appleNotesTree, appleNotesFetch, fileURL, revealFile, WIKI_RE, EMBED_RE, IMG_RE,
 } from './notes.js'
-import { providerForCapability } from './ai.js'
+import { isAIConfigured, loadAI } from './ai.js'
+// ponytail: AI is single-provider (Claude) now; capability routing collapsed to "is AI connected"
+const providerForCapability = () => isAIConfigured(loadAI())
 import { sanitizeHTML } from './canvasui.js'
 import { marked } from 'marked'
 import { convertLatexToMarkup } from 'mathlive' // mathlive CSS is loaded globally by view.js

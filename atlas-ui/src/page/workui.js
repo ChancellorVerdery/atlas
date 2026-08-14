@@ -3,7 +3,7 @@
 
 import {
   loadWork, saveWork, todayKey, fmtTime, isOpen, shiftHours, shiftEnd, shiftEarned,
-  addShift, closeShift, removeShift, projectedEnd, parseClock, parseHM, PERIODS, incomeFor, tipShare,
+  addShift, closeShift, updateShift, removeShift, projectedEnd, parseClock, parseHM, PERIODS, incomeFor, tipShare,
   rangeFor, setRange, addUpcoming, removeUpcoming, setUpcomingGcal,
 } from './work.js'
 import { ensureCalendar, createEvent, deleteEvent, tz } from './calendar.js'
@@ -35,6 +35,9 @@ const st = (id, init) => {
   return ui.get(id)
 }
 
+// closed shifts currently flipped into their edit form (session-only)
+const editingShifts = new Set()
+
 // ---- widget bodies ----------------------------------------------------------
 
 export function workWidgetHTML(w, cz) {
@@ -55,12 +58,24 @@ export function workWidgetHTML(w, cz) {
         <button type="button" class="gym-btn" data-wk-act="clock-out" data-id="${esc(sh.id)}">Log shift</button>`}
       </div>`
     }
+    if (!cz && editingShifts.has(sh.id)) {
+      return `<div class="wk-row wk-row--open" data-shift-id="${esc(sh.id)}">
+        <input class="pw-field wk-num wk-edit-date" type="date" value="${esc(sh.date)}" aria-label="Date">
+        <input class="pw-field wk-num wk-edit-start" type="time" value="${esc(sh.start)}" aria-label="Start time">
+        <input class="pw-field wk-num wk-edit-end" type="time" value="${esc(sh.end)}" aria-label="End time">
+        <input class="pw-field wk-num wk-edit-hours" type="text" inputmode="numeric" placeholder="or h:mm" value="${sh.hours != null ? esc(toHM(sh.hours)) : ''}" aria-label="Total time worked" title="…or total time worked, e.g. 6:30 (used instead of the out time)">
+        ${s.tips ? `<input class="pw-field wk-num wk-edit-tips" type="number" min="0" step="0.01" placeholder="tips" value="${esc(sh.tips || '')}" aria-label="Tips">` : ''}
+        <button type="button" class="gym-btn" data-wk-act="save-shift" data-id="${esc(sh.id)}">Save</button>
+        <button type="button" class="pw-item-remove" data-wk-act="cancel-edit" data-id="${esc(sh.id)}" title="Cancel edit">×</button>
+      </div>`
+    }
     const end = shiftEnd(sh)
     return `<div class="wk-row" data-shift-id="${esc(sh.id)}">
       <span class="wk-date">${shortDate(sh.date)}</span>
       <span class="wk-time">${sh.start && end ? `${fmtTime(sh.start)}–${fmtTime(end)}` : ''} ${h != null ? `· ${toHM(h)}` : ''}</span>
       <span class="wk-earned">${money(shiftEarned(sh))}${s.tips && sh.tips ? ` <span class="wk-proj">(${money(sh.tips)} tips)</span>` : ''}</span>
-      ${cz ? '' : `<button type="button" class="pw-item-remove" data-wk-act="del-shift" data-id="${esc(sh.id)}" title="Delete shift">×</button>`}
+      ${cz ? '' : `<button type="button" class="gym-btn gym-btn--sm" data-wk-act="edit-shift" data-id="${esc(sh.id)}" title="Edit shift">Edit</button>
+      <button type="button" class="pw-item-remove" data-wk-act="del-shift" data-id="${esc(sh.id)}" title="Delete shift">×</button>`}
     </div>`
   }
 
@@ -193,6 +208,23 @@ function onWorkClick(e) {
     rerenderApp?.()
   } else if (a === 'del-shift') {
     removeShift(s, act.dataset.id)
+    rerenderApp?.()
+  } else if (a === 'edit-shift') {
+    editingShifts.add(act.dataset.id)
+    rerenderApp?.()
+  } else if (a === 'save-shift') {
+    const row = act.closest('.wk-row')
+    updateShift(s, act.dataset.id, {
+      date: row.querySelector('.wk-edit-date').value,
+      start: row.querySelector('.wk-edit-start').value,
+      end: row.querySelector('.wk-edit-end').value,
+      hours: row.querySelector('.wk-edit-hours').value,
+      tips: row.querySelector('.wk-edit-tips')?.value,
+    })
+    editingShifts.delete(act.dataset.id)
+    rerenderApp?.()
+  } else if (a === 'cancel-edit') {
+    editingShifts.delete(act.dataset.id)
     rerenderApp?.()
   } else if (a === 'add-upcoming') {
     const box = act.closest('.wk-add')

@@ -186,11 +186,14 @@ async function addressForToken(accessToken) {
   return j.emailAddress || null
 }
 
-async function exchange(userId, code) {
+// redirect_uri defaults to 'postmessage' for the GIS popup flow; the native
+// shell obtains the code via a loopback redirect and passes that same URI here
+// (Google requires the exchange redirect_uri to match the auth request's).
+async function exchange(userId, code, redirectUri = 'postmessage') {
   if (!configured) throw new Error('Google is not configured on the server.')
   const { ok, t } = await tokenPost({
     code, client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
-    redirect_uri: 'postmessage', grant_type: 'authorization_code',
+    redirect_uri: redirectUri, grant_type: 'authorization_code',
   })
   if (!ok || !t.access_token) throw new Error(t.error_description || t.error || 'Google rejected the sign-in.')
   const expires_at = Date.now() + (Number(t.expires_in) || 3600) * 1000
@@ -233,7 +236,7 @@ serveHttp({
     try {
       let data
       if (code === 'google.config') data = { clientId: CLIENT_ID, scopes: SCOPES, configured }
-      else if (code === 'google.auth.exchange') data = await exchange(userId, p.code)
+      else if (code === 'google.auth.exchange') data = await exchange(userId, p.code, p.redirect_uri || 'postmessage')
       else if (code === 'google.auth.status') {
         const accounts = (await getAccounts(userId)).map((r) => r.address)
         data = { connected: accounts.length > 0, address: accounts[0] || '', accounts }

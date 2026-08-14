@@ -14,6 +14,7 @@ import {
   togglePin, pinnedIds, isPinned,
 } from './email.js'
 import { cachedValue, writeCache } from './datacache.js'
+import { isMobile } from '../platform.js'
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -113,12 +114,13 @@ export function renderEmailPage(root, rerender) {
         <button type="button" class="mail-btn mail-btn--primary" data-mail="compose">Compose</button>
       </div>
       <div class="mail-selbar" id="mail-selbar" hidden></div>
-      <div class="mail-body${s.navHidden ? ' nav-hidden' : ''}">
+      <div class="mail-body${(s.navHidden || isMobile()) ? ' nav-hidden' : ''}">
         <aside class="mail-nav" id="mail-nav"></aside>
-        <section class="mail-list" id="mail-list" style="flex-basis:${s.splitPct}%"></section>
-        <div class="mail-split" id="mail-split" title="Drag to resize"></div>
+        <section class="mail-list" id="mail-list"${isMobile() ? '' : ` style="flex-basis:${s.splitPct}%"`}></section>
+        ${isMobile() ? '' : `<div class="mail-split" id="mail-split" title="Drag to resize"></div>`}
         <section class="mail-view" id="mail-view"></section>
       </div>
+      ${isMobile() ? `<button type="button" class="mail-fab" data-mail="compose" title="Compose" aria-label="Compose">${ICON.draft}</button>` : ''}
     </div>`
   root.onclick = onClick
   root.onmousedown = (e) => { if (e.target.closest('#mail-split')) startSplit(e) }
@@ -446,7 +448,7 @@ function renderView() {
   }
   if (st.loadingView || !st.open) { el.innerHTML = `<p class="mail-list__empty">Loading…</p>`; return }
   el.innerHTML = `
-    <div class="mail-view__bar">${viewActs()}</div>
+    <div class="mail-view__bar">${isMobile() ? `<button type="button" class="mail-btn mail-btn--ghost" data-mail="back-to-list">← Inbox</button>` : ''}${viewActs()}</div>
     <h2 class="mail-view__subject">${esc(st.open.summary.subject)}</h2>
     ${st.open.messages.map((m) => `
       <div class="mail-msg">
@@ -586,6 +588,7 @@ function openThread(id) {
   st.open = null
   st.loadingView = true
   const seq = ++st.viewSeq
+  if (isMobile()) q('.mail-body')?.classList.add('mail--view-open')
   renderList(); renderView()
   guard(async () => {
     const t = await getThread(id, account)
@@ -966,6 +969,7 @@ function onClick(e) {
   const mail = e.target.closest('[data-mail]')
   if (mail) {
     const m = mail.dataset.mail
+    if (m === 'back-to-list') { q('.mail-body')?.classList.remove('mail--view-open'); return }
     if (m === 'move-open') { openMoveMenu(mail.dataset.id); return }
     if (m === 'label-open') { openLabelMenu(); return }
     if (m === 'sel-mode') { setSelMode(!st.selMode); return }

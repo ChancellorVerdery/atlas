@@ -5,6 +5,7 @@
 // view.js (widgetHTML).
 
 import { isPluginEnabled } from './plugins.js'
+import { isMobile } from '../platform.js'
 
 export const PAGES = [
   {
@@ -133,6 +134,8 @@ export function resolveNavOrder(registryIds, enabledIds, order) {
 // Dashboard is core; every other page's id doubles as its plugin id.
 export const activePages = () => {
   const registryIds = PAGES.map((p) => p.id)
+  const mobile = isMobile()
   const enabledIds = registryIds.filter((id) => id === 'dashboard' || isPluginEnabled(id))
+    .filter((id) => !(mobile && id === 'course')) // Course Planner is desktop-only
   return resolveNavOrder(registryIds, enabledIds, loadNavOrder()).map(pageById)
 }

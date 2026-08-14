@@ -144,6 +144,20 @@ export function closeShift(s, id, { end, hours, tips }) {
   saveWork(s)
 }
 
+// Edit a past (closed) shift — date, start, end, hours, tips. Same
+// hours-wins-over-end rule as closeShift; date/start overwrite only when given.
+export function updateShift(s, id, { date, start, end, hours, tips }) {
+  const sh = s.shifts.find((x) => x.id === id)
+  if (!sh) return
+  if (date) sh.date = date
+  if (start) sh.start = start
+  const h = parseHM(hours)
+  if (h != null) { sh.hours = h; sh.end = '' }
+  else if (end) { sh.end = end; sh.hours = null }
+  if (tips !== undefined && tips !== '') sh.tips = Number(tips) || 0
+  saveWork(s)
+}
+
 export function removeShift(s, id) {
   s.shifts = s.shifts.filter((x) => x.id !== id)
   saveWork(s)

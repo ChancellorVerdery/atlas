@@ -39,6 +39,19 @@ export function savePage(page) {
   localStorage.setItem(pageKeys.get(page) || DEFAULT_KEY, JSON.stringify(page))
 }
 
+// Mobile gets its own storage key per page, seeded once from seedFn() (e.g. a
+// clone of the desktop layout) and independent of the desktop key from then
+// on — editing the mobile layout never touches desktop's, and vice versa.
+export const mobileKey = (k) => k + '.mobile'
+export function loadPageMobile(storageKey, seedFn) {
+  const mk = mobileKey(storageKey)
+  if (localStorage.getItem(mk) == null) {
+    const seed = seedFn()
+    if (seed) localStorage.setItem(mk, JSON.stringify(structuredClone(seed)))
+  }
+  return loadPage(mk)
+}
+
 const demoPoints = () =>
   ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((label) => ({ label, value: Math.round(10 + Math.random() * 90) }))
 

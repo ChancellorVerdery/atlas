@@ -136,21 +136,21 @@ function graphApi() {
 
 const fail = (code, msg) => Object.assign(new Error(msg), { code })
 
-// creds arrive from the client per capability (see src/page/ai.js
-// credsForCapability) — either the POST body's `ai` field or the
+// The single credential arrives from the client (see src/page/ai.js
+// credsForClaude/credsHeader) — either the POST body's `ai` field or the
 // x-atlas-ai header (base64 JSON), so a caller without a JSON body could
-// still use the header path. Never falls back to the dev machine's own
-// `claude` CLI/subscription — see callLLM in llm.js.
+// still use the header path. null when absent. Never falls back to the dev
+// machine's own `claude` CLI/subscription — see callLLM in llm.js.
 function credsFromRequest(req, body) {
-  if (Array.isArray(body?.ai) && body.ai.length) return body.ai
+  if (body?.ai && typeof body.ai === 'object' && !Array.isArray(body.ai)) return body.ai
   const h = req?.headers?.['x-atlas-ai']
   if (h) {
     try {
       const parsed = JSON.parse(Buffer.from(String(h), 'base64').toString('utf8'))
-      if (Array.isArray(parsed)) return parsed
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
     } catch { /* malformed header — treat as absent */ }
   }
-  return []
+  return null
 }
 
 // JSON body with base64 file payloads. Anthropic's request cap is 32MB, so
@@ -233,28 +233,26 @@ function readAttachments(paths) {
   return { images, text: textParts.join('\n\n') }
 }
 
-// Provider-routed LLM call for the AI-backed middlewares (Study extraction,
-// tutor chat, judge; Notes conversion) that must return schema-shaped JSON.
-// `creds` is the caller's own connected Claude/OpenAI account, resolved
-// client-side (src/page/ai.js credsForCapability) — never the dev machine's
-// own `claude` CLI/subscription. callLLM (llm.js) falls forward from primary
-// to secondary only on a token-exhaustion error; `switched` on the return
-// value says whether that happened, so the UI can notify.
-async function askClaude(prompt, schema, creds, images) {
-  if (!Array.isArray(creds) || !creds.length) throw fail(400, 'no_ai_provider')
+// Claude-only LLM call for the AI-backed middlewares (Study extraction, tutor
+// chat, judge; Notes conversion) that must return schema-shaped JSON. `cred`
+// is the caller's own connected Claude account (subscription OAuth), resolved
+// client-side (src/page/ai.js credsForClaude) — never the dev machine's own
+// `claude` CLI/subscription.
+async function askClaude(prompt, schema, cred, images) {
+  if (!cred) throw fail(400, 'no_ai_provider')
   let out
-  try { out = await callLLM({ creds, prompt, schema, images }) }
+  try { out = await callLLM({ cred, prompt, schema, images }) }
   catch (e) { throw fail(502, e.message) }
   let parsed
   try { parsed = JSON.parse(out.text) } catch { throw fail(502, 'The AI did not return valid JSON — try again.') }
-  return { ...parsed, switched: out.switched }
+  return parsed
 }
 
 // Notes plugin backend: turns uploads (handwriting photos, screenshots, PDFs,
 // pasted text, web links) into markdown notes, and lists/writes the user's
 // notes directory — none of which the browser can do. Conversion runs
-// through askClaude/callLLM on the USER'S OWN connected Claude/OpenAI
-// account (see ai.js credsForCapability) — never the dev machine's local
+// through askClaude/callLLM on the USER'S OWN connected Claude account
+// (see ai.js credsForClaude) — never the dev machine's local
 // Claude Code subscription. Reading note contents reuses /graph-api/file
 // (sandboxed). Apple Notes import reads the account/folder/note tree and one
 // note's full content directly by its stable id (never by title, which can
@@ -567,7 +565,7 @@ Output:
   // Claude/OpenAI account. Uploads are written to a temp dir and read back
   // here as base64 attachments (readAttachments) — no filesystem tool, no
   // local `claude` CLI. Everything is torn down after.
-  async function convert(dir, body, creds) {
+  async function convert(dir, body, cred) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-notes-'))
     try {
       const paths = writeUploads(tmp, body.files)
@@ -585,12 +583,10 @@ Output:
         'Convert the material above into one note.',
       ].filter(Boolean).join('\n\n')
 
-      // ponytail: AI provider routing — creds are the user's own connected
-      // Claude/OpenAI account (resolved client-side by credsForCapability;
-      // never the dev machine's own claude CLI). Model/effort are pinned
-      // inside llm.js so note style doesn't drift with whichever account is
-      // active.
-      return await askClaude(prompt, SCHEMA, creds, images)
+      // cred is the user's own connected Claude account (resolved client-side
+      // by credsForClaude; never the dev machine's own claude CLI). Model is
+      // pinned inside llm.js so note style stays stable.
+      return await askClaude(prompt, SCHEMA, cred, images)
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
@@ -906,10 +902,9 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
       const prompt = PROMPTS[job.target](job.categories, paths, job.text, figs).filter(Boolean).join('\n\n')
       const { images, text: fileText } = readAttachments([...paths, ...figs])
       const fullPrompt = fileText ? `${prompt}\n\n${fileText}` : prompt
-      const data = await askClaude(fullPrompt, SCHEMAS[job.target], job.creds, images)
+      const data = await askClaude(fullPrompt, SCHEMAS[job.target], job.cred, images)
       const list = (job.target === 'cards' ? data.cards : data.questions) || []
       job.results = job.target === 'cards' ? list : publishFigures(job, list)
-      job.switched = !!data.switched
       job.phase = 'ready'
     } catch (e) {
       job.phase = 'error'
@@ -928,8 +923,8 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
     }
   }
 
-  function enqueue(body, creds) {
-    if (!Array.isArray(creds) || !creds.length) throw fail(400, 'no_ai_provider')
+  function enqueue(body, cred) {
+    if (!cred) throw fail(400, 'no_ai_provider')
     const target = body.target === 'cards' ? 'cards' : 'questions'
     const text = String(body.text || '').slice(0, 200000)
     const files = Array.isArray(body.files) ? body.files : []
@@ -957,7 +952,7 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
       return { file, name, mediaType: String(f.media_type || '') }
     }
     const newJob = (id, dir, sources, jobText, label) =>
-      jobs.set(id, { ...base, id, dir, sources, text: jobText, label, phase: 'queued', error: '', results: null, startedAt: 0, prepared: null, creds, switched: false })
+      jobs.set(id, { ...base, id, dir, sources, text: jobText, label, phase: 'queued', error: '', results: null, startedAt: 0, prepared: null, cred, switched: false })
     const oneJob = (group, label) => {
       const id = ++jobSeq
       const dir = newDir()
@@ -1070,6 +1065,64 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
 }
 
 
+// Claude subscription-OAuth token broker. The browser can't POST to
+// Anthropic's token endpoint (CORS), and the exchange must carry the PKCE
+// code_verifier, so the code-exchange + refresh run here. NEVER logs tokens.
+// See src/page/ai.js for the client half (PKCE, redirect, storage).
+const OAUTH_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token'
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+const OAUTH_REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback'
+
+async function claudeToken(payload) {
+  let res
+  try {
+    res = await fetch(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch (e) { throw fail(502, `couldn't reach Anthropic — ${e.message}`) }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw fail(res.status === 400 || res.status === 401 ? 400 : 502, data?.error_description || data?.error || `token request failed (${res.status})`)
+  // Never return/log the raw provider payload — only the three fields the
+  // client stores.
+  return { access: data.access_token, refresh: data.refresh_token, expires: data.expires_in }
+}
+
+function aiOauthApi() {
+  return async (req, res) => {
+    const u = new URL(req.url, 'http://x')
+    const json = (code, obj) => { res.statusCode = code; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(obj)) }
+    try {
+      if (req.method !== 'POST') return json(405, { error: 'POST only' })
+      const body = await readBody(req)
+      if (u.pathname === '/claude/exchange') {
+        if (!body.code || !body.verifier) return json(400, { error: 'missing code or verifier' })
+        return json(200, await claudeToken({
+          grant_type: 'authorization_code',
+          code: body.code,
+          state: body.state,
+          client_id: OAUTH_CLIENT_ID,
+          redirect_uri: OAUTH_REDIRECT_URI,
+          code_verifier: body.verifier,
+        }))
+      }
+      if (u.pathname === '/claude/refresh') {
+        if (!body.refresh) return json(400, { error: 'missing refresh token' })
+        return json(200, await claudeToken({
+          grant_type: 'refresh_token',
+          refresh_token: body.refresh,
+          client_id: OAUTH_CLIENT_ID,
+        }))
+      }
+      json(404, { error: 'unknown ai-oauth endpoint' })
+    } catch (err) {
+      json(err.code >= 400 && err.code <= 599 ? err.code : 500, { error: err.message })
+    }
+  }
+}
+
+
 // ---- public surface ---------------------------------------------------------
 // The Atlas backend that isn't the sync server: local proxies and tooling that
 // need a Node process. These used to exist only while `vite` was running, which
@@ -1091,6 +1144,9 @@ export const MIDDLEWARES = [
   // the Apple Notes store and a vault path that came from a Finder dialog.
   { prefix: '/graph-api', handler: graphApi() },
   { prefix: '/notes-api', handler: notesApi() },
+  // Claude subscription-OAuth broker — CORS-blocked from the browser, and the
+  // token exchange must carry the PKCE verifier. Pure network, no local state.
+  { prefix: '/ai-oauth', handler: aiOauthApi() },
   // STILL LOCAL, but no longer for a `claude` CLI login reason — extraction
   // now calls out over HTTP with the user's own AI credentials (askClaude →
   // llm.js), same as chat/judge. What's left local is headless Chromium

@@ -1,104 +1,99 @@
-// callLLM (server/llm.js) provider selection + fallback — pure logic, no
-// real network calls. Stubs globalThis.fetch per-case since llm.js calls the
-// ambient fetch directly (same pattern the rest of the dev-server code uses,
-// e.g. middlewares.js fetchPageText).
+// callLLM (server/llm.js) — Claude-only, subscription-OAuth path. Pure logic,
+// no real network: stubs globalThis.fetch per-case since llm.js calls the
+// ambient fetch directly. (The old multi-provider/openai fallback contract was
+// removed — Atlas AI is single-provider Claude over OAuth now.)
 // Run: node tests/llm.check.mjs
 import assert from 'node:assert/strict'
 
-const { callLLM } = await import('../server/llm.js')
+const { callLLM, CLAUDE_MODEL } = await import('../server/llm.js')
 
-const jsonRes = (status, body) => ({
-  ok: status >= 200 && status < 300,
-  status,
-  json: async () => body,
-})
+const okRes = (body) => ({ ok: true, status: 200, json: async () => body })
+const errRes = (status, body) => ({ ok: false, status, json: async () => body })
+const claudeText = (t) => ({ content: [{ type: 'text', text: t }] })
+const oauthCred = (over = {}) => ({ provider: 'claude', oauth: { access: 'tok-abc' }, model: 'claude-sonnet-5', ...over })
 
-// ---- empty creds → clear error, no network call ----------------------------
+// ---- no cred → clear error, no network call --------------------------------
 {
   let called = false
   globalThis.fetch = async () => { called = true; throw new Error('should not be called') }
-  await assert.rejects(() => callLLM({ creds: [], prompt: 'hi' }), /no_ai_provider/)
-  assert.equal(called, false, 'empty creds must not touch the network')
+  await assert.rejects(() => callLLM({ prompt: 'hi' }), /no_ai_provider/)
+  assert.equal(called, false, 'missing cred must not touch the network')
 }
 
-// ---- exhaustion on provider A falls forward to provider B ------------------
+// ---- cred without an oauth access token → reconnect error, no network ------
 {
-  const calls = []
-  globalThis.fetch = async (url) => {
-    calls.push(url)
-    if (url.includes('anthropic.com')) {
-      // Claude: 429 rate_limit_error — exhaustion
-      return jsonRes(429, { error: { type: 'rate_limit_error', message: 'rate limited' } })
-    }
-    // OpenAI: success
-    return jsonRes(200, { choices: [{ message: { content: '{"ok":true}' } }] })
-  }
-  const creds = [
-    { provider: 'claude', apiKey: 'sk-ant-a', model: 'claude-sonnet-5' },
-    { provider: 'openai', apiKey: 'sk-oai-b', model: 'gpt-5' },
-  ]
-  const out = await callLLM({ creds, prompt: 'hi' })
-  assert.equal(out.usedProvider, 'openai')
-  assert.equal(out.switched, true)
-  assert.equal(out.text, '{"ok":true}')
-  assert.equal(calls.length, 2, 'both providers were tried')
+  let called = false
+  globalThis.fetch = async () => { called = true; throw new Error('should not be called') }
+  await assert.rejects(() => callLLM({ cred: { provider: 'claude', oauth: {} }, prompt: 'hi' }), /reconnect Claude/i)
+  assert.equal(called, false, 'no access token must not touch the network')
 }
 
-// ---- no fallback needed → switched:false, only one call --------------------
+// ---- happy path → OAuth bearer, no x-api-key, Claude Code identity leads ----
 {
-  const calls = []
-  globalThis.fetch = async (url) => {
-    calls.push(url)
-    return jsonRes(200, { content: [{ type: 'text', text: '{"ok":true}' }] })
-  }
-  const creds = [{ provider: 'claude', apiKey: 'sk-ant-a', model: 'claude-sonnet-5' }]
-  const out = await callLLM({ creds, prompt: 'hi' })
+  let seen = null
+  globalThis.fetch = async (url, opts) => { seen = { url, opts }; return okRes(claudeText('{"ok":true}')) }
+  const out = await callLLM({ cred: oauthCred(), system: 'REAL INSTRUCTIONS', prompt: 'hi' })
   assert.equal(out.usedProvider, 'claude')
-  assert.equal(out.switched, false)
-  assert.equal(calls.length, 1)
+  assert.equal(out.text, '{"ok":true}')
+  assert.match(seen.url, /api\.anthropic\.com/)
+  const h = seen.opts.headers
+  assert.equal(h.Authorization, 'Bearer tok-abc', 'must send the OAuth bearer token')
+  assert.equal(h['anthropic-beta'], 'oauth-2025-04-20', 'must send the oauth beta header')
+  assert.ok(!('x-api-key' in h), 'must NOT send x-api-key on the OAuth path')
+  const body = JSON.parse(seen.opts.body)
+  assert.ok(Array.isArray(body.system), 'system is an array of blocks')
+  assert.match(body.system[0].text, /You are Claude Code/, 'identity block must lead')
+  assert.equal(body.system[1].text, 'REAL INSTRUCTIONS', 'caller system follows as a second block')
+  assert.equal(body.model, 'claude-sonnet-5')
 }
 
-// ---- a non-exhaustion error propagates WITHOUT falling back ----------------
+// ---- default model when the cred omits one ---------------------------------
 {
-  const calls = []
-  globalThis.fetch = async (url) => {
-    calls.push(url)
-    if (url.includes('anthropic.com')) {
-      // 400 invalid_request_error — not exhaustion, must not retry
-      return jsonRes(400, { error: { type: 'invalid_request_error', message: 'bad schema' } })
-    }
-    throw new Error('provider B must never be called')
-  }
-  const creds = [
-    { provider: 'claude', apiKey: 'sk-ant-a', model: 'claude-sonnet-5' },
-    { provider: 'openai', apiKey: 'sk-oai-b', model: 'gpt-5' },
-  ]
-  await assert.rejects(() => callLLM({ creds, prompt: 'hi' }), /bad schema/)
-  assert.equal(calls.length, 1, 'must stop after the first, non-exhaustion failure')
+  let body = null
+  globalThis.fetch = async (_u, opts) => { body = JSON.parse(opts.body); return okRes(claudeText('x')) }
+  await callLLM({ cred: { provider: 'claude', oauth: { access: 't' } }, prompt: 'hi' })
+  assert.equal(body.model, CLAUDE_MODEL, 'falls back to CLAUDE_MODEL')
 }
 
-// ---- authentication_error (401) also counts as exhaustion -------------------
+// ---- schema → output_config.format.json_schema -----------------------------
 {
-  const calls = []
-  globalThis.fetch = async (url) => {
-    calls.push(url)
-    if (calls.length === 1) return jsonRes(401, { error: { type: 'authentication_error', message: 'bad key' } })
-    return jsonRes(200, { content: [{ type: 'text', text: '{"ok":true}' }] })
-  }
-  const creds = [
-    { provider: 'claude', apiKey: 'sk-ant-bad', model: 'claude-sonnet-5' },
-    { provider: 'claude', apiKey: 'sk-ant-good', model: 'claude-sonnet-5' },
-  ]
-  const out = await callLLM({ creds, prompt: 'hi' })
-  assert.equal(out.switched, true)
-  assert.equal(calls.length, 2)
+  let body = null
+  globalThis.fetch = async (_u, opts) => { body = JSON.parse(opts.body); return okRes(claudeText('{}')) }
+  const schema = { type: 'object', properties: { a: { type: 'string' } } }
+  await callLLM({ cred: oauthCred(), prompt: 'hi', schema })
+  assert.equal(body.output_config.format.type, 'json_schema')
+  assert.deepEqual(body.output_config.format.schema, schema)
 }
 
-// ---- exhaustion on the LAST entry still throws (nothing left to try) -------
+// ---- attachments become labelled image/document blocks ---------------------
 {
-  globalThis.fetch = async () => jsonRes(429, { error: { type: 'rate_limit_error', message: 'still limited' } })
-  const creds = [{ provider: 'openai', apiKey: 'sk-oai-a', model: 'gpt-5' }]
-  await assert.rejects(() => callLLM({ creds, prompt: 'hi' }), /still limited/)
+  let body = null
+  globalThis.fetch = async (_u, opts) => { body = JSON.parse(opts.body); return okRes(claudeText('ok')) }
+  await callLLM({
+    cred: oauthCred(),
+    prompt: 'describe',
+    images: [
+      { name: 'fig.png', media_type: 'image/png', data: 'AAAA' },
+      { name: 'doc.pdf', media_type: 'application/pdf', data: 'BBBB' },
+    ],
+  })
+  const content = body.messages[0].content
+  assert.ok(Array.isArray(content), 'content is a block array when images are present')
+  assert.ok(content.some((b) => b.type === 'image' && b.source.media_type === 'image/png'))
+  assert.ok(content.some((b) => b.type === 'document' && b.source.media_type === 'application/pdf'))
+  assert.ok(content.some((b) => b.type === 'text' && /fig\.png/.test(b.text)), 'each file is labelled by name')
+}
+
+// ---- 401 → reconnect error -------------------------------------------------
+{
+  globalThis.fetch = async () => errRes(401, { error: { type: 'authentication_error', message: 'bad token' } })
+  await assert.rejects(() => callLLM({ cred: oauthCred(), prompt: 'hi' }), /reconnect Claude/i)
+}
+
+// ---- other non-ok statuses surface the API message -------------------------
+{
+  globalThis.fetch = async () => errRes(400, { error: { type: 'invalid_request_error', message: 'bad schema' } })
+  await assert.rejects(() => callLLM({ cred: oauthCred(), prompt: 'hi' }), /bad schema/)
 }
 
 console.log('llm.check: all assertions passed')

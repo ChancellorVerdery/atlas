@@ -1,106 +1,147 @@
-// AI provider connections: which of Claude / OpenAI this device holds
-// credentials for, a primary + secondary preference between them, and a
-// per-capability override (Studying, Notes) that falls back to primary, then
-// secondary. Storage + pure resolution helpers, plus credsForCapability
-// below, which is what study.js/notes.js attach to every /study-api and
-// /notes-api request — the server (server/llm.js callLLM) never falls back
-// to the machine owner's own `claude` CLI/subscription; it only ever uses
+// AI provider connection: Atlas talks to exactly ONE provider — the user's
+// own Claude account, connected by SUBSCRIPTION OAuth (a browser login, no
+// API key). This file is storage + the OAuth/PKCE dance + the pure resolution
+// helpers study.js/notes.js attach to every /study-api and /notes-api request
+// (as the x-atlas-ai header). The server (server/llm.js callLLM) never falls
+// back to the machine owner's own `claude` CLI/subscription; it only ever uses
 // what this file resolves.
 //
-// Stored in atlas.ai.v1. Unlike every other atlas.* key this one holds
-// secrets (API keys), so it must NEVER ride the sync path — see the
-// SKIP_KEYS entry in main.js and the NEVER_PUSH entry in sync.js, which
-// mirror how atlas.backend/atlas.devMode stay device-local.
+// Stored in atlas.ai.v1. Unlike every other atlas.* key this one holds a
+// secret (the OAuth tokens), so it must NEVER ride the sync path — see the
+// SKIP_KEYS entry in main.js and the NEVER_PUSH entry in sync.js, which mirror
+// how atlas.backend/atlas.devMode stay device-local.
+//
+// ponytail: subscription-OAuth-to-API is a GRAY AREA. These tokens are only
+// accepted by the Messages API because the request presents as Claude Code —
+// the Claude Code identity system block ("You are Claude Code…") plus the
+// anthropic-beta:oauth-2025-04-20 header, both implemented in llm.js. That is
+// the one first-party client Anthropic issues these tokens for; Anthropic can
+// change or revoke this at any time. Upgrade path if they do: a settings-side
+// API-key field again.
 
 const KEY = 'atlas.ai.v1'
+const PENDING_KEY = 'atlas.ai.oauth.pending'
 
-export const PROVIDERS = ['claude', 'openai']
-export const CAPABILITIES = ['study', 'notes']
+export const PROVIDERS = ['claude']
 
-const emptyState = () => ({
-  providers: { claude: {}, openai: {} },
-  primary: null,
-  secondary: null,
-  perCapability: { study: null, notes: null },
-})
+// Claude Code's public OAuth client — the same identifiers the CLI uses.
+const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize'
+const REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback'
+const SCOPE = 'org:create_api_key user:profile user:inference'
+export const MODEL = 'claude-sonnet-5'
 
-// A stored value that isn't a real, currently-known provider id is treated as
-// unset — half-written or stale localStorage must not crash Settings.
-const cleanProvider = (v) => (PROVIDERS.includes(v) ? v : null)
+// typeof-guarded so `import`ing this module in Node (tests) never throws.
+const ls = () => (typeof localStorage !== 'undefined' ? localStorage : null)
 
 export function loadAI() {
   let s
-  try { s = JSON.parse(localStorage.getItem(KEY)) || {} } catch { s = {} }
-  const base = emptyState()
-  return {
-    providers: {
-      claude: { ...base.providers.claude, ...(s.providers?.claude || {}) },
-      openai: { ...base.providers.openai, ...(s.providers?.openai || {}) },
-    },
-    primary: cleanProvider(s.primary),
-    secondary: cleanProvider(s.secondary),
-    perCapability: {
-      study: cleanProvider(s.perCapability?.study),
-      notes: cleanProvider(s.perCapability?.notes),
-    },
-  }
+  try { s = JSON.parse(ls()?.getItem(KEY)) || {} } catch { s = {} }
+  const oauth = s?.providers?.claude?.oauth
+  return { providers: { claude: oauth && typeof oauth === 'object' ? { oauth } : {} } }
 }
 
-export function saveAI(s) { localStorage.setItem(KEY, JSON.stringify(s)) }
+export function saveAI(s) { ls()?.setItem(KEY, JSON.stringify(s)) }
 
-// "Connected" means a credential is on file — an API key for either
-// provider, or Claude's OAuth token once that path exists.
-export function isProviderConnected(id, s = loadAI()) {
-  const p = s.providers[id]
-  return !!(p && (p.apiKey || p.oauth))
+// Connected == a usable OAuth access token is on file.
+export const isClaudeConnected = (s = loadAI()) => !!(s.providers.claude.oauth && s.providers.claude.oauth.access)
+
+// Compat surface for renderer.js — one provider now, so these collapse to the
+// single Claude check.
+export const isProviderConnected = (id, s = loadAI()) => id === 'claude' && isClaudeConnected(s)
+export const connectedProviders = (s = loadAI()) => (isClaudeConnected(s) ? ['claude'] : [])
+export const isAIConfigured = (s = loadAI()) => isClaudeConnected(s)
+
+export function disconnectClaude() {
+  const s = loadAI()
+  s.providers.claude = {}
+  saveAI(s)
 }
 
-export const connectedProviders = (s = loadAI()) => PROVIDERS.filter((id) => isProviderConnected(id, s))
-
-// perCapability override wins; falls back to primary, then secondary; null
-// if nothing usable is connected. A provider picked for a slot that has since
-// been disconnected doesn't count — the stored id survives (so reconnecting
-// restores the choice) but resolution skips it.
-export function providerForCapability(cap, s = loadAI()) {
-  const connected = connectedProviders(s)
-  for (const candidate of [s.perCapability?.[cap], s.primary, s.secondary]) {
-    if (candidate && connected.includes(candidate)) return candidate
-  }
-  return null
+// The single credential study.js/notes.js send to the server (via credsHeader).
+// null when not connected — the server treats that as `no_ai_provider` rather
+// than ever falling back to the dev machine's own claude CLI.
+export function credsForClaude(s = loadAI()) {
+  const oauth = s.providers.claude.oauth
+  return oauth && oauth.access ? { provider: 'claude', oauth, model: MODEL } : null
 }
 
-export const isAIConfigured = (s = loadAI()) => connectedProviders(s).length > 0
+// x-atlas-ai header: base64'd JSON of the single cred object. atob/btoa work
+// on Latin1 only, hence the UTF-8 escape hatch.
+export const credsHeader = (cred) => btoa(unescape(encodeURIComponent(JSON.stringify(cred))))
 
-// Settings never reflects a stored key back into an input — only this masked
-// form, so the value on screen can't leak the secret via view-source/copy.
+// Settings never reflects a stored secret back verbatim — only this masked
+// form, so the value on screen can't leak via view-source/copy.
 export const maskKey = (key) => (key && key.length > 4 ? `••••${key.slice(-4)}` : key ? '••••' : '')
 
-// ---- request routing ---------------------------------------------------------
-// Mirrors server/llm.js's own defaults — kept here too so the client and the
-// server agree on what a "connected" provider actually costs.
-export const MODELS = { claude: 'claude-sonnet-5', openai: 'gpt-5' }
+// ---- OAuth (PKCE S256, browser-only) ----------------------------------------
+// base64url of raw bytes (no padding, URL-safe alphabet).
+const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 
-// The ordered credential list a server-side callLLM() call tries in turn:
-// the capability's own override first, then primary, then secondary —
-// skipping any slot with no API key on file and de-duping repeats (e.g. the
-// override and primary pointing at the same provider). Empty when nothing
-// usable is connected — server/middlewares.js treats that as `no_ai_provider`
-// rather than ever falling back to the dev machine's own claude CLI.
-export function credsForCapability(cap, s = loadAI()) {
-  const order = [s.perCapability?.[cap], s.primary, s.secondary]
-  const seen = new Set()
-  const creds = []
-  for (const id of order) {
-    if (!id || seen.has(id) || !PROVIDERS.includes(id)) continue
-    seen.add(id)
-    const apiKey = s.providers[id]?.apiKey
-    if (!apiKey) continue
-    creds.push({ provider: id, apiKey, model: MODELS[id] })
-  }
-  return creds
+const randB64url = (n) => {
+  const bytes = new Uint8Array(n)
+  globalThis.crypto.getRandomValues(bytes)
+  return b64url(bytes)
 }
 
-// Alternate transport for credsForCapability's list — a base64'd JSON
-// header (x-atlas-ai) for callers that would rather not put keys in a POST
-// body. atob/btoa work on Latin1 only, hence the UTF-8 escape hatch.
-export const credsHeader = (creds) => btoa(unescape(encodeURIComponent(JSON.stringify(creds))))
+// Kick off the browser login: mint a PKCE verifier/challenge + state, stash
+// the verifier+state locally, and return the authorize URL to open.
+export async function beginClaudeOAuth() {
+  const verifier = randB64url(32)
+  const challenge = b64url(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)))
+  const state = randB64url(32)
+  ls()?.setItem(PENDING_KEY, JSON.stringify({ verifier, state }))
+  const url = new URL(AUTHORIZE_URL)
+  url.search = new URLSearchParams({
+    response_type: 'code',
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    scope: SCOPE,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
+  }).toString()
+  return { url: url.toString(), state }
+}
+
+// Finish the login. Anthropic's callback value is the pasted-back string
+// "code#state"; exchange it (with the stashed verifier) via the server broker,
+// then store the tokens. Throws on state mismatch or a failed exchange.
+export async function completeClaudeOAuth(raw) {
+  let pending = {}
+  try { pending = JSON.parse(ls()?.getItem(PENDING_KEY)) || {} } catch { pending = {} }
+  const [code, state] = String(raw || '').split('#')
+  if (!code || !state) throw new Error('paste the full code Anthropic gave you')
+  if (state !== pending.state) throw new Error('OAuth state mismatch — start the connection again')
+  const r = await fetch('/ai-oauth/claude/exchange', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, state, verifier: pending.verifier }),
+  })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(j.error || `couldn't connect Claude (${r.status})`)
+  const s = loadAI()
+  s.providers.claude = { oauth: { access: j.access, refresh: j.refresh, expires: Date.now() + Number(j.expires) * 1000 } }
+  saveAI(s)
+  ls()?.removeItem(PENDING_KEY)
+  return true
+}
+
+// Refresh the access token when it's within 60s of expiry (and a refresh token
+// is on file). Returns the (possibly updated) state; a failed refresh returns
+// the stale state and lets the real call surface the reconnect error.
+export async function ensureFreshClaude(s = loadAI()) {
+  const oauth = s.providers.claude.oauth
+  if (!oauth || !oauth.access) return s
+  if (oauth.expires - Date.now() >= 60000 || !oauth.refresh) return s
+  const r = await fetch('/ai-oauth/claude/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh: oauth.refresh }),
+  })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) return s
+  s.providers.claude = { oauth: { access: j.access, refresh: j.refresh, expires: Date.now() + Number(j.expires) * 1000 } }
+  saveAI(s)
+  return s
+}

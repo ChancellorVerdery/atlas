@@ -2,7 +2,7 @@
 // and the topbar title/crumb. Two routes only — everything renders from here.
 // Customize mode (src/page/customize.js) live-edits the page in place.
 
-import { loadPage, findWidget, uid } from './page/model.js'
+import { loadPage, loadPageMobile, findWidget, uid } from './page/model.js'
 import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenAll } from './page/view.js'
 import { enterCustomize, exitCustomize, paletteHTML } from './page/customize.js'
 import { PAGES, pageById, activePages, saveNavOrder } from './page/pages.js'
@@ -23,7 +23,8 @@ import { renderFlashcardsPage } from './page/flashcardsui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus } from './page/email.js'
 import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL } from './page/theme.js'
 import { openThemeModal } from './page/themeui.js'
-import { loadAI, saveAI, connectedProviders, isProviderConnected, maskKey } from './page/ai.js'
+import { loadAI, isClaudeConnected, beginClaudeOAuth, completeClaudeOAuth, disconnectClaude } from './page/ai.js'
+import { isMobile, initPlatform } from './platform.js'
 
 // Widgetless plugins that own the whole content area (registry: full:true).
 const FULL_PAGES = { email: renderEmailPage, calendar: renderCalendarPage, ladder: renderLadderPage, course: renderCoursePage, notes: renderNotesPage, study: renderStudyPage, flashcards: renderFlashcardsPage }
@@ -77,6 +78,12 @@ function route() {
     def = PAGES[0]
     location.replace('#/dashboard') // triggers one extra, idempotent render
   }
+  // Course Planner is desktop-only (activePages drops it from the mobile nav);
+  // a stale #/course hash must not still land on it on a phone.
+  if (isMobile() && def.id === 'course') {
+    def = PAGES[0]
+    location.replace('#/dashboard')
+  }
   const subName = (def.settings && sub === 'settings') ? 'settings' : (def.explore && sub === 'explore') ? 'explore' : null
   return { name: 'page', def, sub: subName }
 }
@@ -100,17 +107,23 @@ const authState = () => {
 // math-field is focused, hides the moment focus leaves one (clicking
 // straight from field A into field B keeps it open — see the focusout
 // handler's relatedTarget check).
+// The math keyboard (and its toggle) belong only to the pages that actually
+// mount math-fields — Study, Flashcards, Notes, Equations. Everywhere else the
+// toggle is hidden and the keyboard never shows, even with a caret parked in
+// some stray input, so it can't leak onto pages that have no equations.
+const MATHKBD_PAGES = new Set(['study', 'flashcards', 'notes', 'equations'])
+const mathAllowed = () => MATHKBD_PAGES.has(route().def?.id)
 let kbEnabled = false
 const isMathField = (el) => !!el?.closest?.('math-field')
 function setKbEnabled(on) {
   if (kbEnabled === on) return
   kbEnabled = on
   document.getElementById('mathkbd-toggle')?.classList.toggle('is-active', on)
-  if (on) { if (isMathField(document.activeElement)) window.mathVirtualKeyboard.show() }
+  if (on) { if (mathAllowed() && isMathField(document.activeElement)) window.mathVirtualKeyboard.show() }
   else window.mathVirtualKeyboard.hide()
 }
 document.addEventListener('focusin', (e) => {
-  if (kbEnabled && isMathField(e.target)) window.mathVirtualKeyboard.show()
+  if (kbEnabled && mathAllowed() && isMathField(e.target)) window.mathVirtualKeyboard.show()
 })
 document.addEventListener('focusout', (e) => {
   if (!isMathField(e.target)) return
@@ -135,6 +148,25 @@ document.addEventListener('focusout', (e) => {
     btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="13" rx="2.2"/><line x1="6" y1="10.3" x2="6" y2="10.3"/><line x1="9.7" y1="10.3" x2="9.7" y2="10.3"/><line x1="13.4" y1="10.3" x2="13.4" y2="10.3"/><line x1="17.1" y1="10.3" x2="17.1" y2="10.3"/><line x1="6" y1="14.8" x2="17.5" y2="14.8"/></svg><span>Math keys</span>`
     actions.insertBefore(btn, actions.firstChild)
   }
+}
+
+// Mobile navigator drawer: a hamburger in the topbar slides the sidebar in
+// (body.nav-open, styled by CSS this pass doesn't own); a scrim behind it, or
+// any navigation, closes it. Built here rather than in the shared index.html.
+{
+  const topbar = document.querySelector('.topbar')
+  if (topbar) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.id = 'nav-toggle'
+    btn.className = 'nav-toggle'
+    btn.setAttribute('aria-label', 'Menu')
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>`
+    topbar.insertBefore(btn, topbar.firstChild)
+  }
+  const scrim = document.createElement('div')
+  scrim.className = 'nav-scrim'
+  document.body.appendChild(scrim)
 }
 
 let customizing = false
@@ -302,7 +334,7 @@ const themeSettingsHTML = () => {
       <div class="set-theme__presets">
         ${Object.entries(PRESETS).map(([id, p]) => swatch(id, p)).join('')}
         ${swatch(CUSTOM, {
-          label: 'Custom…',
+          label: 'Custom',
           panel: t.custom[t.mode === 'light' ? 'lightPanel' : 'darkPanel'],
           accent: t.custom.accent, signal: t.custom.signal,
         })}
@@ -311,64 +343,33 @@ const themeSettingsHTML = () => {
   </div>`
 }
 
-// AI connections: which providers this device holds a key for, a
-// primary/secondary preference, and per-capability overrides. Storage lives
-// in page/ai.js; this just renders + wires it, same split as theme.js/themeui.js.
-const AI_PROVIDER_LABEL = { claude: 'Claude', openai: 'OpenAI' }
-const aiProviderOptions = (connected, value, noneLabel) =>
-  `<option value="">${esc(noneLabel)}</option>` +
-  connected.map((id) => `<option value="${id}"${value === id ? ' selected' : ''}>${esc(AI_PROVIDER_LABEL[id])}</option>`).join('')
-
+// AI connection: a single Claude link, authorized through the user's own
+// Claude subscription via OAuth. Storage + the OAuth calls live in page/ai.js;
+// this just renders + wires it, same split as theme.js/themeui.js.
 const aiConnectionsHTML = () => {
-  const s = loadAI()
-  const connected = connectedProviders(s)
-  const providerRow = (id, label) => {
-    const on = isProviderConnected(id, s)
-    const key = s.providers[id]?.apiKey
-    // Claude offers OAuth too, but there's no registered OAuth client to send
-    // users through yet — stub it rather than block on it; the API key path
-    // below is the one that actually works today.
-    // ponytail: swap this for a real "Connect with Claude" OAuth flow once
-    // Atlas has somewhere to register a client id / redirect URI.
-    const oauthBtn = id === 'claude'
-      ? `<button type="button" class="gym-btn gym-btn--ghost" disabled title="Not wired up yet — connect with an API key below.">Connect with Claude (coming soon)</button>`
-      : ''
-    return `<div class="ai-conn__row">
-      <div class="ai-conn__meta">
-        <span class="ai-conn__name">${esc(label)}</span>
-        <span class="ai-conn__status${on ? '' : ' ai-conn__status--off'}">${on ? `Connected ${esc(maskKey(key))}` : 'Not connected'}</span>
-      </div>
-      <div class="ai-conn__actions">
-        ${on
-          ? `<button type="button" class="gym-btn gym-btn--ghost" data-act="ai-disconnect" data-provider="${id}">Disconnect</button>`
-          : `<input type="password" class="pw-field ai-conn__field" id="ai-key-${id}" placeholder="API key" autocomplete="off" spellcheck="false">
-             <button type="button" class="gym-btn" data-act="ai-connect" data-provider="${id}">Connect</button>`}
-        ${oauthBtn}
-      </div>
-    </div>`
-  }
+  const on = isClaudeConnected(loadAI())
   return `<div class="set-row set-row--ai">
     <div class="set-row__meta">
-      <span class="set-row__name">AI connections</span>
-      <span class="set-row__sub">Connect Claude and/or OpenAI, then choose a primary (and optional secondary), or override which one Studying and Notes use. Keys stay on this device — they never sync to the Atlas server.</span>
+      <span class="set-row__name">AI connection</span>
+      <span class="set-row__sub">Studying and Notes run on your own Claude subscription. Connecting opens Claude in your browser to authorize Atlas; the token stays on this device and never syncs to the Atlas server.</span>
     </div>
     <div class="ai-conn">
-      ${providerRow('claude', 'Claude')}
-      ${providerRow('openai', 'OpenAI')}
-      <div class="ai-conn__prefs${connected.length ? '' : ' is-disabled'}">
-        <label class="ai-conn__pref">Primary
-          <select class="pw-field pw-field--select" data-act="ai-primary"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.primary, 'None')}</select>
-        </label>
-        <label class="ai-conn__pref">Secondary
-          <select class="pw-field pw-field--select" data-act="ai-secondary"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.secondary, 'None')}</select>
-        </label>
-        <label class="ai-conn__pref">Studying
-          <select class="pw-field pw-field--select" data-act="ai-cap" data-cap="study"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.perCapability.study, 'Use primary')}</select>
-        </label>
-        <label class="ai-conn__pref">Notes
-          <select class="pw-field pw-field--select" data-act="ai-cap" data-cap="notes"${connected.length ? '' : ' disabled'}>${aiProviderOptions(connected, s.perCapability.notes, 'Use primary')}</select>
-        </label>
+      <div class="ai-conn__row">
+        <div class="ai-conn__meta">
+          <span class="ai-conn__name">Claude</span>
+          <span class="ai-conn__status${on ? '' : ' ai-conn__status--off'}">${on ? 'Connected — your Claude subscription' : 'Not connected'}</span>
+        </div>
+        <div class="ai-conn__actions">
+          ${on
+            ? `<button type="button" class="gym-btn gym-btn--ghost" data-act="ai-disconnect">Disconnect</button>`
+            : `<button type="button" class="gym-btn" data-act="ai-oauth-start">Connect with Claude</button>`}
+        </div>
       </div>
+      ${on ? '' : `<div class="ai-conn__oauth" id="ai-oauth" hidden>
+        <input type="text" class="pw-field ai-conn__field" id="ai-oauth-code" placeholder="Paste the code from your browser" autocomplete="off" spellcheck="false">
+        <button type="button" class="gym-btn" data-act="ai-oauth-finish">Finish</button>
+        <span class="ai-conn__status ai-conn__status--off" id="ai-oauth-err"></span>
+      </div>`}
     </div>
   </div>`
 }
@@ -555,7 +556,10 @@ function render() {
   } else {
     currentPageId = r.def.id
     setHead(r.def.label, r.def.crumb)
-    const page = loadPage(r.def.storageKey)
+    // Mobile keeps its own per-page board, seeded once (see starterFor): the
+    // dashboard clones the user's current desktop layout, every other plugin
+    // gets its app-default starter — then it diverges and CSS stacks it.
+    const page = isMobile() ? loadPageMobile(r.def.storageKey, () => starterFor(r.def)) : loadPage(r.def.storageKey)
     // Empty state also when every widget on the board belongs to a disabled
     // plugin — otherwise the page renders as unexplained blank space.
     if ((!page.rows.length || pageHasHiddenAll(page)) && !customizing) content.innerHTML = emptyDash(r.def)
@@ -567,9 +571,22 @@ function render() {
   }
   const cbtn = document.getElementById('customize')
   if (cbtn) cbtn.style.display = r.name === 'page' && r.def.full ? 'none' : ''
+  // The math keyboard toggle only exists on the pages that mount math-fields;
+  // leaving one hides both the toggle and the keyboard itself.
+  const mkbtn = document.getElementById('mathkbd-toggle')
+  if (mkbtn) {
+    const allowed = MATHKBD_PAGES.has(r.def?.id)
+    mkbtn.style.display = allowed ? '' : 'none'
+    if (!allowed) window.mathVirtualKeyboard.hide()
+  }
 }
 
 document.body.addEventListener('click', (e) => {
+  // Mobile drawer: the hamburger toggles it; the scrim closes it; tapping a
+  // nav item closes it too (then falls through to normal <a> navigation).
+  if (e.target.closest('#nav-toggle')) { document.body.classList.toggle('nav-open'); return }
+  if (e.target.classList.contains('nav-scrim')) { document.body.classList.remove('nav-open'); return }
+  if (e.target.closest('.nav__item')) document.body.classList.remove('nav-open')
   const act = e.target.closest('[data-act]')
   if (act) {
     // main.js owns the sign-out (clears the auth key, then reloads); it also
@@ -606,30 +623,34 @@ document.body.addEventListener('click', (e) => {
     }
     if (act.dataset.act === 'export-data') { exportData(); return }
     if (act.dataset.act === 'import-data') { document.getElementById('import-file')?.click(); return }
-    if (act.dataset.act === 'ai-connect') {
-      const id = act.dataset.provider
-      const input = document.getElementById(`ai-key-${id}`)
-      const key = input?.value.trim()
-      if (!key) return
-      const s = loadAI()
-      s.providers[id] = { ...s.providers[id], apiKey: key }
-      if (!s.primary) s.primary = id // first connected provider becomes primary by default
-      saveAI(s)
-      render()
+    if (act.dataset.act === 'ai-oauth-start') {
+      // Open Claude's consent page (the native shell routes window.open to the
+      // system browser), then reveal the paste-the-code field.
+      act.disabled = true
+      beginClaudeOAuth()
+        .then((res) => {
+          window.open(res.url)
+          document.getElementById('ai-oauth')?.removeAttribute('hidden')
+        })
+        .catch(() => {})
+        .finally(() => { act.disabled = false })
       return
     }
-    if (act.dataset.act === 'ai-disconnect') {
-      const id = act.dataset.provider
-      const s = loadAI()
-      s.providers[id] = {}
-      if (s.primary === id) s.primary = null
-      if (s.secondary === id) s.secondary = null
-      if (s.perCapability.study === id) s.perCapability.study = null
-      if (s.perCapability.notes === id) s.perCapability.notes = null
-      saveAI(s)
-      render()
+    if (act.dataset.act === 'ai-oauth-finish') {
+      const code = document.getElementById('ai-oauth-code')?.value.trim()
+      const err = document.getElementById('ai-oauth-err')
+      if (err) err.textContent = ''
+      if (!code) return
+      act.disabled = true
+      completeClaudeOAuth(code)
+        .then((ok) => {
+          if (ok) render()
+          else { act.disabled = false; if (err) err.textContent = 'That code didn’t work — try again.' }
+        })
+        .catch((e) => { act.disabled = false; if (err) err.textContent = e?.message || 'Couldn’t connect. Try again.' })
       return
     }
+    if (act.dataset.act === 'ai-disconnect') { disconnectClaude(); render(); return }
   }
   if (customizing) return
   const r = route()
@@ -642,24 +663,12 @@ document.body.addEventListener('click', (e) => {
   else openModal(f.widget.title, esc(f.widget.text))
 })
 
-// Live accent preview: the picker fires this continuously while dragging, so
-// apply without saving or re-rendering — a rerender would close the picker.
 // The backup file picker (change bubbles, so this catches the re-rendered input).
 document.body.addEventListener('change', (e) => {
   if (e.target.id === 'import-file' && e.target.files?.length) {
     importData(e.target.files[0])
     e.target.value = '' // let the same file be re-picked if the user retries
     return
-  }
-  const act = e.target.dataset.act
-  if (act === 'ai-primary' || act === 'ai-secondary' || act === 'ai-cap') {
-    const s = loadAI()
-    const val = e.target.value || null
-    if (act === 'ai-primary') s.primary = val
-    else if (act === 'ai-secondary') s.secondary = val
-    else s.perCapability[e.target.dataset.cap] = val
-    saveAI(s)
-    render()
   }
 })
 
@@ -710,6 +719,29 @@ const SLEEP_STARTER = { v: 1, rows: [
     { id: 'c-sl3', sections: [{ id: 's-sl3', lines: [{ id: 'l-sl3', widgets: [{ id: 'w-slhrs', kind: 'slhours' }] }] }] },
     { id: 'c-sl4', sections: [{ id: 's-sl4', lines: [{ id: 'l-sl4', widgets: [{ id: 'w-sldbt', kind: 'sldebt' }] }] }] } ] },
 ] }
+// Gym's board seeds on a different trigger (first time gym data exists — see
+// seedGymLayout), but its layout lives in the same starter map so the mobile
+// seedFn can seed a fresh Gym board from it too.
+const GYM_STARTER = { v: 1, rows: [
+  { id: 'r-gym1', title: 'Today', cols: [
+    { id: 'c-gym1', width: 1.4, sections: [{ id: 's-gym1', lines: [{ id: 'l-gym1', widgets: [{ id: 'w-gymcur', kind: 'gymcurrent' }] }] }] },
+    { id: 'c-gym2', sections: [
+      { id: 's-gym2', title: 'Coming up', lines: [{ id: 'l-gym2', widgets: [{ id: 'w-gymnext1', kind: 'gymnext' }] }, { id: 'l-gym3', widgets: [{ id: 'w-gymnext2', kind: 'gymnext' }] }] },
+      { id: 's-gym3', lines: [{ id: 'l-gym4', widgets: [{ id: 'w-gymscore', kind: 'gymscore' }, { id: 'w-gymvol', kind: 'gymvolume' }] }] }] }] },
+  { id: 'r-gym2', title: 'Progress', cols: [
+    { id: 'c-gym3', sections: [{ id: 's-gym4', lines: [{ id: 'l-gym5', widgets: [{ id: 'w-gymex', kind: 'gymexercises' }, { id: 'w-gymgraph', kind: 'gymscoregraph' }] }] }] }] },
+] }
+// App-default starter boards keyed by page id — the single source used by both
+// seedStarters (desktop first-run) and the mobile seedFn (starterFor) below.
+const STARTERS = { gym: GYM_STARTER, canvas: CANVAS_STARTER, work: WORK_STARTER, sleep: SLEEP_STARTER }
+// The mobile board seed for a page: the dashboard clones the user's CURRENT
+// desktop dashboard once; every other page-model plugin gets its app-default
+// starter; anything without one (e.g. Equations) falls back to cloning the
+// desktop board. loadPageMobile deep-clones whatever this returns before
+// storing, so handing back the shared STARTERS object (or a live loadPage
+// result) is safe.
+const starterFor = (def) =>
+  def.id === 'dashboard' ? loadPage(def.storageKey) : (STARTERS[def.id] || loadPage(def.storageKey))
 // First visit to an ENABLED plugin's board page gets its ready-made starter
 // (key absent = never seeded; an intentionally emptied board stays empty).
 // Runs at boot and again whenever a plugin is enabled in Settings, so a
@@ -717,12 +749,12 @@ const SLEEP_STARTER = { v: 1, rows: [
 // The work one-time appends live here too: gated on work being on, so their
 // flags can't burn before the board exists.
 function seedStarters() {
-  const seed = (id, key, starter) => {
-    if (isPluginEnabled(id) && !localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(starter))
+  const seed = (id, key) => {
+    if (isPluginEnabled(id) && !localStorage.getItem(key) && STARTERS[id]) localStorage.setItem(key, JSON.stringify(STARTERS[id]))
   }
-  seed('canvas', 'atlas.page.canvas.v1', CANVAS_STARTER)
-  seed('work', 'atlas.page.work.v1', WORK_STARTER)
-  seed('sleep', 'atlas.page.sleep.v1', SLEEP_STARTER)
+  seed('canvas', 'atlas.page.canvas.v1')
+  seed('work', 'atlas.page.work.v1')
+  seed('sleep', 'atlas.page.sleep.v1')
   // One-time appends for work boards seeded before these widgets existed.
   // Flag-guarded so deleting the widget later sticks.
   if (isPluginEnabled('work')) {
@@ -756,16 +788,8 @@ const gymStoreEmpty = () => {
   } catch { return true }
 }
 // A gym page with no widgets reads as "nothing imported" even when the data
-// is there — give it a starter board the first time gym data exists.
-const GYM_STARTER = { v: 1, rows: [
-  { id: 'r-gym1', title: 'Today', cols: [
-    { id: 'c-gym1', width: 1.4, sections: [{ id: 's-gym1', lines: [{ id: 'l-gym1', widgets: [{ id: 'w-gymcur', kind: 'gymcurrent' }] }] }] },
-    { id: 'c-gym2', sections: [
-      { id: 's-gym2', title: 'Coming up', lines: [{ id: 'l-gym2', widgets: [{ id: 'w-gymnext1', kind: 'gymnext' }] }, { id: 'l-gym3', widgets: [{ id: 'w-gymnext2', kind: 'gymnext' }] }] },
-      { id: 's-gym3', lines: [{ id: 'l-gym4', widgets: [{ id: 'w-gymscore', kind: 'gymscore' }, { id: 'w-gymvol', kind: 'gymvolume' }] }] }] }] },
-  { id: 'r-gym2', title: 'Progress', cols: [
-    { id: 'c-gym3', sections: [{ id: 's-gym4', lines: [{ id: 'l-gym5', widgets: [{ id: 'w-gymex', kind: 'gymexercises' }, { id: 'w-gymgraph', kind: 'gymscoregraph' }] }] }] }] },
-] }
+// is there — give it a starter board (STARTERS.gym) the first time gym data
+// exists.
 const gymPageEmpty = () => {
   try { const p = JSON.parse(localStorage.getItem('atlas.page.gym.v1')); return !p || !p.rows?.length } catch { return true }
 }
@@ -844,7 +868,9 @@ if (isPluginEnabled('equations') && localStorage.getItem(EQ_IMPORT_FLAG) === nul
     render()
   }).catch(() => {})
 }
-window.addEventListener('hashchange', render)
+// Navigating closes the mobile drawer (a same-route nav tap is handled in the
+// click delegate; this catches every other route change) before re-rendering.
+window.addEventListener('hashchange', () => { document.body.classList.remove('nav-open'); render() })
 // A plugin toggled, or the nav reordered, on another device syncs in live —
 // re-render so the nav and gates follow immediately. Scoped to these two
 // keys only: a blanket re-render on every synced write would drop input
@@ -859,6 +885,10 @@ window.addEventListener('atlas:hydrated', render)
 // Cached remote data landed for a plugin the user is already looking at.
 window.addEventListener('atlas:prefetched', render)
 if (!location.hash) location.replace('#/dashboard')
+// Stamp <body> with is-mobile / is-native-ios now (before first paint) and
+// re-render whenever the viewport crosses the 820px breakpoint, so page-model
+// pages swap to (or back from) their mobile board and the drawer chrome.
+initPlatform(render)
 render()
 // Let first-load entrance animations finish, then disable replays on re-render.
 setTimeout(() => document.documentElement.classList.add('ready'), 750)

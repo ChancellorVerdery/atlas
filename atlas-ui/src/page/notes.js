@@ -6,7 +6,7 @@
 // it holds an absolute macOS path, meaningless on another machine, and
 // syncing would force a backend mapper change.
 
-import { credsForCapability } from './ai.js'
+import { loadAI, ensureFreshClaude, credsForClaude, credsHeader } from './ai.js'
 
 const KEY = 'atlas.notes.v1'
 
@@ -28,6 +28,18 @@ const post = async (url, payload) => {
   return j
 }
 
+// AI-backed request: carries the user's own connected Claude account as the
+// x-atlas-ai header (base64 JSON), refreshed just-in-time. Not connected → the
+// same 'Connect an AI account in Settings' failure the UI already surfaces.
+const postAI = async (url, payload) => {
+  const cred = credsForClaude(await ensureFreshClaude(loadAI()))
+  if (!cred) throw new Error('Connect an AI account in Settings')
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-atlas-ai': credsHeader(cred) }, body: JSON.stringify(payload) })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(j.error || `request failed (${r.status})`)
+  return j
+}
+
 export async function pickFolder() {
   const r = await fetch('/notes-api/pick')
   return r.json() // {path} | {canceled:true}
@@ -41,11 +53,11 @@ export async function fetchTree(dir) {
   return j
 }
 
-// {dir, files: [{name, media_type, data(b64)}], text?, url?} → {title, markdown, switched}
-// Carries the resolved AI credential list (ai.js credsForCapability) on
+// {dir, files: [{name, media_type, data(b64)}], text?, url?} → {title, markdown}
+// Carries the user's own connected Claude account (ai.js credsForClaude) on
 // every request — the server never falls back to its own local Claude Code
-// subscription; an empty list comes back `{error: 'no_ai_provider'}`.
-export const convertNote = (payload) => post('/notes-api/convert', { ...payload, ai: credsForCapability('notes') })
+// subscription.
+export const convertNote = (payload) => postAI('/notes-api/convert', payload)
 
 // {dir, subdir, filename, markdown, uploads: [{name, data(b64)}]} → {ok, path}
 export const saveNote = (payload) => post('/notes-api/save', payload)

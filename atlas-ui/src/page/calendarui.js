@@ -3,6 +3,7 @@
 // Email, sharing the same Google connection. All mutations hit the real
 // Google Calendar API; recurring instances arrive expanded from the server.
 
+import { isMobile } from '../platform.js'
 import { loadEmail, saveEmail, isConnected, connectGmail, AuthError } from './email.js'
 import { cachedValue, writeCache } from './datacache.js'
 import {
@@ -88,7 +89,9 @@ export function renderCalendarPage(root, rerender) {
   const s = loadEmail()
   if (!isConnected(s)) { renderConnect(s); return }
   const cs = loadCal()
-  st.view = cs.view
+  // Mobile lands on a single day (a 7-col month grid doesn't fit a phone
+  // width); the pills still let the user pick month/week from there.
+  st.view = isMobile() ? 'day' : cs.view
   st.cursor = startOfDay(new Date())
   root.innerHTML = `
     <div class="cal">
@@ -103,7 +106,7 @@ export function renderCalendarPage(root, rerender) {
         </nav>
         <button type="button" class="mail-btn mail-btn--primary" data-cal="new">New event</button>
       </div>
-      <div class="cal-body${cs.navHidden ? ' nav-hidden' : ''}">
+      <div class="cal-body${cs.navHidden || isMobile() ? ' nav-hidden' : ''}${isMobile() ? ' cal--mobile' : ''}">
         <aside class="cal-nav" id="cal-nav"><p class="mail-nav__head">Calendars</p></aside>
         <section class="cal-grid" id="cal-grid"><p class="mail-list__empty">Loading…</p></section>
       </div>

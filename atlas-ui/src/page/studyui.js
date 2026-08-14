@@ -15,7 +15,9 @@ import {
   checkPart, partRule, extractStudy, chatTurn, judgeItems,
   listJobs, getJob, retryJob, removeJob,
 } from './study.js'
-import { providerForCapability } from './ai.js'
+import { isAIConfigured, loadAI } from './ai.js'
+// ponytail: AI is single-provider (Claude) now; capability routing collapsed to "is AI connected"
+const providerForCapability = () => isAIConfigured(loadAI())
 import {
   busyBox, stMD, inlineMath, syncNavDot as jobsSyncNavDot, queueHTML as jobsQueueHTML, qPct,
   addFiles as jobsAddFiles, uploadHTML as jobsUploadHTML, reviewHTML as jobsReviewHTML,

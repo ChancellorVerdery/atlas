@@ -2,9 +2,9 @@ import SwiftUI
 import WebKit
 
 // The WKWebView that IS the app, pointed at the local server's origin.
-// Reproduces the Electron window rules: same-origin navigation lock, external
-// links to the system browser, and only Google's OAuth popup allowed to open
-// in-app (it must post the auth code back to its opener).
+// Same-origin navigation lock; every external link and every window.open
+// (Google OAuth included) goes to the system browser. Google redirects back to
+// the loopback /oauth/google/callback, which LocalServer bridges into the page.
 
 // ponytail: one weak ref, not a whole state-management layer — the View menu
 // commands (AtlasApp.swift) need *some* way to reach the on-screen WKWebView
@@ -61,6 +61,18 @@ struct AtlasWebView {
         // Persistent on purpose: localStorage is Atlas's device cache of the
         // Postgres-backed sync DB, and the login token lives there too.
         config.websiteDataStore = .default()
+        // The only channel by which the web layer learns it's the native shell.
+        // .atDocumentStart so it's set before any page script runs; main frame
+        // only so cross-origin subframes never see it.
+        #if os(iOS)
+        let platform = "ios"
+        #else
+        let platform = "macos"
+        #endif
+        config.userContentController.addUserScript(WKUserScript(
+            source: "window.__ATLAS_NATIVE__ = { platform: '\(platform)' };",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
         let web = WKWebView(frame: .zero, configuration: config)
         web.customUserAgent = Self.safariUA
         web.navigationDelegate = coordinator
@@ -74,6 +86,17 @@ struct AtlasWebView {
         #endif
         coordinator.webView = web
         ActiveWebView.shared.attach(web)
+        // Google OAuth now runs in the system browser and redirects to our
+        // loopback /oauth/google/callback; LocalServer intercepts it and hands
+        // the code back here to deliver into the page's registered bridge.
+        LocalServer.shared.onOAuthCallback = { [weak web] provider, code, state in
+            guard let web else { return }
+            let js = "window.__atlasOAuthCallback && window.__atlasOAuthCallback("
+                + "'\(Coordinator.jsEscape(provider))', "
+                + "'\(Coordinator.jsEscape(code))', "
+                + "'\(Coordinator.jsEscape(state))')"
+            web.evaluateJavaScript(js)
+        }
         web.load(URLRequest(url: origin))
         return web
     }
@@ -82,14 +105,6 @@ struct AtlasWebView {
         let origin: URL
         weak var webView: WKWebView?
         private var observer: NSObjectProtocol?
-        private var pendingReload = false
-        #if os(macOS)
-        private var popupWindows: [NSWindow] = []
-        private var hasPopup: Bool { !popupWindows.isEmpty }
-        #else
-        private var popupHosts: [WKWebView: UIViewController] = [:]
-        private var hasPopup: Bool { !popupHosts.isEmpty }
-        #endif
 
         init(origin: URL) {
             self.origin = origin
@@ -99,21 +114,32 @@ struct AtlasWebView {
             ) { [weak self] _ in self?.reloadForNewAssets() }
         }
 
-        // Assets were swapped on disk; the running page is stale. A main-frame
-        // reload tears down the JS context the Google OAuth popup posts its code
-        // back to — so defer it until any popup closes rather than stranding a
-        // half-finished sign-in.
-        private func reloadForNewAssets() {
-            if hasPopup { pendingReload = true } else { webView?.reload() }
-        }
-
-        private func drainPendingReload() {
-            guard pendingReload, !hasPopup else { return }
-            pendingReload = false
-            webView?.reload()
-        }
+        // Assets were swapped on disk; the running page is stale, so reload.
+        // ponytail: OAuth now runs in the system browser and the code returns
+        // via window.__atlasOAuthCallback, which the page re-registers on load —
+        // so a reload mid-sign-in is the page's problem to re-arm, not ours to
+        // defer. (The old in-app popup needed the JS context kept alive; gone.)
+        private func reloadForNewAssets() { webView?.reload() }
 
         deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+
+        // JS-string-escape for values interpolated into a single-quoted literal
+        // in evaluateJavaScript (OAuth code/state from the loopback callback).
+        static func jsEscape(_ s: String) -> String {
+            var out = ""
+            for u in s.unicodeScalars {
+                switch u {
+                case "\\": out += "\\\\"
+                case "'": out += "\\'"
+                case "\n": out += "\\n"
+                case "\r": out += "\\r"
+                case "\u{2028}": out += "\\u2028"
+                case "\u{2029}": out += "\\u2029"
+                default: out.unicodeScalars.append(u)
+                }
+            }
+            return out
+        }
 
         static func openExternal(_ url: URL) {
             #if os(macOS)
@@ -139,66 +165,20 @@ struct AtlasWebView {
             Self.openExternal(url)
         }
 
-        // electron/main.js setWindowOpenHandler: only accounts.google.com may
-        // open in-app (the OAuth code flow posts back to the opener window);
-        // every other window.open goes to the system browser.
+        // No in-app popups: every window.open — Google OAuth included — goes to
+        // the system browser. Google auth runs in the user's real default-browser
+        // session and redirects to our loopback /oauth/google/callback, which
+        // LocalServer intercepts and bridges back into this webview.
         func webView(_ webView: WKWebView,
                      createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction,
                      windowFeatures: WKWindowFeatures) -> WKWebView? {
-            guard let url = navigationAction.request.url else { return nil }
-            guard url.host == "accounts.google.com" else {
-                if url.scheme == "http" || url.scheme == "https" { Self.openExternal(url) }
-                return nil
+            if let url = navigationAction.request.url,
+               url.scheme == "http" || url.scheme == "https" {
+                Self.openExternal(url)
             }
-            // Must use the configuration WebKit hands us — that is what ties the
-            // popup to its opener so the auth code can flow back.
-            let child = WKWebView(frame: CGRect(x: 0, y: 0, width: 480, height: 640), configuration: configuration)
-            child.customUserAgent = AtlasWebView.safariUA
-            child.uiDelegate = self
-            present(child)
-            return child
+            return nil
         }
-
-        func webViewDidClose(_ webView: WKWebView) { dismiss(webView) }
-
-        #if os(macOS)
-        private func present(_ child: WKWebView) {
-            let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
-                               styleMask: [.titled, .closable, .resizable],
-                               backing: .buffered, defer: false)
-            win.isReleasedWhenClosed = false
-            win.title = "Sign in"
-            win.contentView = child
-            win.center()
-            win.makeKeyAndOrderFront(nil)
-            popupWindows.append(win)
-        }
-
-        private func dismiss(_ child: WKWebView) {
-            if let i = popupWindows.firstIndex(where: { $0.contentView === child }) {
-                popupWindows[i].close()
-                popupWindows.remove(at: i)
-            }
-            drainPendingReload()
-        }
-        #else
-        private func present(_ child: WKWebView) {
-            let vc = UIViewController()
-            vc.view = child
-            popupHosts[child] = vc
-            let root = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .flatMap { $0.windows }
-                .first { $0.isKeyWindow }?.rootViewController
-            root?.present(vc, animated: true)
-        }
-
-        private func dismiss(_ child: WKWebView) {
-            popupHosts.removeValue(forKey: child)?.dismiss(animated: true)
-            drainPendingReload()
-        }
-        #endif
     }
 }
 

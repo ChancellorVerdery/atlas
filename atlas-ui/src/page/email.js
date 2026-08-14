@@ -6,6 +6,7 @@
 // Pins are Atlas-local by design; "important" maps to the Gmail star.
 
 import { sync } from '../sync.js'
+import { isNative } from '../platform.js'
 
 const KEY = 'atlas.email.v1'
 
@@ -68,6 +69,10 @@ function loadGis() {
 // backend exchanges it for tokens using the secret and stores them. One
 // connection covers Gmail + Calendar (scopes come from the server).
 export async function connectGmail() {
+  // Native shell: GIS popups force a fresh Google login (no cookies in the
+  // WKWebView). Instead open the auth URL in the SYSTEM browser via a loopback
+  // redirect, so the user reuses their real Google session (no re-login/2FA).
+  if (isNative()) return connectGmailNative()
   const cfg = await sync.request('google.config', {})
   if (!cfg.configured) throw new Error('Google isn’t configured on the Atlas server yet.')
   await loadGis()
@@ -87,6 +92,45 @@ export async function connectGmail() {
   s.accounts = Array.isArray(d.accounts) ? d.accounts : (d.address ? [d.address] : s.accounts)
   saveEmail(s)
   return d.address
+}
+
+// Native loopback OAuth. The auth request and the code→token exchange MUST use
+// the same redirect_uri; the native shell intercepts a navigation to it and
+// hands us (provider, code, state) via window.__atlasOAuthCallback. We return a
+// promise that resolves only after the exchange + status refresh, so the caller's
+// existing `connectGmail().then(rerenderApp)` fires at the right moment.
+// ponytail: if the user abandons the system-browser prompt the callback never
+// fires and this promise never settles — no timeout; the connect screen just
+// stays until they retry. Add an AbortSignal/timeout if that proves confusing.
+const NATIVE_REDIRECT = 'http://127.0.0.1:5180/oauth/google/callback'
+async function connectGmailNative() {
+  const cfg = await sync.request('google.config', {})
+  if (!cfg.configured) throw new Error('Google isn’t configured on the Atlas server yet.')
+  const state = crypto.randomUUID?.() || Math.random().toString(36).slice(2)
+  const scope = Array.isArray(cfg.scopes) ? cfg.scopes.join(' ') : cfg.scopes
+  const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+    client_id: cfg.clientId,
+    redirect_uri: NATIVE_REDIRECT,
+    response_type: 'code',
+    scope,
+    access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: 'true',
+    state,
+  })
+  return new Promise((resolve, reject) => {
+    window.__atlasOAuthCallback = async (provider, code, cbState) => {
+      if (provider !== 'google') return
+      try {
+        if (cbState !== state) throw new Error('Sign-in could not be verified. Please try again.')
+        const d = await sync.request('google.auth.exchange', { code, redirect_uri: NATIVE_REDIRECT })
+        await refreshGoogleStatus() // authoritative cache update (connected/address/accounts)
+        resolve(d.address)
+      } catch (e) { reject(e) }
+    }
+    // The native shell routes accounts.google.com to the system browser.
+    window.open(url, '_blank')
+  })
 }
 
 // Disconnect one account (by address) or, with no argument, all of them.

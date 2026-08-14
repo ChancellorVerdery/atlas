@@ -66,6 +66,11 @@ final class LocalServer {
     private(set) var port: UInt16 = 0
     var origin: URL { URL(string: "http://127.0.0.1:\(port)/")! }
 
+    // Set by the AtlasWebView Coordinator: delivers an OAuth code that the
+    // system browser dropped on our loopback callback into the app's webview.
+    // Invoked on the main thread with (provider, code, state), already URL-decoded.
+    var onOAuthCallback: ((String, String, String) -> Void)?
+
     func start() throws -> UInt16 {
         do { port = try listen(on: Self.preferredPort) } catch {
             // ponytail: another Atlas (the Electron app) holds 5180 — run on any
@@ -241,6 +246,22 @@ final class LocalServer {
     // ---- routing -------------------------------------------------------------
 
     private func dispatch(_ req: HTTPRequest, _ ctx: Conn) {
+        // The system browser lands here after Google auth. Intercept before any
+        // proxy/static routing: ack the browser tab, and hand the code to the
+        // app's webview. URLComponents percent-decodes the query values for us.
+        if req.path.hasPrefix("/oauth/google/callback") {
+            let items = URLComponents(string: req.target)?.queryItems ?? []
+            let code = items.first { $0.name == "code" }?.value ?? ""
+            let state = items.first { $0.name == "state" }?.value ?? ""
+            DispatchQueue.main.async { self.onOAuthCallback?("google", code, state) }
+            let html = "<!doctype html><html><head><meta charset=\"utf-8\">"
+                + "<title>Atlas</title></head><body style=\"font-family:-apple-system,system-ui,sans-serif;padding:2rem\">"
+                + "Signed in — you can close this tab and return to Atlas.</body></html>"
+            respond(ctx, HTTPResponse(status: 200,
+                headers: [("Content-Type", "text/html; charset=utf-8")],
+                body: Data(html.utf8)))
+            return
+        }
         if req.path == "/local/session", req.method == "POST" || req.method == "DELETE" {
             if req.method == "DELETE" {
                 TokenStore.shared.token = nil
