@@ -13,7 +13,7 @@ export const PAGES = [
     label: 'Dashboard',
     crumb: 'Atlas / Dashboard',
     storageKey: 'atlas.page.v1',
-    kinds: ['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'slbedtime', 'sllog', 'slhours', 'sldebt'],
+    kinds: ['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'slbedtime', 'sllog', 'slhours', 'sldebt', 'fmhouses', 'fmexpenses'],
   },
   {
     id: 'gym',
@@ -90,6 +90,13 @@ export const PAGES = [
     label: 'Flashcards',
     crumb: 'Atlas / Flashcards',
     full: true, // widgetless: course tabs → flashcards, card bank (split out of Study, 2026-08)
+  },
+  {
+    id: 'formal',
+    label: 'Formal',
+    crumb: 'Atlas / Formal',
+    storageKey: 'atlas.page.formal.v1',
+    kinds: ['fmhouses', 'fmexpenses'],
   },
   {
     id: 'course',

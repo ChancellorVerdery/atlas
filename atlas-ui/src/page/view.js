@@ -12,6 +12,7 @@ import { calWidgetHTML, hydrateCalWidgets, CAL_KINDS } from './calendarui.js'
 import { canvasWidgetHTML, hydrateCanvasWidgets, CV_KINDS } from './canvasui.js'
 import { workWidgetHTML, WK_KINDS } from './workui.js'
 import { sleepWidgetHTML, sleepHoursChartSVG, sleepDebtChartSVG, SL_KINDS } from './sleepui.js'
+import { formalWidgetHTML, FM_KINDS } from './formalui.js'
 import { isKindEnabled, KIND_PLUGIN, pluginDef } from './plugins.js'
 import { MathfieldElement, convertLatexToMarkup } from 'mathlive'
 import 'mathlive/fonts.css'
@@ -559,6 +560,10 @@ export function widgetHTML(w, cz, secCtx = {}) {
   if (SL_KINDS.includes(w.kind)) {
     // Sleep widgets are live views over the local sleep store — sync render.
     return `<article class="pwidget pwidget--sl pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${sleepWidgetHTML(w, cz)}</article>`
+  }
+  if (FM_KINDS.includes(w.kind)) {
+    // Formal widgets are live views over their own widget payload — sync render.
+    return `<article class="pwidget pwidget--fm pwidget--${esc(w.kind)} card" data-widget-id="${esc(w.id)}"${cz ? ' draggable="true"' : ''}>${del}${formalWidgetHTML(w, cz)}</article>`
   }
   const title = cz
     ? `<input class="pw-field pw-field--title" data-field="title" value="${esc(w.title)}" placeholder="Title">`

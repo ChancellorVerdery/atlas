@@ -72,6 +72,10 @@ export function newWidget(kind) {
   if (kind.startsWith('cv')) return { id: uid('w'), kind } // canvas widgets are live views over the Canvas LMS API
   if (kind.startsWith('wk')) return { id: uid('w'), kind } // work widgets are live views over the work store
   if (kind.startsWith('sl')) return { id: uid('w'), kind } // sleep widgets are live views over the sleep store
+  // A House widget carries its own house (like card/list carry content) —
+  // every widget is an independent house, starting with one empty room.
+  if (kind === 'fmhouses') return { id: uid('w'), kind, house: { name: '', link: '', price: 0, couches: 0, rooms: [{ id: uid('fr'), beds: { king: 0, queen: 0, full: 0, twin: 0, futon: 0 } }] } }
+  if (kind === 'fmexpenses') return { id: uid('w'), kind, exp: { name: '', brothers: 0, items: [] } }
   return { id: uid('w'), kind: 'graph', graphType: 'bar', title: 'New graph', xLabel: '', yLabel: '', points: demoPoints() }
 }
 
@@ -233,7 +237,7 @@ export function moveRow(page, rowId, toIndex) {
 // directly — those become the col's single section. loadPage runs this
 // inside its try/catch, but render() runs outside it, so anything prune lets
 // through must render.
-export const KINDS = new Set(['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'slbedtime', 'sllog', 'slhours', 'sldebt'])
+export const KINDS = new Set(['card', 'list', 'graph', 'eqcard', 'eqlist', 'gymcurrent', 'gymnext', 'gymscore', 'gymscoregraph', 'gymexercises', 'gymvolume', 'calagenda', 'calmonth', 'cvgradebook', 'cvupcoming', 'cvannounce', 'cvoverdue', 'cvgpa', 'cvsemesters', 'cvcourses', 'cvtodo', 'wkincome', 'wkshifts', 'wkhistory', 'wktipshare', 'wkupcoming', 'slbedtime', 'sllog', 'slhours', 'sldebt', 'fmhouses', 'fmexpenses'])
 const isObj = (o) => o !== null && typeof o === 'object'
 function prune(page) {
   page.rows = (Array.isArray(page.rows) ? page.rows : []).filter((r) => isObj(r) && Array.isArray(r.cols))
@@ -260,6 +264,8 @@ function prune(page) {
             if (w.kind === 'list' && !Array.isArray(w.items)) w.items = []
             if (w.kind === 'graph' && !Array.isArray(w.points)) w.points = []
             if (w.kind === 'eqlist') w.items = Array.isArray(w.items) ? w.items.filter(isObj) : []
+            if (w.kind === 'fmhouses' && !isObj(w.house)) w.house = { rooms: [] } // formalui normalizes the rest at render
+            if (w.kind === 'fmexpenses' && !isObj(w.exp)) w.exp = { items: [] }
           }
         }
         section.lines = section.lines.filter((l) => l.widgets.length)

@@ -6,7 +6,7 @@ import { loadPage, loadPageMobile, findWidget, uid } from './page/model.js'
 import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenAll } from './page/view.js'
 import { enterCustomize, exitCustomize, paletteHTML } from './page/customize.js'
 import { PAGES, pageById, activePages, saveNavOrder } from './page/pages.js'
-import { isPluginEnabled } from './page/plugins.js'
+import { isPluginEnabled, loadPlugins, setPluginEnabled } from './page/plugins.js'
 import { startPrefetch } from './page/prefetch.js'
 import { pluginsSettingsHTML, bindPlugins } from './page/pluginsui.js'
 import { bindGym, renderGymSettings } from './page/gymui.js'
@@ -16,6 +16,7 @@ import { bindCanvas, renderCanvasSettings } from './page/canvasui.js'
 import { bindWork, renderWorkSettings } from './page/workui.js'
 import { renderLadderPage, renderLadderSettings } from './page/ladderui.js'
 import { bindSleep, renderSleepSettings } from './page/sleepui.js'
+import { bindFormal } from './page/formalui.js'
 import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/courseui.js'
 import { renderNotesPage } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
@@ -47,6 +48,7 @@ const ICONS = {
   ladder: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="16" y2="21"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="17" x2="16" y2="17"/></svg>',
   equations: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5h3l2.5 6L13 4.5h8"/><path d="M14.5 12l6 8M20.5 12l-6 8"/></svg>',
   sleep: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/><path d="M14.5 5.5h4l-4 4h4"/></svg>',
+  formal: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M10 19.5v-5h4v5"/></svg>',
   course: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 12 3l9 3.5-9 3.5z"/><path d="M7 8.5V14c0 1.3 2.2 2.5 5 2.5s5-1.2 5-2.5V8.5"/><line x1="21" y1="6.5" x2="21" y2="12"/></svg>',
   notes: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5h11l3.5 3.5v13.5a0.5 0.5 0 0 1-0.5 0.5H5a0.5 0.5 0 0 1-0.5-0.5v-16a0.5 0.5 0 0 1 0.5-0.5z"/><path d="M15.5 3.5V7.5h4"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13.5" y2="15"/></svg>',
   study: '<svg class="nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.3C10.4 4.9 8.4 4.2 5.8 4.2c-1.1 0-2.2.15-3.3.5V19c1.1-.35 2.2-.5 3.3-.5 2.6 0 4.6.7 6.2 2.1 1.6-1.4 3.6-2.1 6.2-2.1 1.1 0 2.2.15 3.3.5V4.7c-1.1-.35-2.2-.5-3.3-.5-2.6 0-4.6.7-6.2 2.1z"/><line x1="12" y1="6.3" x2="12" y2="20.6"/></svg>',
@@ -746,6 +748,7 @@ bindGym(render) // gym logging / complete / exercise-modal delegation (view mode
 bindCanvas() // canvas widget interactions (course pills, filters, dismissals)
 bindWork(render) // work widget interactions (shifts, income range, tip share)
 bindSleep(render) // sleep widget interactions (log nights/naps, quality stars, delete)
+bindFormal(render) // formal widget interactions (rooms, bed drag/drop, fit-check slider)
 // First visit to the Canvas page gets a ready-made board (key absent = never
 // seeded; an intentionally emptied board stays empty).
 const CANVAS_STARTER = { v: 1, rows: [
@@ -780,6 +783,10 @@ const SLEEP_STARTER = { v: 1, rows: [
     { id: 'c-sl3', sections: [{ id: 's-sl3', lines: [{ id: 'l-sl3', widgets: [{ id: 'w-slhrs', kind: 'slhours' }] }] }] },
     { id: 'c-sl4', sections: [{ id: 's-sl4', lines: [{ id: 'l-sl4', widgets: [{ id: 'w-sldbt', kind: 'sldebt' }] }] }] } ] },
 ] }
+const FORMAL_STARTER = { v: 1, rows: [
+  { id: 'r-fm1', cols: [
+    { id: 'c-fm1', sections: [{ id: 's-fm1', lines: [{ id: 'l-fm1', widgets: [{ id: 'w-fmh', kind: 'fmhouses', house: { name: '', link: '', price: 0, couches: 0, rooms: [{ id: 'fr-fm1', beds: { king: 0, queen: 0, full: 0, twin: 0, futon: 0 } }] } }] }] }] } ] },
+] }
 // Gym's board seeds on a different trigger (first time gym data exists — see
 // seedGymLayout), but its layout lives in the same starter map so the mobile
 // seedFn can seed a fresh Gym board from it too.
@@ -794,7 +801,7 @@ const GYM_STARTER = { v: 1, rows: [
 ] }
 // App-default starter boards keyed by page id — the single source used by both
 // seedStarters (desktop first-run) and the mobile seedFn (starterFor) below.
-const STARTERS = { gym: GYM_STARTER, canvas: CANVAS_STARTER, work: WORK_STARTER, sleep: SLEEP_STARTER }
+const STARTERS = { gym: GYM_STARTER, canvas: CANVAS_STARTER, work: WORK_STARTER, sleep: SLEEP_STARTER, formal: FORMAL_STARTER }
 // The mobile board seed for a page: the dashboard clones the user's CURRENT
 // desktop dashboard once; every other page-model plugin gets its app-default
 // starter; anything without one (e.g. Equations) falls back to cloning the
@@ -816,6 +823,7 @@ function seedStarters() {
   seed('canvas', 'atlas.page.canvas.v1')
   seed('work', 'atlas.page.work.v1')
   seed('sleep', 'atlas.page.sleep.v1')
+  seed('formal', 'atlas.page.formal.v1')
   // One-time appends for work boards seeded before these widgets existed.
   // Flag-guarded so deleting the widget later sticks.
   if (isPluginEnabled('work')) {
@@ -835,7 +843,41 @@ function seedStarters() {
     }
   }
 }
+// Formal was retired from the app on 2026-08-12 and brought back on 2026-08-16
+// with its data left untouched throughout. A profile that still holds that data
+// gets the plugin switched back on the first time a build with formal in the
+// registry sees it — otherwise the houses are there but the page is not.
+// Guarded on the KEY's presence, not a truthy value, so flipping it off in
+// Settings sticks. Runs again after hydration because a cold cache has none of
+// these keys until the server's copy lands.
+function restoreFormal() {
+  if ('formal' in loadPlugins().enabled) return
+  if (localStorage.getItem('atlas.formal.v1') || localStorage.getItem('atlas.page.formal.v1')) setPluginEnabled('formal', true)
+}
+restoreFormal()
 seedStarters()
+window.addEventListener('atlas:hydrated', () => { restoreFormal(); seedStarters() })
+// One-time: houses entered under the original shared-store design move onto
+// the widgets themselves (one house per widget). Data-less House widgets on
+// the formal board adopt the legacy houses in order; leftovers get their own
+// rows. Stripping `houses` from the store makes this self-disabling.
+try {
+  const fmStore = JSON.parse(localStorage.getItem('atlas.formal.v1'))
+  if (fmStore?.houses?.length) {
+    const board = JSON.parse(localStorage.getItem('atlas.page.formal.v1'))
+    const empties = []
+    for (const row of board?.rows || []) for (const col of row.cols || []) for (const sec of col.sections || []) for (const line of sec.lines || [])
+      for (const w of line.widgets || []) if (w.kind === 'fmhouses' && !w.house) empties.push(w)
+    fmStore.houses.forEach((h, i) => {
+      const { id, ...house } = h
+      if (empties[i]) empties[i].house = house
+      else board.rows.push({ id: `r-fmmig${i}`, cols: [{ id: `c-fmmig${i}`, sections: [{ id: `s-fmmig${i}`, lines: [{ id: `l-fmmig${i}`, widgets: [{ id: `w-fmmig${i}`, kind: 'fmhouses', house }] }] }] }] })
+    })
+    localStorage.setItem('atlas.page.formal.v1', JSON.stringify(board))
+    delete fmStore.houses
+    localStorage.setItem('atlas.formal.v1', JSON.stringify(fmStore))
+  }
+} catch { /* corrupted legacy store — nothing to migrate */ }
 bindPlugins(render, seedStarters) // Settings → Plugins toggles + zip install
 // One-time seed: if the gym store holds no real data and a seed file is
 // served (e.g. data imported from an older Atlas), adopt it. "No real data"

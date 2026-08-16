@@ -52,6 +52,8 @@ const KIND_META = {
   sllog: { label: 'Sleep log', hint: 'Log nights and naps, with quality', plugin: 'Sleep' },
   slhours: { label: 'Hours per night', hint: 'Night sleep vs your goal, charted', plugin: 'Sleep' },
   sldebt: { label: 'Sleep debt', hint: 'Rolling debt over your window, charted', plugin: 'Sleep' },
+  fmhouses: { label: 'House', hint: 'One house — rooms, price, fit check', plugin: 'Formal' },
+  fmexpenses: { label: 'Expenses', hint: 'Trip costs — totals & per-brother split', plugin: 'Formal' },
 }
 
 // The page currently being customized (its storage, not the default's).
