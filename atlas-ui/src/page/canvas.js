@@ -18,6 +18,7 @@ export function loadCanvas() {
   if (!Array.isArray(s.dismissed)) s.dismissed = [] // "courseId:assignmentId" hidden overdue
   if (!Array.isArray(s.hiddenCourses)) s.hiddenCourses = [] // courseIds excluded from every widget
   if (!s.labels || typeof s.labels !== 'object') s.labels = {} // courseId → {nick, code} (user-set, Atlas-local)
+  if (!s.scales || typeof s.scales !== 'object') s.scales = {} // courseId → "A 90, B 80" custom cutoffs
   return s
 }
 
@@ -95,22 +96,45 @@ export function pctToLetter(pct, scale) {
 }
 export const letterPoints = (letter) => (letter in POINTS ? POINTS[letter] : POINTS[letter?.[0]] ?? null)
 
+// A class whose professor grades on a different curve gets its own cutoffs,
+// typed in Canvas → Settings as "A 90, B 80, C 70, D 60" (any order, +/- fine).
+// ponytail: a text field rather than a per-letter grid — it takes any scale
+// including ± ones, and an unparseable string just falls back to the global one.
+export function parseScale(text) {
+  const cuts = []
+  for (const m of String(text ?? '').matchAll(/([A-F][+-]?)\s*:?\s*(\d{1,3}(?:\.\d+)?)/gi)) {
+    const letter = m[1].toUpperCase()
+    if (letterPoints(letter) == null) continue // drops 'E' and anything else off the ladder
+    cuts.push([Number(m[2]), letter])
+  }
+  if (!cuts.length) return null
+  cuts.sort((a, b) => b[0] - a[0])
+  if (cuts[cuts.length - 1][0] > 0) cuts.push([0, 'F']) // everything under the lowest cutoff fails
+  return cuts
+}
+export const cutsToLetter = (pct, cuts) => cuts.find(([cut]) => pct >= cut)?.[1] ?? 'F'
+export const courseScale = (s, courseId) => parseScale(s.scales?.[courseId])
+
 export const courseCredits = (s, courseId) => {
   const n = Number(s.credits[courseId])
   return Number.isFinite(n) && n > 0 ? n : 3 // ponytail: 3-credit default until the user sets real hours
 }
 
-export function courseLetter(c, scale) {
+// A course's own scale wins over the global one — and over Canvas's letter,
+// which is computed with the scheme the professor put in Canvas (the thing
+// being overridden here).
+export function courseLetter(c, s = loadCanvas()) {
   const { pct, letter } = courseScore(c)
-  if (pct != null) return pctToLetter(pct, scale)
-  if (letter) return scale === 'letters' ? letter[0] : letter
+  const cuts = courseScale(s, c.id)
+  if (pct != null) return cuts ? cutsToLetter(pct, cuts) : pctToLetter(pct, s.scale)
+  if (letter) return s.scale === 'letters' && !cuts ? letter[0] : letter
   return null
 }
 
 export function semesterGPA(courses, s = loadCanvas()) {
   let pts = 0, cr = 0
   for (const c of courses) {
-    const p = letterPoints(courseLetter(c, s.scale))
+    const p = letterPoints(courseLetter(c, s))
     if (p == null) continue
     const hours = courseCredits(s, c.id)
     pts += p * hours

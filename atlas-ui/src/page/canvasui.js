@@ -6,7 +6,7 @@
 
 import {
   loadCanvas, saveCanvas, canvasConnected, fetchCanvasData, whoAmI, courseLabel,
-  courseScore, courseLetter, letterPoints, courseCredits, semesterGPA, overallGPA, semesterValue,
+  courseScore, courseLetter, letterPoints, courseCredits, semesterGPA, overallGPA, semesterValue, parseScale,
   dueDate, isSubmitted, isOverdue, overdueKey, dismissOverdue, clearDismissed,
 } from './canvas.js'
 import { cachedValue, cacheAge, writeCache } from './datacache.js'
@@ -175,7 +175,8 @@ function gradebookHTML(wid) {
   if (!courses.length) return note(data.courses.length ? 'All courses are disabled — enable one in <a href="#/canvas/settings">Canvas → Settings</a>.' : 'No active courses.')
   const st = uiFor(wid)
   const course = courses.find((c) => String(c.id) === String(st.course)) || courses[0]
-  const { pct, letter } = courseScore(course)
+  const { pct } = courseScore(course)
+  const letter = courseLetter(course, loadCanvas()) // Atlas's scale, so this line can't disagree with the Courses card
   const groups = (data.groups[course.id] || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0))
   const pills = courses.map((c) => `
     <button type="button" class="cv-pill${c.id === course.id ? ' is-active' : ''}" data-wid="${esc(wid)}" data-cv-course="${c.id}" style="--cvc:${courseColor(c)}">${esc(courseCode(c))}</button>`).join('')
@@ -307,7 +308,7 @@ function coursesHTML() {
   const s = loadCanvas()
   return `<div class="cv-cards">${courses.map((c) => {
     const { pct } = courseScore(c)
-    const letter = courseLetter(c, s.scale)
+    const letter = courseLetter(c, s)
     const p = letterPoints(letter)
     const tone = p == null ? '' : p >= 3.7 ? ' cv-tone-a' : p >= 2.7 ? ' cv-tone-b' : p >= 1.7 ? ' cv-tone-c' : ' cv-tone-d'
     return `<div class="cv-card" style="--cvc:${courseColor(c)}">
@@ -511,6 +512,7 @@ export function renderCanvasSettings(container) {
     </div>
     <p class="gym-head">Courses</p>
     <p class="gym-sub">Untick a course to hide it from every widget (grades, GPA, upcoming, announcements…). Canvas doesn't publish credit hours — set them here (unset courses count as 3).</p>
+    <p class="gym-sub">Scale: leave blank to use the letter scale above, or type one class's own cutoffs — <code>A 90, B 80, C 70, D 60</code>. Pluses and minuses work too (<code>A 93, A- 90, B+ 87</code>); anything below the lowest cutoff is an F.</p>
     <div id="cv-credits">${canvasConnected(s) ? note('Loading courses…') : note('Connect first to list your courses.')}</div>
     <p class="gym-head">Previous semesters</p>
     <p class="gym-sub">Enter each semester's overall GPA directly, or list its classes and the GPA is computed for you.</p>
@@ -533,6 +535,7 @@ export function renderCanvasSettings(container) {
           <span class="cv-credit-name" title="${esc(c.original_name || c.name)}">${esc(c.name)}</span>
           <input class="pw-field cv-labelin" data-cv-nick="${c.id}" value="${esc(labels[c.id]?.nick ?? '')}" placeholder="${esc(c.name)}" aria-label="Nickname for ${esc(c.name)}">
           <input class="pw-field cv-labelin" data-cv-code="${c.id}" value="${esc(labels[c.id]?.code ?? '')}" placeholder="${esc(c.course_code || 'code')}" aria-label="Short code for ${esc(c.name)}">
+          <input class="pw-field cv-labelin cv-scalein" data-cv-scale="${c.id}" value="${esc(s2.scales[c.id] ?? '')}" placeholder="default — e.g. A 90, B 80, C 70" aria-label="Grade scale for ${esc(c.name)}">
           <input class="pw-field cv-num" type="number" min="0" step="0.5" data-cv-credit="${c.id}" value="${esc(s2.credits[c.id] ?? '')}" placeholder="3" aria-label="Credit hours for ${esc(c.name)}">
         </div>`).join('') || note('No active courses found.')
     }).catch((err) => { el.innerHTML = note(esc(err.message)) })
@@ -600,6 +603,17 @@ export function renderCanvasSettings(container) {
     }
     const credit = e.target.closest('[data-cv-credit]')
     if (credit) { s2.credits[credit.dataset.cvCredit] = credit.value; saveCanvas(s2); return }
+    const scale = e.target.closest('[data-cv-scale]')
+    if (scale) {
+      const txt = scale.value.trim()
+      if (txt) s2.scales[scale.dataset.cvScale] = txt; else delete s2.scales[scale.dataset.cvScale]
+      saveCanvas(s2)
+      // Typing "A 9" is a half-written cutoff, not an error — only flag a
+      // non-empty string that parses to nothing at all.
+      scale.classList.toggle('cv-bad', !!txt && !parseScale(txt))
+      scale.title = parseScale(txt)?.map(([cut, l]) => `${l} ≥ ${cut}`).join(' · ') || ''
+      return
+    }
     const label = e.target.closest('[data-cv-nick],[data-cv-code]')
     if (label) {
       const nick = label.dataset.cvNick

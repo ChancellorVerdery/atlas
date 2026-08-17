@@ -1925,9 +1925,12 @@ input[type="date"].pw-field, input[type="time"].pw-field { color-scheme: dark; }
    min-width:0 stops the two label inputs' placeholders from forcing overflow,
    and on mobile the row wraps so name | nick | code | credits stack readably. */
 .cv-labelin { min-width: 0; }
+.cv-scalein { flex: 2 1 0 !important; } /* a cutoff list is longer than a nickname */
+.cv-scalein.cv-bad { border-color: var(--neg); }
 body.is-mobile .cv-labelrow { flex-wrap: wrap; }
 body.is-mobile .cv-labelrow .cv-credit-name { flex: 1 1 100%; }
 body.is-mobile .cv-labelin { flex: 1 1 40%; }
+body.is-mobile .cv-scalein { flex: 1 1 100% !important; }
 
 /* ---- Work plugin --------------------------------------------------------- */
 
