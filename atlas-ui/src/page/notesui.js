@@ -50,6 +50,21 @@ window.addEventListener('hashchange', () => {
   if (!location.hash.startsWith('#/notes')) closeUpload()
 })
 
+// <details> fires 'toggle' and it does NOT bubble, so this listens in the
+// capture phase — a delegated click handler can't see it, and per-element
+// listeners would have to be re-attached every renderTree().
+document.addEventListener('toggle', (e) => {
+  const d = e.target
+  if (!(d instanceof HTMLElement) || !d.classList.contains('nt-dir')) return
+  const dir = d.dataset.dir
+  if (!dir) return
+  const s = loadNotesStore()
+  const open = new Set(s.openDirs)
+  if (d.open) open.add(dir); else open.delete(dir)
+  s.openDirs = [...open]
+  saveNotesStore(s)
+}, true)
+
 export function renderNotesPage(root) {
   const s = loadNotesStore()
   const native = isNative() // native stores in iCloud — no user-picked folder
@@ -129,10 +144,16 @@ function buildTree() {
   return rootNode
 }
 
-function treeHTML(node) {
+// Folders start CLOSED and remember what you left open — keyed by folder path
+// in atlas.notes.v1, so it survives reloads. A path missing from the set is
+// collapsed, which is also what a brand-new folder gets.
+function treeHTML(node, prefix = '', open = new Set(loadNotesStore().openDirs)) {
   const dirs = [...node.dirs.entries()].sort(([a], [b]) => a.localeCompare(b))
   const notes = [...node.notes].sort((a, b) => a.path.localeCompare(b.path))
-  return dirs.map(([name, child]) => `<details class="nt-dir" open><summary>${esc(name)}</summary>${treeHTML(child)}</details>`).join('')
+  return dirs.map(([name, child]) => {
+    const p = prefix ? `${prefix}/${name}` : name
+    return `<details class="nt-dir" data-dir="${esc(p)}"${open.has(p) ? ' open' : ''}><summary>${esc(name)}</summary>${treeHTML(child, p, open)}</details>`
+  }).join('')
     // ponytail: the row's flex layout is inline because styles.css is another
     // agent's file — a .nt-note-row rule is the upgrade path. The × deletes.
     + notes.map((n) => `<div class="nt-note-row" style="display:flex;align-items:center;gap:2px">`

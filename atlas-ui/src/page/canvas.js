@@ -36,7 +36,19 @@ export function loadCanvas() {
 const canvasNick = (c) => (c.original_name ? c.name : null)
 export const courseNick = (c, labels = loadCanvas().labels) =>
   labels[c.id]?.nick || canvasNick(c) || c.course_code || c.name
-export const courseCodeOf = (c, labels = loadCanvas().labels) => labels[c.id]?.code || c.course_code || c.name
+// CODE mode exists to make labels SHORTER when they overflow their tag. Canvas's
+// course_code is only sometimes short: UNCC returns 'MEGR-3111-004-14239' for a
+// plain section but '202680-MEGR-2141-Engineering Mechanics I-005-006-XLS2112
+// 202680_Combined' for a cross-listed one — three times longer than the name it
+// replaces. Falling to it blindly is what put those strings on screen. Take the
+// user's code when set, else whichever of course_code / the nick label is
+// actually shorter.
+export const courseCodeOf = (c, labels = loadCanvas().labels) => {
+  const own = labels[c.id]?.code
+  if (own) return own
+  const nick = courseNick(c, labels)
+  return c.course_code && c.course_code.length < nick.length ? c.course_code : nick
+}
 export const courseLabel = (c, mode = 'nick', labels = loadCanvas().labels) =>
   (mode === 'code' ? courseCodeOf(c, labels) : courseNick(c, labels))
 export function saveCanvas(s) { localStorage.setItem(KEY, JSON.stringify(s)) }

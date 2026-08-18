@@ -16,6 +16,7 @@ export function loadNotesStore() {
   try { s = JSON.parse(localStorage.getItem(KEY)) || {} } catch { s = {} }
   if (typeof s.dir !== 'string') s.dir = ''
   if (typeof s.lastSubdir !== 'string') s.lastSubdir = ''
+  if (!Array.isArray(s.openDirs)) s.openDirs = [] // folder paths left expanded; absent = collapsed
   return s
 }
 export function saveNotesStore(s) { localStorage.setItem(KEY, JSON.stringify(s)) }

@@ -136,6 +136,28 @@ function graphApi() {
 
 const fail = (code, msg) => Object.assign(new Error(msg), { code })
 
+// Copy the live NoteStore (plus its -wal/-shm siblings) somewhere safe before
+// querying it — reading in place mid-WAL yields a torn result.
+//
+// fs.existsSync() passes WITHOUT Full Disk Access: TCC blocks opening the file,
+// not seeing its directory entry. So this copy is the first call that actually
+// fails, and it fails with a bare EPERM naming two absolute paths and nothing
+// about permissions — which is exactly the error that reached the user.
+// Exported so the permission branch has a runnable check (a process that
+// already holds Full Disk Access can't reproduce it any other way).
+export function copyNoteStore(store, destDir) {
+  try {
+    for (const ext of ['', '-wal', '-shm']) {
+      if (fs.existsSync(store + ext)) fs.copyFileSync(store + ext, path.join(destDir, 'NoteStore.sqlite' + ext))
+    }
+  } catch (e) {
+    if (e.code === 'EPERM' || e.code === 'EACCES') {
+      throw fail(500, 'Can\'t read the Notes database — grant Full Disk Access to the app running the dev server (System Settings → Privacy & Security → Full Disk Access), then restart it.')
+    }
+    throw fail(500, `Couldn't copy the Notes database — ${e.message}`)
+  }
+}
+
 // The single credential arrives from the client (see src/page/ai.js
 // credsForClaude/credsHeader) — either the POST body's `ai` field or the
 // x-atlas-ai header (base64 JSON), so a caller without a JSON body could
@@ -410,7 +432,7 @@ function notesApi() {
     if (!fs.existsSync(store)) throw fail(500, `Notes database not found — the dev server needs Full Disk Access to read ${NOTES_DIR}.`)
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-nstore-'))
     try {
-      for (const ext of ['', '-wal', '-shm']) if (fs.existsSync(store + ext)) fs.copyFileSync(store + ext, path.join(tmp, 'NoteStore.sqlite' + ext))
+      copyNoteStore(store, tmp)
       const pk = notePk(id)
       const where = pk ? `n.Z_PK = ${pk}` : `n.ZTITLE1 = '${title.replace(/'/g, "''")}'`
       const sql = `SELECT a.ZIDENTIFIER, a.ZMETADATADATA FROM ZICCLOUDSYNCINGOBJECT a `
