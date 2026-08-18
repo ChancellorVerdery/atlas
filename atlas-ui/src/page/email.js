@@ -102,7 +102,12 @@ export async function connectGmail() {
 // ponytail: if the user abandons the system-browser prompt the callback never
 // fires and this promise never settles — no timeout; the connect screen just
 // stays until they retry. Add an AbortSignal/timeout if that proves confusing.
-const NATIVE_REDIRECT = 'http://127.0.0.1:5180/oauth/google/callback'
+// `localhost`, not `127.0.0.1`: the Cloud console rejects a raw-IP redirect that
+// carries a path, while localhost URIs are exempt from BOTH the https-only rule
+// and the no-raw-IP rule, so they may keep the path. LocalServer binds IPv4 only
+// but matches on path alone, so the callback still lands (localhost resolves to
+// ::1 and 127.0.0.1; browsers fall back to the one that answers).
+const NATIVE_REDIRECT = 'http://localhost:5180/oauth/google/callback'
 
 // The config is fetched AHEAD of the click (primeGoogleConfig, called when a
 // page showing a Connect button renders). On iOS an `await` between the tap and
