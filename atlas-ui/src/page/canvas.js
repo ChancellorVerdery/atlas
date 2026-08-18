@@ -24,9 +24,18 @@ export function loadCanvas() {
 
 // The user can set a per-course nickname and a per-course code in Atlas (Canvas's
 // own course_code like 'MATH-1241-001' is ugly). The widgets render every course
-// in one of two modes, all-or-nothing: NICK shows the nickname (user's, else the
-// Canvas name), CODE shows the code (user's, else Canvas's course_code).
-export const courseNick = (c, labels = loadCanvas().labels) => labels[c.id]?.nick || c.name
+// in one of two modes, all-or-nothing: NICK shows the nickname, CODE shows the
+// code (user's, else Canvas's course_code).
+//
+// The full Canvas name is the LAST resort, never an early one: UNCC's is the raw
+// SIS title ('202680-MEGR-2141-Engineering Mechanics I-005-006-XLS2112202680_
+// Combined'), which blows out every tag it lands in. A nickname set in Canvas
+// itself counts as a nickname here — Canvas returns it in `name` and moves the
+// real title to `original_name`, so `original_name` present means `name` is
+// already nicknamed.
+const canvasNick = (c) => (c.original_name ? c.name : null)
+export const courseNick = (c, labels = loadCanvas().labels) =>
+  labels[c.id]?.nick || canvasNick(c) || c.course_code || c.name
 export const courseCodeOf = (c, labels = loadCanvas().labels) => labels[c.id]?.code || c.course_code || c.name
 export const courseLabel = (c, mode = 'nick', labels = loadCanvas().labels) =>
   (mode === 'code' ? courseCodeOf(c, labels) : courseNick(c, labels))

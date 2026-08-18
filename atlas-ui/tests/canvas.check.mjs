@@ -1,7 +1,7 @@
 // Grade-scale self-check for the Canvas plugin (node tests/canvas.check.mjs).
 // Pure-function imports only — nothing here touches localStorage.
 import assert from 'node:assert/strict'
-import { parseScale, cutsToLetter, courseLetter, pctToLetter, letterPoints, semesterGPA } from '../src/page/canvas.js'
+import { parseScale, cutsToLetter, courseLetter, pctToLetter, letterPoints, semesterGPA, courseNick, courseCodeOf, courseLabel } from '../src/page/canvas.js'
 
 // ---- parseScale -------------------------------------------------------------
 const ten = parseScale('A 90, B 80, C 70, D 60')
@@ -53,4 +53,25 @@ assert.equal(gpa.credits, 6)
 assert.equal(gpa.gpa.toFixed(2), ((4 + 3.7) / 2).toFixed(2))
 assert.equal(letterPoints('A'), 4)
 
-console.log('canvas grade-scale checks passed')
+// ---- course labels: nickname → code → full name -----------------------------
+// UNCC's Canvas `name` is the raw SIS title, so it must be the LAST fallback,
+// never the first thing a tag shows.
+const SIS = '202680-MEGR-2141-Engineering Mechanics I-005-006-XLS2112202680_Combined'
+const ugly = { id: 7, name: SIS, course_code: 'MEGR-2141-005' }
+assert.equal(courseNick(ugly, {}), 'MEGR-2141-005') // no nickname anywhere → the code, not the SIS title
+assert.equal(courseNick(ugly, { 7: { nick: 'Statics' } }), 'Statics') // Atlas nickname wins
+// Canvas's own nickname arrives as `name`, with the real title moved to original_name.
+const inCanvas = { id: 8, name: 'Dynamics', original_name: SIS, course_code: 'MEGR-3111-004' }
+assert.equal(courseNick(inCanvas, {}), 'Dynamics') // counts as a nickname, beats the code
+assert.equal(courseNick(inCanvas, { 8: { nick: 'Dyn' } }), 'Dyn') // ...but Atlas's still wins
+assert.equal(courseNick({ id: 9, name: 'Intro to Whatever' }, {}), 'Intro to Whatever') // neither → full name, last resort
+assert.equal(courseCodeOf(ugly, {}), 'MEGR-2141-005')
+assert.equal(courseCodeOf(ugly, { 7: { code: 'MEGR' } }), 'MEGR')
+assert.equal(courseCodeOf({ id: 9, name: 'Intro to Whatever' }, {}), 'Intro to Whatever') // no code at all → full name
+assert.equal(courseLabel(ugly, 'code', {}), 'MEGR-2141-005')
+assert.equal(courseLabel(ugly, 'nick', { 7: { nick: 'Statics' } }), 'Statics')
+// The regression this guards: neither mode may fall through to the SIS title
+// while a course_code exists.
+for (const mode of ['nick', 'code']) assert.notEqual(courseLabel(ugly, mode, {}), SIS)
+
+console.log('canvas grade-scale + course-label checks passed')

@@ -205,7 +205,7 @@ function gradebookHTML(wid) {
       </div>${rows || note('No assignments yet.')}</div>`
   }).join('')
   return `<div class="cv-pills">${pills}</div>
-    <div class="cv-course-line"><span class="cv-cname" title="${esc(course.original_name || course.name)}">${esc(course.name)}</span>
+    <div class="cv-course-line"><span class="cv-cname" title="${esc(course.original_name || course.name)}">${esc(courseCode(course))}</span>
       <span class="cv-cgrade">${pct != null ? pct.toFixed(1) + '%' : '—'}${letter ? ` · ${esc(letter)}` : ''}</span></div>
     ${groupsHTML || note('No assignment groups.')}`
 }
@@ -386,7 +386,7 @@ function openAssignment(a, c) {
   const d = dueDate(a)
   const st = assignmentStatus(a)
   const meta = [
-    c?.name ? esc(c.name) : null,
+    c ? esc(courseCode(c)) : null,
     d ? `Due ${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'No due date',
     a.points_possible != null ? `${fmtN(a.points_possible)} pts` : null,
   ].filter(Boolean).join(' · ')
