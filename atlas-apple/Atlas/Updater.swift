@@ -87,7 +87,17 @@ final class Updater {
 
     // Runs when the page shares its session token (every signed-in boot) and on
     // each return to foreground. Single-flight, at most every 5 minutes.
+    //
+    // The token check comes FIRST and deliberately does not touch lastCheck.
+    // The scene reaches .active before the webview has booted and posted its
+    // session token, so that launch kick can never authenticate — and if it
+    // claimed the throttle slot on its way to a silent `guard token else
+    // return`, it would mute the /local/session kick that lands a moment later,
+    // which is the first one that CAN talk to uiapi. That is why the app never
+    // self-updated: every launch spent its window on a check that was doomed,
+    // and both exits are silent, so nothing was ever logged.
     func kick() {
+        guard TokenStore.shared.token != nil else { return }
         lock.lock()
         let go = !running && Date().timeIntervalSince(lastCheck) > 300
         if go { running = true; lastCheck = Date() }
