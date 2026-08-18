@@ -2,6 +2,7 @@
 // and the topbar title/crumb. Two routes only — everything renders from here.
 // Customize mode (src/page/customize.js) live-edits the page in place.
 
+import { sync } from './sync.js'
 import { loadPage, loadPageMobile, findWidget, uid } from './page/model.js'
 import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenAll } from './page/view.js'
 import { enterCustomize, exitCustomize, paletteHTML } from './page/customize.js'
@@ -552,13 +553,14 @@ function precomputeClaudeOAuth() {
 
 // Google's connected/accounts flags are a DEVICE-LOCAL cache of server state —
 // the email mapper drops them, so connecting on one device tells the others
-// nothing. Without this, a second device sitting on Accounts shows "not
-// connected" until it is relaunched. Re-render only when the server view
-// actually differs from what we drew, or render() would loop forever.
+// nothing, and a stale cache makes Email/Calendar show their "Connect Google"
+// page for an account that is in fact connected.
+// Re-render only when the server view actually differs from what we drew, or
+// render() would loop forever.
 const googleSig = () => { const s = loadEmail(); return `${!!s.connected}|${(s.accounts || []).join(',')}` }
-function refreshAccountsView(render) {
+function refreshGoogleView() {
   const before = googleSig()
-  refreshGoogleStatus().then((d) => { if (d && googleSig() !== before) render() })
+  return refreshGoogleStatus().then((d) => { if (d && googleSig() !== before) render() })
 }
 
 // The breadcrumb moves between two homes by breakpoint (setHead still writes it
@@ -597,7 +599,7 @@ function render() {
     content.innerHTML = r.tab === 'appearance' ? `<div class="page">${themeSettingsHTML()}</div>`
       : r.tab === 'plugins' ? `<div class="page page--plugins">${pluginsSettingsHTML()}</div>`
       : accountsHTML()
-    if (r.tab === 'accounts') { precomputeClaudeOAuth(); primeGoogleConfig(); refreshAccountsView(render) } // ready URLs for a synchronous window.open
+    if (r.tab === 'accounts') { precomputeClaudeOAuth(); primeGoogleConfig(); refreshGoogleView() } // ready URLs for a synchronous window.open
     observeCharts(content) // drops stale chart-mount observations
   } else if (r.sub === 'settings') {
     setHead(r.def.label, `${r.def.crumb} / Settings`)
@@ -753,7 +755,14 @@ localStorage.removeItem('atlas.widgetSize.v2')
 // The Google connection lives server-side and is shared across this user's
 // devices; refresh the local connected/address cache from the backend, then
 // re-render so Settings/Email/Calendar reflect the true state.
-refreshGoogleStatus().then((d) => { if (d) render() })
+// Calling this once here is a RACE we usually lose: sync.request rejects
+// outright when the inbox socket isn't OPEN yet (sync.js), and on a cold launch
+// it isn't — the WS still has a tunnel + TLS handshake to finish. The rejection
+// is swallowed, so every Google page kept showing "Connect" for the whole
+// session. Drive it off sync's own status instead, which fires when the socket
+// is genuinely usable and again on every reconnect (sleep/wake, network change).
+refreshGoogleView() // warm socket (in-app reload) can still win here
+sync.onStatus((s) => { if (s === 'online') refreshGoogleView() })
 
 bindGym(render) // gym logging / complete / exercise-modal delegation (view mode)
 bindCanvas() // canvas widget interactions (course pills, filters, dismissals)
