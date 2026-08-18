@@ -550,6 +550,17 @@ function precomputeClaudeOAuth() {
   beginClaudeOAuth().then((res) => { claudeOAuthStash = res }).catch(() => { claudeOAuthStash = null })
 }
 
+// Google's connected/accounts flags are a DEVICE-LOCAL cache of server state —
+// the email mapper drops them, so connecting on one device tells the others
+// nothing. Without this, a second device sitting on Accounts shows "not
+// connected" until it is relaunched. Re-render only when the server view
+// actually differs from what we drew, or render() would loop forever.
+const googleSig = () => { const s = loadEmail(); return `${!!s.connected}|${(s.accounts || []).join(',')}` }
+function refreshAccountsView(render) {
+  const before = googleSig()
+  refreshGoogleStatus().then((d) => { if (d && googleSig() !== before) render() })
+}
+
 // The breadcrumb moves between two homes by breakpoint (setHead still writes it
 // by #crumb id from wherever it lands): on mobile it's a direct .topbar child
 // right after #nav-toggle so styles can put them on row 1 together; on desktop
@@ -586,7 +597,7 @@ function render() {
     content.innerHTML = r.tab === 'appearance' ? `<div class="page">${themeSettingsHTML()}</div>`
       : r.tab === 'plugins' ? `<div class="page page--plugins">${pluginsSettingsHTML()}</div>`
       : accountsHTML()
-    if (r.tab === 'accounts') { precomputeClaudeOAuth(); primeGoogleConfig() } // ready URLs for a synchronous window.open
+    if (r.tab === 'accounts') { precomputeClaudeOAuth(); primeGoogleConfig(); refreshAccountsView(render) } // ready URLs for a synchronous window.open
     observeCharts(content) // drops stale chart-mount observations
   } else if (r.sub === 'settings') {
     setHead(r.def.label, `${r.def.crumb} / Settings`)
