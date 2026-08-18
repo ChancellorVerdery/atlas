@@ -48,6 +48,8 @@ const defaults = {
   semesters: [],
   dismissed: [],
   hiddenCourses: [],
+  labels: {},
+  scales: {},
 }
 roundTrip(defaults, 'defaults')
 
@@ -88,6 +90,18 @@ const rich = {
     '303:90:03',               // extra colon — raw storage keeps it intact
   ],
   hiddenCourses: ['404', '101', '999'], // order matters; 999 has no credits entry
+  labels: {
+    '101': { nick: 'Statics' },                  // nick only — code key absent, not ''
+    '202': { code: 'MATH-2241' },                // code only
+    '303': { nick: '', code: 'MEGR' },           // '' survives beside a non-empty sibling
+    '999': { nick: 'Hidden but named' },         // hidden course still carries its label
+    '505': { nick: 'Label-only course' },        // no credits, not hidden → row exists only for this
+  },
+  scales: {
+    '101': 'A 90, B 80, C 70, D 60',
+    '505': 'A 93, A- 90',
+    '606': 'unparseable but stored verbatim',    // scale-only course → its own row
+  },
 }
 roundTrip(rich, 'rich')
 
@@ -113,6 +127,8 @@ const realistic = {
   ],
   dismissed: ['38214:441210', '38216:441377'],
   hiddenCourses: ['38217'],
+  labels: { '38214': { nick: 'Ochem' }, '38215': { nick: 'Lin Alg', code: 'MATH-2164' } },
+  scales: { '38214': 'A 90, B 80, C 70, D 60' },
 }
 roundTrip(realistic, 'realistic')
 
@@ -132,7 +148,7 @@ deepStrictEqual(merged.credits['202'], '')
   const back = mapper.recompose(simulatePg(mapper.decompose({ dismissed: ['1:2'] })))
   deepStrictEqual(back, {
     host: '', token: '', scale: 'plusminus',
-    credits: {}, semesters: [], dismissed: ['1:2'], hiddenCourses: [],
+    credits: {}, semesters: [], dismissed: ['1:2'], hiddenCourses: [], labels: {}, scales: {},
   }, 'legacy blob gets loader defaults')
 }
 { // host-only blob; legacy scale value outside the CHECK coerces like loadCanvas
@@ -162,6 +178,42 @@ deepStrictEqual(merged.credits['202'], '')
   const rows = mapper.decompose({ ...defaults, dismissed: ['1:2', '1:2', '3:4'] })
   deepStrictEqual(rows.dismissed.map(r => r.key), ['1:2', '3:4'])
   deepStrictEqual(mapper.recompose(simulatePg(rows)).dismissed, ['1:2', '3:4'])
+}
+
+// 7. The regression this table grew for: course nicknames and per-course grade
+//    scales used to have NO column at all, so every save dropped them and the
+//    next pull overwrote the local store with a copy that had never held them.
+//    The user saw a nickname appear, then revert to the raw Canvas name.
+{
+  const S = {
+    ...defaults,
+    labels: { '77': { nick: 'Statics', code: 'MEGR-2141' } },
+    scales: { '77': 'A 90, B 80' },
+  }
+  const back = mapper.recompose(simulatePg(mapper.decompose(S)))
+  deepStrictEqual(back.labels, { '77': { nick: 'Statics', code: 'MEGR-2141' } }, 'nickname survives the round trip')
+  deepStrictEqual(back.scales, { '77': 'A 90, B 80' }, 'custom grade scale survives the round trip')
+}
+{ // a course with ONLY a label still needs a row — nothing else would create one
+  const rows = mapper.decompose({ ...defaults, labels: { '88': { nick: 'Orphan' } } })
+  deepStrictEqual(rows.course_prefs.map(r => r.course_id), ['88'])
+  deepStrictEqual(rows.course_prefs[0].credits, null, 'label-only row invents no credits')
+  deepStrictEqual(rows.course_prefs[0].hidden, false)
+  deepStrictEqual(mapper.recompose(simulatePg(rows)).labels, { '88': { nick: 'Orphan' } })
+}
+{ // every row spells out all value columns, so SELECT * and simulatePg agree
+  const rows = mapper.decompose({ ...defaults, hiddenCourses: ['1'], credits: { '2': '3' } })
+  for (const r of rows.course_prefs) {
+    deepStrictEqual(Object.keys(r).sort(), ['code', 'course_id', 'credits', 'hidden', 'nick', 'scale_cuts'])
+  }
+}
+{ // a course whose label lost both fields must not come back as an empty object
+  const back = mapper.recompose(simulatePg(mapper.decompose({ ...defaults, credits: { '9': '3' } })))
+  deepStrictEqual(back.labels, {}, 'a credits-only course invents no labels entry')
+}
+{ // garbage import: a non-object label is skipped, not thrown on
+  const back = mapper.recompose(simulatePg(mapper.decompose({ ...defaults, labels: { '1': null, '2': 'nope' } })))
+  deepStrictEqual(back.labels, {})
 }
 
 console.log('OK canvas')

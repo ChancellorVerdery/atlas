@@ -8,7 +8,11 @@
 //                 coerced Number()||3 only at read time; NEVER coerce here),
 //   semesters: [] of {id, name, gpa, credits, classes?[]},
 //   dismissed: [] of 'courseId:assignmentId' raw strings,
-//   hiddenCourses: [] of courseId strings.
+//   hiddenCourses: [] of courseId strings,
+//   labels: {}    courseId → {nick?, code?} (trimmed strings; the UI deletes the
+//                 whole entry once both are empty, but keeps a '' beside a
+//                 non-empty sibling — so '' and absent are different),
+//   scales: {}    courseId → 'A 90, B 80' custom cutoffs (deleted when blank).
 //
 // Fidelity notes baked into the schema:
 // - dismissed entries are kept as ONE raw text column. The app builds keys as
@@ -28,7 +32,15 @@
 //   distinct from NULL (course hidden but never given credit hours).
 //   hiddenCourses rows are emitted first, in array order, so the ord column
 //   reproduces the exact array; credits{} key order is irrelevant to
-//   deepStrictEqual (and JSON) so credits-only rows follow after.
+//   deepStrictEqual (and JSON) so credits-only rows follow after. labels{} and
+//   scales{} merge into the same row for the same reason — a course can carry
+//   any combination of them, and each was silently DROPPED before this existed:
+//   a nickname or a custom grade scale survived locally until the first pull
+//   overwrote the store with a server copy that had never held it.
+// - every course_prefs row spells out all five value columns (null when the key
+//   is absent) rather than omitting keys. SELECT * returns a column whether or
+//   not the INSERT named it, so a row built with holes round-trips as
+//   `undefined` in the tests and `null` in production — same code, two answers.
 
 import { runPlugin } from '../../lib/runner.js'
 
@@ -45,13 +57,23 @@ CREATE TABLE IF NOT EXISTS canvas.settings (
 );
 
 CREATE TABLE IF NOT EXISTS canvas.course_prefs (
-  user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  course_id text NOT NULL,                -- Canvas course id, stringified
-  credits   text,                         -- RAW input string; NULL = not in credits{}
-  hidden    boolean NOT NULL DEFAULT false, -- true = in hiddenCourses[]
-  ord       integer NOT NULL DEFAULT 0,   -- hiddenCourses[] array order for hidden rows
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  course_id  text NOT NULL,               -- Canvas course id, stringified
+  credits    text,                        -- RAW input string; NULL = not in credits{}
+  hidden     boolean NOT NULL DEFAULT false, -- true = in hiddenCourses[]
+  ord        integer NOT NULL DEFAULT 0,  -- hiddenCourses[] array order for hidden rows
+  nick       text,                        -- labels[id].nick; NULL = key absent ('' is a real value)
+  code       text,                        -- labels[id].code; NULL = key absent
+  scale_cuts text,                        -- scales[id] raw cutoff string; NULL = key absent
   PRIMARY KEY (user_id, course_id)
 );
+
+-- Added after the table shipped, so existing deployments need them backfilled
+-- as NULL. Qualified on purpose: an unqualified ALTER resolves against
+-- search_path, which is how finance.js once retried its DDL forever.
+ALTER TABLE canvas.course_prefs ADD COLUMN IF NOT EXISTS nick       text;
+ALTER TABLE canvas.course_prefs ADD COLUMN IF NOT EXISTS code       text;
+ALTER TABLE canvas.course_prefs ADD COLUMN IF NOT EXISTS scale_cuts text;
 
 CREATE TABLE IF NOT EXISTS canvas.dismissed (
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -111,26 +133,35 @@ const mapper = {
     const semList = Array.isArray(state.semesters) ? state.semesters : []
     const dismissed = Array.isArray(state.dismissed) ? state.dismissed : []
     const hiddenCourses = Array.isArray(state.hiddenCourses) ? state.hiddenCourses : []
+    const labels = state.labels && typeof state.labels === 'object' ? state.labels : {}
+    const scales = state.scales && typeof state.scales === 'object' ? state.scales : {}
 
-    // hiddenCourses first (their ord must reproduce the array), then
-    // credits-only courses; a course in both gets one merged row. Entries
-    // are stringified for course_id, so legacy numeric ids (123) and their
-    // string twins ('123') collide — dedupe here (first wins) or the
+    // hiddenCourses first (their ord must reproduce the array), then whatever
+    // credits / labels / scales add; a course in several gets ONE merged row.
+    // Entries are stringified for course_id, so legacy numeric ids (123) and
+    // their string twins ('123') collide — dedupe here (first wins) or the
     // (user_id, course_id) PK aborts the whole save on a mixed pair.
     const prefs = []
     const byCourse = new Map()
-    for (const cid of hiddenCourses) {
+    const rowFor = (cid) => {
       const key = String(cid)
-      if (byCourse.has(key)) continue
-      const row = { course_id: key, credits: null, hidden: true }
-      prefs.push(row)
-      byCourse.set(key, row)
+      let row = byCourse.get(key)
+      if (!row) {
+        row = { course_id: key, credits: null, hidden: false, nick: null, code: null, scale_cuts: null }
+        prefs.push(row)
+        byCourse.set(key, row)
+      }
+      return row
     }
-    for (const [cid, val] of Object.entries(credits)) {
-      const row = byCourse.get(cid)
-      if (row) row.credits = val
-      else prefs.push({ course_id: cid, credits: val, hidden: false })
+    for (const cid of hiddenCourses) rowFor(cid).hidden = true
+    for (const [cid, val] of Object.entries(credits)) rowFor(cid).credits = val
+    for (const [cid, l] of Object.entries(labels)) {
+      if (!l || typeof l !== 'object') continue // garbage import: no row rather than a throw
+      const row = rowFor(cid)
+      if (l.nick !== undefined) row.nick = l.nick
+      if (l.code !== undefined) row.code = l.code
     }
+    for (const [cid, cuts] of Object.entries(scales)) rowFor(cid).scale_cuts = cuts
 
     const semesters = []
     const classes = []
@@ -183,10 +214,21 @@ const mapper = {
       semesters: [],
       dismissed: (rows.dismissed || []).map(r => r.key),
       hiddenCourses: [],
+      labels: {},
+      scales: {},
     }
     for (const r of rows.course_prefs || []) {
       if (r.credits !== null) s.credits[r.course_id] = r.credits
       if (r.hidden) s.hiddenCourses.push(r.course_id)
+      // The UI drops labels[id] entirely once both fields are blank, so a row
+      // with neither must not resurrect an empty object.
+      if (r.nick !== null || r.code !== null) {
+        const l = {}
+        if (r.nick !== null) l.nick = r.nick
+        if (r.code !== null) l.code = r.code
+        s.labels[r.course_id] = l
+      }
+      if (r.scale_cuts !== null) s.scales[r.course_id] = r.scale_cuts
     }
     const classesBySem = new Map()
     for (const r of rows.semesters || []) {
