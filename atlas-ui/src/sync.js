@@ -54,6 +54,18 @@ function setStatus(s) {
   for (const cb of statusCbs) { try { cb(s) } catch { /* listener error is not ours */ } }
 }
 
+// 'online' has to mean BOTH sockets are usable, not just the inbox. A request
+// goes OUT on the inbox but its result comes BACK on the outbox, and the server
+// drops a reply whose outbox session isn't registered yet — so anything fired
+// on the inbox ack alone (a boot-time refreshGoogleStatus, a queued push) was
+// sent into a void and died on its own timeout. The two sockets hello-ack
+// independently, so whichever lands second is the moment we're really online.
+function markOnline() {
+  if (sockets.inbox?.readyState !== WebSocket.OPEN) return
+  if (want.outbox && !outboxReady) return
+  setStatus('online')
+}
+
 function sendHello(ws) {
   try { ws.send(JSON.stringify({ type: 'hello', sessionId: sync.sessionId, token })) } catch { /* close handler reconnects */ }
 }
@@ -70,13 +82,13 @@ function route(ev, which) {
     // would just re-queue every value.
     if (which !== 'inbox') {
       outboxReady = !!msg.ok
-      if (msg.ok) flushPushes()
+      if (msg.ok) { markOnline(); flushPushes() }
       const waiters = outboxHelloWaiters
       outboxHelloWaiters = []
       for (const resolve of waiters) resolve()
       return
     }
-    if (msg.ok) { setStatus('online'); flushPushes() }
+    if (msg.ok) { markOnline(); flushPushes() }
     const waiters = helloWaiters
     helloWaiters = []
     for (const resolve of waiters) resolve({ ok: !!msg.ok, userId: msg.userId, email: msg.email, error: msg.error })
@@ -107,7 +119,10 @@ function open(which) {
     if (sockets[which] !== ws) return
     sockets[which] = null
     if (which === 'inbox') setStatus('disconnected')
-    else outboxReady = false
+    // Losing the outbox means results can no longer reach us, so we aren't
+    // 'online' any more — and saying so is what re-arms the status listeners
+    // for when it comes back.
+    else { outboxReady = false; if (currentStatus === 'online') setStatus('connecting') }
     scheduleReopen(which)
   }
 }
