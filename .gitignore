@@ -38,3 +38,5 @@ atlas-apple/build-device/
 custom plugins/
 
 .DS_Store
+
+.claude/worktrees/
