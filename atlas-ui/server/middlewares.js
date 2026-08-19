@@ -586,10 +586,15 @@ Drawings — when the source contains one, REDRAW it, do not describe it in pros
 - GRAPH or PLOT (axes with a function, a curve, or plotted points): emit a SPEC and let the app plot it. Do NOT draw axes yourself and do NOT describe the shape.
   \`\`\`atlas-graph
   {"title":"Projectile height","xLabel":"t (s)","yLabel":"h (m)","domain":[0,4],
-   "curves":[{"latex":"-4.9x^2+20x","label":"h(t)"}],
+   "curves":[{"latex":"-4.9x^2+20x","label":"$h(t)$"}],
    "points":[{"x":2.04,"y":20.4,"label":"apex"}]}
   \`\`\`
-  The independent variable in "latex" is ALWAYS x, whatever the axis is called (write t as x). Use "series" for measured/tabulated data points: {"series":[{"label":"trial 1","data":[[0,0],[1,4.9]]}]}. Give "domain" whenever the source implies one. Read the function off the page if it is written down; only fit an approximate one if it is not, and say so in the label.
+  Expressions are LaTeX: write \\sqrt{1-x^2}, \\cos x, \\frac{1}{x}, \\pi — bare sqrt(...) or cos(...) will NOT plot. The independent variable in "latex" is ALWAYS x, whatever the axis is called (write t as x).
+  For a PARAMETRIC curve give x(t) and y(t) instead of "latex", and always state the t range — never hand-tabulate points for a curve you have the equations for:
+  {"curves":[{"x":"t^2-2t","y":"t+1","t":[-2,2],"label":"$x=t^2-2t,\\\\ y=t+1$"}]}
+  Axes are auto-scaled equally for parametric curves so a circle looks round; set "equal":true on any other graph where shape matters, or "equal":false to turn it off.
+  Use "series" only for measured/tabulated data: {"series":[{"label":"trial 1","data":[[0,0],[1,4.9]],"arrow":true}]} — points must be in order, and "arrow" marks the direction of travel. Give "domain" whenever the source implies one. Read the function off the page if it is written down; only fit an approximate one if it is not, and say so in the label.
+  Labels, titles and axis names are typeset: wrap maths in $…$ ("$h$ (m)", "$y=\\\\sqrt{1-x^2}$") and leave prose bare.
 - FIGURE — anything that is neither of the above (free-body diagram, circuit, apparatus sketch, labelled diagram): redraw it as clean inline SVG.
   \`\`\`atlas-figure
   <svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg">…</svg>

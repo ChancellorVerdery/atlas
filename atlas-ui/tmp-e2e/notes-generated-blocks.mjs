@@ -57,6 +57,9 @@ await page.addInitScript(() => {
   seed('atlas.auth.v1', '{"offline":true}')
   seed('atlas.plugins.v1', JSON.stringify({ enabled: { notes: true }, installed: {} }))
   seed('atlas.notes.v1', JSON.stringify({ dir: '/tmp/notes', lastSubdir: '', openDirs: [] }))
+  // "+ New note" is disabled until an AI account is connected; the preview
+  // itself is reached through the Apple-note path, which needs no model.
+  seed('atlas.ai.v1', JSON.stringify({ providers: { claude: { oauth: { access: 'test-token' } } } }))
 })
 
 await page.goto(`${BASE}/#/notes`)
@@ -98,6 +101,57 @@ ok(/Projectile motion/.test(await page.locator('.nt-md').innerText()), 'and the 
 console.log('5. the rest of the note still works')
 ok(await page.locator('.nt-md .nt-wiki').count() >= 1, 'wiki-links still parsed')
 ok((await page.locator('.nt-md').innerHTML()).includes('ML__mathlive') || (await page.locator('.nt-md').innerHTML()).includes('math'), 'inline math still rendered')
+
+console.log('6. graph labels are typeset, not printed as source')
+{
+  const svg = await page.locator('.nt-md .ng-svg').innerHTML()
+  ok(svg.includes('foreignObject') || svg.includes('foreignobject'), 'labels live in a foreignObject')
+  ok(/ML__/.test(svg), 'mathlive markup reached the graph')
+  // The axis label is "t (s)" — prose — but the tick numbers are typeset.
+  ok(await page.locator('.nt-md .ng-svg .ng-fo').count() > 5, 'tick + axis label boxes present')
+  ok(!svg.includes('$'), 'no raw $…$ delimiter leaked into the drawing')
+  // Typeset labels must still be laid out inside the plot, not collapsed to 0.
+  const box = await page.locator('.nt-md .ng-svg .ng-fo').first().boundingBox()
+  ok(box && box.width > 0 && box.height > 0, `label box has real size (${box && Math.round(box.width)}x${box && Math.round(box.height)})`)
+}
+
+console.log('7. a parametric curve draws in t order, with direction arrows')
+{
+  const svg = await page.evaluate(async () => {
+    const { graphSVG } = await import('/src/page/notegraph.js')
+    return graphSVG({ curves: [{ x: '\\cos t', y: '\\sin t', t: [0, 6.2832] }] })
+  })
+  ok(/<path/.test(svg), 'the circle is drawn')
+  ok(/rotate\(/.test(svg), 'direction arrowheads placed')
+  ok(!/NaN|Infinity/.test(svg), 'no NaN in the geometry')
+}
+
+console.log('8. the REVIEW screen plots graphs too (it used to show an empty box)')
+// Reached without AI via a typed Apple note, which lands straight in preview.
+await page.route('**/notes-api/apple-tree', (r) => r.fulfill({
+  status: 200, contentType: 'application/json',
+  body: JSON.stringify([{ account: 'iCloud', folders: [{ name: 'Class', notes: [{ id: 'n1', title: 'Circle' }] }] }]),
+}))
+await page.route('**/notes-api/apple-note', (r) => r.fulfill({
+  status: 200, contentType: 'application/json',
+  body: JSON.stringify({
+    kind: 'typed', title: 'Circle',
+    markdown: '# Circle\n\n```atlas-graph\n{"title":"unit circle","curves":[{"x":"\\\\cos t","y":"\\\\sin t","t":[0,6.2832]}]}\n```\n\nEnd.\n',
+  }),
+}))
+await page.click('[data-nt="new"]')
+await page.waitForSelector('.nt-overlay', { timeout: 10000 })
+await page.click('[data-nt="up-apple"]')
+await page.waitForSelector('[data-nt="apple-pick"]', { state: 'attached', timeout: 10000 })
+// The Apple tree is collapsed by default (that is deliberate), so open it.
+await page.evaluate(() => document.querySelectorAll('.nt-overlay details.nt-dir').forEach((d) => { d.open = true }))
+await page.click('[data-nt="apple-pick"]')
+await page.waitForSelector('.nt-prevmd', { timeout: 10000 })
+await page.waitForTimeout(2500)
+ok(await page.locator('.nt-prevmd .ng-svg').count() === 1, 'the preview plotted the graph')
+ok(await page.locator('.nt-prevmd .ng-svg path').count() >= 1, 'with a real curve, not a placeholder')
+ok(await page.locator('.nt-prevmd .ng-mount:empty').count() === 0, 'no empty mount left behind')
+ok(!(await page.locator('.nt-prevmd').innerText()).includes('atlas-graph'), 'and the spec is not shown as raw text')
 
 await ctx.close()
 await browser.close()

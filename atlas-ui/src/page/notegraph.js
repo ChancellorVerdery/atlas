@@ -9,17 +9,37 @@
 //
 // Expressions are LaTeX and are evaluated with compute-engine — already a
 // dependency (study.js uses it) and the same subs().N() idiom, so there is one
-// expression evaluator in Atlas rather than two.
+// expression evaluator in Atlas rather than two. Labels are typeset with
+// mathlive, the same renderer the note prose uses, so a curve called
+// "y = \sqrt{1-x^2}" prints as maths and not as source code.
+
+import { convertLatexToMarkup } from 'mathlive' // notesui.js already imports mathlive; no new weight
 
 const PALETTE = ['#7986cb', '#33b679', '#e67c73', '#e0b15c', '#74d6c4', '#b39ddb']
 const W = 640, H = 380
-const M = { top: 28, right: 18, bottom: 42, left: 56 }
+const M = { top: 30, right: 20, bottom: 54, left: 64 } // room for typeset tick labels
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 const finite = (x) => typeof x === 'number' && isFinite(x)
 
 let cePromise = null
 const getCE = () => (cePromise ??= import('@cortex-js/compute-engine').then((m) => new m.ComputeEngine()))
+
+// Models write "sqrt(1-x^2)" and "cos(t)" as often as they write real LaTeX,
+// and compute-engine reads the bare names as a PRODUCT of variables — s·q·r·t
+// — which silently evaluates to NaN everywhere and draws an empty graph. That
+// was the actual bug behind "the unit circle doesn't plot". Backslashing the
+// known names is the whole fix: \sqrt(…), \abs(…) and friends all parse.
+const FUNCS = 'arcsin|arccos|arctan|sinh|cosh|tanh|sin|cos|tan|sec|csc|cot|ln|log|exp|sqrt|abs|max|min'
+const CONSTS = 'pi|theta|alpha|beta|gamma|lambda|mu|omega|infty'
+// \b would not fire in "2pi" (digit→letter is not a word boundary), so the
+// preceding character is captured instead: a letter means it is part of a
+// longer name, a backslash means it is already LaTeX. No lookbehind — Safari
+// only grew it in 16.4 and a regex SyntaxError would take the whole page down.
+const NAME_RE = new RegExp(`([A-Za-z\\\\]?)(${FUNCS}|${CONSTS})(?![A-Za-z])`, 'g')
+export const toLatex = (s) => String(s ?? '')
+  .replace(/\*\*/g, '^') // x**2 → x^2
+  .replace(NAME_RE, (m, pre, name) => (pre ? m : `\\${name}`))
 
 // Axis ticks on 1/2/5×10^n boundaries — the steps people actually label.
 export function niceTicks(min, max, count = 6) {
@@ -44,12 +64,61 @@ export const fmtTick = (v) => {
   return String(Number(v.toPrecision(6)))
 }
 
+// "Mathprint" labels. A $…$ span is typeset, exactly as in note prose. On top
+// of that, a bare axis name ("x", "t") or a bare number ("-2", "1.0e7") is
+// maths by role, because those are the strings this module generates itself
+// for ticks and axis defaults. Everything else needs its $…$ — a one-word
+// prose label like "measured" must NOT typeset, or it comes out as the product
+// m·e·a·s·u·r·e·d in italics.
+// ponytail: angle brackets refuse to typeset (they are never maths and it
+// keeps model-authored text away from raw markup); upgrade = a real sanitizer.
+const BY_ROLE = /^(?:[A-Za-z]|[-+]?\d*\.?\d+(?:e-?\d+)?)$/
+export function labelHTML(text, toMarkup = convertLatexToMarkup) {
+  const s = String(text ?? '')
+  if (!s) return ''
+  const math = (l) => {
+    const t = l.trim()
+    if (!t || /[<>]/.test(t)) return esc(l)
+    try { return toMarkup(toLatex(t), { defaultMode: 'textstyle' }) } catch { return esc(l) }
+  }
+  if (!s.includes('$')) return BY_ROLE.test(s) ? math(s) : esc(s)
+  return s.split(/(\$[^$]+\$)/)
+    .map((seg) => (seg.length > 2 && seg.startsWith('$') && seg.endsWith('$') ? math(seg.slice(1, -1)) : esc(seg)))
+    .join('')
+}
+
+// Typeset text has to live in an HTML box, so labels are foreignObject rather
+// than <text>. Boxes are generous and alignment is done in CSS, because the
+// rendered width of a formula is not knowable from here.
+const fo = (x, y, w, h, cls, html, extra = '') =>
+  `<foreignObject x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}"${extra}>`
+  + `<div xmlns="http://www.w3.org/1999/xhtml" class="ng-fo ${cls}">${html}</div></foreignObject>`
+
+const asMath = (s) => `$${s}$` // a derived label is maths by construction
+
+function normCurve(c) {
+  if (!c || typeof c !== 'object') return null
+  // Parametric: x(t), y(t). The right primitive for "x = t²-2t, y = t+1" —
+  // before this the model had to hand-tabulate points, in t order, by eye.
+  if (typeof c.x === 'string' && c.x.trim() && typeof c.y === 'string' && c.y.trim()) {
+    const t = Array.isArray(c.t) && c.t.length === 2 && c.t.every((n) => finite(Number(n)))
+      ? [Number(c.t[0]), Number(c.t[1])].sort((a, b) => a - b)
+      : [0, 2 * Math.PI] // ponytail: trig parametrics dominate; specs should state t
+    return {
+      kind: 'param', x: c.x.trim(), y: c.y.trim(), t,
+      label: typeof c.label === 'string' ? c.label : asMath(`x=${c.x.trim()},\\ y=${c.y.trim()}`),
+      arrow: c.arrow !== false, // direction of travel is the point of a parametric curve
+    }
+  }
+  if (typeof c.latex === 'string' && c.latex.trim()) {
+    return { kind: 'fn', latex: c.latex.trim(), label: typeof c.label === 'string' ? c.label : asMath(c.latex.trim()) }
+  }
+  return null
+}
+
 export function normalizeSpec(raw) {
   const s = raw && typeof raw === 'object' ? raw : {}
-  const curves = (Array.isArray(s.curves) ? s.curves : [])
-    .filter((c) => c && typeof c.latex === 'string' && c.latex.trim())
-    .slice(0, 6)
-    .map((c) => ({ latex: c.latex.trim(), label: typeof c.label === 'string' ? c.label : c.latex.trim() }))
+  const curves = (Array.isArray(s.curves) ? s.curves : []).map(normCurve).filter(Boolean).slice(0, 6)
   const series = (Array.isArray(s.series) ? s.series : [])
     .filter((d) => d && Array.isArray(d.data))
     .slice(0, 6)
@@ -60,6 +129,8 @@ export function normalizeSpec(raw) {
       data: d.data.map((p) => (Array.isArray(p) ? { x: Number(p[0]), y: Number(p[1]) } : { x: Number(p?.x), y: Number(p?.y) }))
         .filter((p) => finite(p.x) && finite(p.y)),
       dots: d.dots !== false,
+      line: d.line !== false,
+      arrow: d.arrow === true, // opt-in: only an ordered path has a direction
     }))
     .filter((d) => d.data.length)
   const points = (Array.isArray(s.points) ? s.points : [])
@@ -72,22 +143,27 @@ export function normalizeSpec(raw) {
   const rng = Array.isArray(s.range) && s.range.length === 2 && s.range.every((n) => finite(Number(n)))
     ? [Number(s.range[0]), Number(s.range[1])].sort((a, b) => a - b)
     : null
+  // A curve in the plane is a SHAPE: a unit circle drawn on unequal axes is an
+  // ellipse, which is simply the wrong picture. So equal scaling is the default
+  // once every curve is parametric, and always available explicitly.
+  const allParam = curves.length > 0 && curves.every((c) => c.kind === 'param')
   return {
     title: typeof s.title === 'string' ? s.title : '',
     xLabel: typeof s.xLabel === 'string' ? s.xLabel : 'x',
     yLabel: typeof s.yLabel === 'string' ? s.yLabel : 'y',
     domain: dom, range: rng, curves, series, points,
+    equal: typeof s.equal === 'boolean' ? s.equal : allParam,
     valid: !!(curves.length || series.length || points.length),
   }
 }
 
-// Sample a curve across the domain. Non-finite values (poles, out-of-domain)
+// Sample y = f(x) across the domain. Non-finite values (poles, out-of-domain)
 // come back as null so the path can BREAK there instead of drawing a vertical
 // line across the plot — which is what makes 1/x and tan(x) look wrong.
-async function sampleCurve(latex, [x0, x1], n = 240) {
+async function sampleFn(latex, [x0, x1], n = 240) {
   const ce = await getCE()
   let expr
-  try { expr = ce.parse(latex) } catch { return null }
+  try { expr = ce.parse(toLatex(latex)) } catch { return null }
   const pts = []
   for (let i = 0; i <= n; i++) {
     const x = x0 + ((x1 - x0) * i) / n
@@ -102,46 +178,96 @@ async function sampleCurve(latex, [x0, x1], n = 240) {
   return pts.some((p) => p.y != null) ? pts : null
 }
 
+// Sample (x(t), y(t)). Both coordinates move, so a break needs both nulled.
+async function sampleParam(c, n = 400) {
+  const ce = await getCE()
+  let ex, ey
+  try { ex = ce.parse(toLatex(c.x)); ey = ce.parse(toLatex(c.y)) } catch { return null }
+  const real = (v) => (finite(v?.re) && Math.abs(v?.im ?? 0) < 1e-9 ? v.re : null)
+  const [t0, t1] = c.t
+  const pts = []
+  for (let i = 0; i <= n; i++) {
+    const t = t0 + ((t1 - t0) * i) / n
+    let x = null, y = null
+    try { x = real(ex.subs({ t }).N()); y = real(ey.subs({ t }).N()) } catch { /* break */ }
+    pts.push(x == null || y == null ? { x: null, y: null } : { x, y })
+  }
+  return pts.some((p) => p.x != null) ? pts : null
+}
+
 const pad = (lo, hi) => {
   if (lo === hi) return [lo - 1, hi + 1]
   const p = (hi - lo) * 0.08
   return [lo - p, hi + p]
 }
 
+// A pole sends one sample to 1e17 and flattens everything else into a line, so
+// choose the window from the central 96% of the values rather than the extremes.
+function window96(values) {
+  const sorted = values.filter(finite).sort((a, b) => a - b)
+  if (!sorted.length) return null
+  return [sorted[Math.floor(sorted.length * 0.02)], sorted[Math.ceil(sorted.length * 0.98) - 1]]
+}
+
 export async function buildPlot(rawSpec) {
   const spec = normalizeSpec(rawSpec)
   if (!spec.valid) return null
 
-  // Domain: explicit, else the span of the data, else a sensible default.
-  let domain = spec.domain
-  if (!domain) {
-    const xs = [...spec.series.flatMap((d) => d.data.map((p) => p.x)), ...spec.points.map((p) => p.x)]
-    domain = xs.length ? pad(Math.min(...xs), Math.max(...xs)) : [-10, 10]
-  }
-
+  // Parametric curves carry their own x values, so they are sampled BEFORE the
+  // domain is chosen and then feed into it.
   const curves = []
   for (const c of spec.curves) {
-    const pts = await sampleCurve(c.latex, domain)
+    if (c.kind !== 'param') continue
+    const pts = await sampleParam(c)
+    if (pts) curves.push({ ...c, pts })
+  }
+
+  let domain = spec.domain
+  if (!domain) {
+    const xs = [
+      ...spec.series.flatMap((d) => d.data.map((p) => p.x)),
+      ...spec.points.map((p) => p.x),
+      ...curves.flatMap((c) => c.pts.map((p) => p.x).filter((x) => x != null)),
+    ]
+    const w = window96(xs)
+    domain = w ? pad(w[0], w[1]) : [-10, 10]
+  }
+
+  for (const c of spec.curves) {
+    if (c.kind !== 'fn') continue
+    const pts = await sampleFn(c.latex, domain)
     if (pts) curves.push({ ...c, pts })
   }
   if (!curves.length && !spec.series.length && !spec.points.length) return null
 
   let range = spec.range
   if (!range) {
-    const ys = [
+    const w = window96([
       ...curves.flatMap((c) => c.pts.map((p) => p.y).filter((y) => y != null)),
       ...spec.series.flatMap((d) => d.data.map((p) => p.y)),
       ...spec.points.map((p) => p.y),
-    ]
-    // A pole sends one sample to 1e17 and flattens everything else into a
-    // line, so clip to the central 96% before choosing the window.
-    const sorted = ys.filter(finite).sort((a, b) => a - b)
-    if (!sorted.length) return null
-    const lo = sorted[Math.floor(sorted.length * 0.02)]
-    const hi = sorted[Math.ceil(sorted.length * 0.98) - 1]
-    range = pad(Math.min(lo, 0) === 0 && lo > 0 ? 0 : lo, hi)
+    ])
+    if (!w) return null
+    const [lo, hi] = w
+    range = pad(lo > 0 ? 0 : lo, hi) // a curve sitting entirely above zero still shows its baseline
   }
+
+  if (spec.equal) [domain, range] = equalize(domain, range)
   return { spec, domain, range, curves }
+}
+
+// Make one unit of x as long as one unit of y by GROWING the tighter axis —
+// never shrinking, so nothing already in view is pushed out.
+function equalize([x0, x1], [y0, y1]) {
+  const pw = W - M.left - M.right, ph = H - M.top - M.bottom
+  const ux = (x1 - x0) / pw, uy = (y1 - y0) / ph
+  if (!finite(ux) || !finite(uy) || ux <= 0 || uy <= 0) return [[x0, x1], [y0, y1]]
+  const u = Math.max(ux, uy)
+  const grow = ([a, b], span) => {
+    const c = (a + b) / 2
+    return [c - span / 2, c + span / 2]
+  }
+  return [grow([x0, x1], u * pw), grow([y0, y1], u * ph)]
 }
 
 export async function graphSVG(rawSpec) {
@@ -152,6 +278,9 @@ export async function graphSVG(rawSpec) {
   const pw = W - M.left - M.right, ph = H - M.top - M.bottom
   const sx = (x) => M.left + ((x - x0) / (x1 - x0 || 1)) * pw
   const sy = (y) => M.top + ph - ((y - y0) / (y1 - y0 || 1)) * ph
+  const inView = (p) => p.x != null && p.y != null
+    && p.x >= x0 - (x1 - x0) && p.x <= x1 + (x1 - x0)
+    && p.y >= y0 - (y1 - y0) && p.y <= y1 + (y1 - y0)
 
   const xt = niceTicks(x0, x1), yt = niceTicks(y0, y1)
   const grid = [
@@ -167,45 +296,71 @@ export async function graphSVG(rawSpec) {
     + `<line x1="${ay.toFixed(1)}" y1="${M.top}" x2="${ay.toFixed(1)}" y2="${M.top + ph}" class="ng-axis"/>`
 
   const ticks = [
-    ...xt.map((t) => `<text x="${sx(t).toFixed(1)}" y="${(M.top + ph + 16).toFixed(1)}" class="ng-tick" text-anchor="middle">${esc(fmtTick(t))}</text>`),
-    ...yt.map((t) => `<text x="${(M.left - 8).toFixed(1)}" y="${(sy(t) + 4).toFixed(1)}" class="ng-tick" text-anchor="end">${esc(fmtTick(t))}</text>`),
+    ...xt.map((t) => fo(sx(t) - 34, M.top + ph + 6, 68, 18, 'ng-fo--c', labelHTML(fmtTick(t)))),
+    ...yt.map((t) => fo(M.left - 60, sy(t) - 9, 52, 18, 'ng-fo--r', labelHTML(fmtTick(t)))),
   ].join('')
 
-  let ci = 0
-  const paths = curves.map((c) => {
-    const colour = PALETTE[ci++ % PALETTE.length]
+  // Draw a polyline, breaking wherever a sample is undefined or has run far
+  // outside the window (a pole would otherwise be drawn as a vertical line).
+  const polyline = (pts) => {
     let d = '', pen = false
-    for (const p of c.pts) {
-      if (p.y == null || p.y < y0 - (y1 - y0) || p.y > y1 + (y1 - y0)) { pen = false; continue }
+    for (const p of pts) {
+      if (!inView(p)) { pen = false; continue }
       d += `${pen ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`
       pen = true
     }
-    return d ? `<path d="${d}" fill="none" stroke="${colour}" stroke-width="2" stroke-linejoin="round"/>` : ''
+    return d
+  }
+
+  // Direction of travel. ponytail: placed by sample index, not arc length —
+  // fine for uniform sampling; measure arc length if a curve ever bunches up.
+  const arrows = (pts, colour) => {
+    const seen = pts.filter(inView)
+    if (seen.length < 8) return ''
+    return [0.34, 0.72].map((f) => {
+      const a = seen[Math.floor(seen.length * f)], b = seen[Math.floor(seen.length * f) + 1]
+      if (!a || !b) return ''
+      const dx = sx(b.x) - sx(a.x), dy = sy(b.y) - sy(a.y)
+      if (!dx && !dy) return ''
+      const ang = (Math.atan2(dy, dx) * 180) / Math.PI
+      return `<path d="M0 0 L-9 4.5 L-9 -4.5 Z" fill="${colour}" transform="translate(${sx(a.x).toFixed(1)} ${sy(a.y).toFixed(1)}) rotate(${ang.toFixed(1)})"/>`
+    }).join('')
+  }
+
+  let ci = 0
+  const curveSvg = curves.map((c) => {
+    const colour = PALETTE[ci++ % PALETTE.length]
+    const d = polyline(c.pts)
+    if (!d) return ''
+    return `<path d="${d}" fill="none" stroke="${colour}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`
+      + (c.kind === 'param' && c.arrow ? arrows(c.pts, colour) : '')
   }).join('')
 
   const seriesSvg = spec.series.map((s) => {
     const colour = PALETTE[ci++ % PALETTE.length]
-    const d = s.data.map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join('')
+    const d = s.line ? polyline(s.data) : ''
     const dots = s.dots ? s.data.map((p) => `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="3" fill="${colour}"/>`).join('') : ''
-    return `<path d="${d}" fill="none" stroke="${colour}" stroke-width="2"/>${dots}`
+    return (d ? `<path d="${d}" fill="none" stroke="${colour}" stroke-width="2" stroke-linejoin="round"/>` : '')
+      + (s.arrow ? arrows(s.data, colour) : '') + dots
   }).join('')
 
   const pointSvg = spec.points.map((p) => `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="4" class="ng-pt"/>`
-    + (p.label ? `<text x="${(sx(p.x) + 7).toFixed(1)}" y="${(sy(p.y) - 7).toFixed(1)}" class="ng-tick">${esc(p.label)}</text>` : '')).join('')
+    + (p.label ? fo(sx(p.x) + 7, sy(p.y) - 24, 110, 17, 'ng-fo--l', labelHTML(p.label)) : '')).join('')
 
   const legendItems = [...curves.map((c) => c.label), ...spec.series.map((s) => s.label)].filter(Boolean)
   const legend = legendItems.map((label, i) => {
     const colour = PALETTE[i % PALETTE.length]
-    const y = M.top + 4 + i * 16
-    return `<rect x="${M.left + pw - 130}" y="${y - 8}" width="10" height="10" fill="${colour}" rx="2"/>`
-      + `<text x="${M.left + pw - 116}" y="${y + 1}" class="ng-tick">${esc(label)}</text>`
+    const y = M.top + 2 + i * 18
+    return `<rect x="${M.left + pw - 152}" y="${y + 3}" width="10" height="10" fill="${colour}" rx="2"/>`
+      + fo(M.left + pw - 138, y, 138, 16, 'ng-fo--l', labelHTML(label))
   }).join('')
 
+  const cy = M.top + ph / 2
   return `<svg class="ng-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(spec.title || 'graph')}" xmlns="http://www.w3.org/2000/svg">`
-    + (spec.title ? `<text x="${W / 2}" y="18" class="ng-title" text-anchor="middle">${esc(spec.title)}</text>` : '')
-    + grid + axes + ticks + paths + seriesSvg + pointSvg + legend
-    + `<text x="${M.left + pw / 2}" y="${H - 8}" class="ng-tick" text-anchor="middle">${esc(spec.xLabel)}</text>`
-    + `<text x="14" y="${M.top + ph / 2}" class="ng-tick" text-anchor="middle" transform="rotate(-90 14 ${M.top + ph / 2})">${esc(spec.yLabel)}</text>`
+    + (spec.title ? fo(0, 4, W, 22, 'ng-fo--title', labelHTML(spec.title)) : '')
+    + grid + axes + ticks + curveSvg + seriesSvg + pointSvg + legend
+    + fo(M.left, H - 24, pw, 18, 'ng-fo--c', labelHTML(spec.xLabel))
+    + fo(16 - ph / 2, cy - 9, ph, 18, 'ng-fo--c', labelHTML(spec.yLabel), ` transform="rotate(-90 16 ${cy.toFixed(1)})"`)
     + `</svg>`
 }
 

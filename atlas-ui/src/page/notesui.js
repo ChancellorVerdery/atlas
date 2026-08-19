@@ -629,7 +629,10 @@ function renderUpload() {
     ${body}
     ${up.error ? `<p class="nt-error">${esc(up.error)}</p>` : ''}
   </div>`
-  if (up.phase === 'preview' && !up.raw) fitEquations(o) // fit equations in the preview too
+  if (up.phase === 'preview' && !up.raw) {
+    fitEquations(o) // fit equations in the preview too
+    hydrateGraphs(o) // …and plot its graphs, or the review shows an empty box
+  }
 }
 
 // Apple Notes tree, rendered with the same <details> markup/classes as the

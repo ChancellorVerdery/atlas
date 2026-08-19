@@ -1,7 +1,40 @@
 // Graphs and tables in notes are drawn by CODE, so they get a code test.
 // Run: node tests/notegraph.check.mjs
 import assert from 'node:assert/strict'
-import { niceTicks, fmtTick, normalizeSpec, buildPlot, graphSVG, tableMarkdown } from '../src/page/notegraph.js'
+import { niceTicks, fmtTick, normalizeSpec, buildPlot, graphSVG, tableMarkdown, toLatex, labelHTML } from '../src/page/notegraph.js'
+
+// ---- ASCII maths → LaTeX -----------------------------------------------------
+// Models write sqrt(x) as often as \sqrt{x}, and compute-engine reads the bare
+// name as the PRODUCT s·q·r·t, which is NaN everywhere and draws nothing. This
+// is the regression behind "the unit circle doesn't plot".
+assert.equal(toLatex('sqrt(1-x^2)'), '\\sqrt(1-x^2)')
+assert.equal(toLatex('\\sqrt{1-x^2}'), '\\sqrt{1-x^2}', 'already-escaped names are left alone')
+assert.equal(toLatex('cos(t)+sin(t)'), '\\cos(t)+\\sin(t)')
+assert.equal(toLatex('x**2'), 'x^2')
+assert.equal(toLatex('2pi'), '2\\pi')
+assert.equal(toLatex('minutes'), 'minutes', 'a word merely CONTAINING a function name is untouched')
+assert.equal(toLatex('\\arcsin(x)'), '\\arcsin(x)', 'longest name wins, and stays escaped')
+
+// ---- mathprint labels --------------------------------------------------------
+{
+  const ml = (l) => `<M>${l}</M>` // stand-in for mathlive, so this asserts routing not typography
+  assert.equal(labelHTML('x', ml), '<M>x</M>', 'a bare axis name is maths by role')
+  assert.equal(labelHTML('-2', ml), '<M>-2</M>', 'tick numbers typeset too')
+  assert.equal(labelHTML('1.0e7', ml), '<M>1.0e7</M>', 'including exponent ticks')
+  assert.equal(labelHTML('points from the table', ml), 'points from the table', 'prose stays prose')
+  // A one-word label must NOT typeset or it renders as the product m·e·a·s·u·r·e·d.
+  assert.equal(labelHTML('measured', ml), 'measured', 'a single prose word is not maths')
+  assert.equal(labelHTML('$h(t)$ in metres', ml), '<M>h(t)</M> in metres', 'mixed maths and prose')
+  assert.equal(labelHTML('$y=sqrt(x)$', ml), '<M>y=\\sqrt(x)</M>', 'label maths is normalised too')
+  assert.equal(labelHTML('', ml), '')
+  // Model-authored text lands inside SVG markup, so angle brackets never typeset.
+  assert.ok(!labelHTML('<script>alert(1)</script>', ml).includes('<script>'))
+  assert.ok(labelHTML('<script>alert(1)</script>', ml).includes('&lt;script&gt;'))
+  assert.equal(labelHTML('x^2', ml), 'x^2', 'unmarked source is prose — $ is what asks for typesetting')
+  // A real mathlive render must produce markup, not the raw string.
+  assert.ok(labelHTML('$x^2$').includes('<span'), 'mathlive actually typesets')
+  assert.ok(labelHTML('x').includes('<span'), 'and does so for by-role labels')
+}
 
 // ---- ticks -------------------------------------------------------------------
 assert.deepEqual(niceTicks(0, 10, 5), [0, 2, 4, 6, 8, 10])
@@ -71,6 +104,57 @@ assert.equal(normalizeSpec({ curves: [] }).valid, false)
 }
 assert.equal(await buildPlot({ curves: [{ latex: '\\this is not math{' }] }), null, 'unparseable expression → no graph, no throw')
 assert.equal(await buildPlot({}), null, 'empty spec → null')
+{
+  // The exact spec from the Calculus III note, which drew an EMPTY plot before
+  // toLatex: 2 finite samples out of 241, both incidentally zero at x=±1.
+  const plot = await buildPlot({ domain: [-1, 1], curves: [{ latex: 'sqrt(1-x^2)' }, { latex: '-sqrt(1-x^2)' }] })
+  assert.ok(plot, 'the unit circle plots at all')
+  const good = plot.curves[0].pts.filter((p) => p.y != null)
+  assert.ok(good.length > 200, `upper half is a curve, not two dots (${good.length} samples)`)
+  const mid = plot.curves[0].pts.find((p) => Math.abs(p.x) < 0.01)
+  assert.ok(Math.abs(mid.y - 1) < 1e-3, 'and it really is the unit circle at x=0')
+}
+
+// ---- parametric curves -------------------------------------------------------
+{
+  // x = t²-2t, y = t+1 over t ∈ [-2,2] — the note's worked example. Before
+  // this the model had to hand-tabulate points and got their ORDER wrong,
+  // which drew a line back across the plot.
+  const plot = await buildPlot({ curves: [{ x: 't^2-2t', y: 't+1', t: [-2, 2] }] })
+  assert.ok(plot, 'a parametric curve plots')
+  const pts = plot.curves[0].pts.filter((p) => p.x != null)
+  assert.ok(pts.length > 300, 'sampled densely in t')
+  // Spot-check against the table in the note: t=-2 → (8,-1), t=2 → (0,3).
+  assert.ok(Math.abs(pts[0].x - 8) < 1e-6 && Math.abs(pts[0].y + 1) < 1e-6, 'starts at t=-2')
+  const last = pts[pts.length - 1]
+  assert.ok(Math.abs(last.x - 0) < 1e-6 && Math.abs(last.y - 3) < 1e-6, 'ends at t=2')
+  // Monotone in y is what makes it a function of t, not of x.
+  assert.ok(pts.every((p, i) => !i || p.y >= pts[i - 1].y - 1e-9), 'traced in t order')
+}
+{
+  // A circle must come out ROUND: equal scaling is the default once every
+  // curve is parametric, or the unit circle renders as a wide ellipse.
+  const plot = await buildPlot({ curves: [{ x: '\\cos t', y: '\\sin t', t: [0, 6.2832] }] })
+  const [x0, x1] = plot.domain, [y0, y1] = plot.range
+  const pw = 640 - 64 - 20, ph = 380 - 30 - 54
+  assert.ok(Math.abs((x1 - x0) / pw - (y1 - y0) / ph) < 1e-6, 'x and y units are the same length on screen')
+  assert.ok(x1 - x0 >= 2 && y1 - y0 >= 2, 'equalising GREW the tight axis, it did not crop the curve')
+  assert.equal(normalizeSpec({ curves: [{ x: 't', y: 't', t: [0, 1] }], equal: false }).equal, false, 'explicit equal:false wins')
+  assert.equal(normalizeSpec({ curves: [{ latex: 'x^2' }] }).equal, false, 'ordinary function plots are not equalised')
+}
+{
+  const plot = await buildPlot({ curves: [{ x: 'nope(', y: 't', t: [0, 1] }] })
+  assert.equal(plot, null, 'an unparseable parametric coordinate → no graph, no throw')
+}
+{
+  const svg = await graphSVG({ curves: [{ x: '\\cos t', y: '\\sin t', t: [0, 6.2832] }] })
+  assert.ok(svg.includes('<path'), 'parametric curve drawn')
+  // Direction of travel is the whole point of a parametric curve.
+  assert.ok(svg.includes('rotate('), 'direction arrowheads placed')
+  assert.ok(!/NaN|Infinity/.test(svg), 'no NaN leaked into the arrow transforms')
+  const off = await graphSVG({ curves: [{ x: '\\cos t', y: '\\sin t', t: [0, 6.2832], arrow: false }] })
+  assert.ok(!off.includes('rotate(0') && !off.includes('L-9 4.5'), 'arrow:false suppresses them')
+}
 
 // ---- SVG ---------------------------------------------------------------------
 {
