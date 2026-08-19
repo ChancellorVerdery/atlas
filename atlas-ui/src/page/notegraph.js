@@ -169,7 +169,10 @@ async function sampleFn(latex, [x0, x1], n = 240) {
     const x = x0 + ((x1 - x0) * i) / n
     let y = null
     try {
-      const v = expr.subs({ x }).N()
+      // Both names bound to the same value: which letter the spec used for the
+      // free variable is not information, and a mismatch would otherwise leave
+      // it unbound and silently plot nothing at all.
+      const v = expr.subs({ x, t: x }).N()
       const re = v?.re
       if (finite(re) && Math.abs(v?.im ?? 0) < 1e-9) y = re
     } catch { /* leave as a break */ }
@@ -189,7 +192,9 @@ async function sampleParam(c, n = 400) {
   for (let i = 0; i <= n; i++) {
     const t = t0 + ((t1 - t0) * i) / n
     let x = null, y = null
-    try { x = real(ex.subs({ t }).N()); y = real(ey.subs({ t }).N()) } catch { /* break */ }
+    // x and t both bound to the parameter: models routinely write x(t) as
+    // "\cos(x)" when told elsewhere that the free variable is x.
+    try { x = real(ex.subs({ t, x: t }).N()); y = real(ey.subs({ t, x: t }).N()) } catch { /* break */ }
     pts.push(x == null || y == null ? { x: null, y: null } : { x, y })
   }
   return pts.some((p) => p.x != null) ? pts : null

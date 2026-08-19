@@ -589,8 +589,8 @@ Drawings — when the source contains one, REDRAW it, do not describe it in pros
    "curves":[{"latex":"-4.9x^2+20x","label":"$h(t)$"}],
    "points":[{"x":2.04,"y":20.4,"label":"apex"}]}
   \`\`\`
-  Expressions are LaTeX: write \\sqrt{1-x^2}, \\cos x, \\frac{1}{x}, \\pi — bare sqrt(...) or cos(...) will NOT plot. The independent variable in "latex" is ALWAYS x, whatever the axis is called (write t as x).
-  For a PARAMETRIC curve give x(t) and y(t) instead of "latex", and always state the t range — never hand-tabulate points for a curve you have the equations for:
+  Expressions are LaTeX: write \\sqrt{1-x^2}, \\cos x, \\frac{1}{x}, \\pi — bare sqrt(...) or cos(...) will NOT plot. In "latex" (and ONLY there) the independent variable is always x, whatever the axis is called.
+  For a PARAMETRIC curve give x(t) and y(t) instead of "latex", write both in terms of t (NOT x — the x-only rule above does not apply here), and always state the t range — never hand-tabulate points for a curve you have the equations for:
   {"curves":[{"x":"t^2-2t","y":"t+1","t":[-2,2],"label":"$x=t^2-2t,\\\\ y=t+1$"}]}
   Axes are auto-scaled equally for parametric curves so a circle looks round; set "equal":true on any other graph where shape matters, or "equal":false to turn it off.
   Use "series" only for measured/tabulated data: {"series":[{"label":"trial 1","data":[[0,0],[1,4.9]],"arrow":true}]} — points must be in order, and "arrow" marks the direction of travel. Give "domain" whenever the source implies one. Read the function off the page if it is written down; only fit an approximate one if it is not, and say so in the label.

@@ -147,6 +147,21 @@ assert.equal(await buildPlot({}), null, 'empty spec → null')
   assert.equal(plot, null, 'an unparseable parametric coordinate → no graph, no throw')
 }
 {
+  // Which letter names the free variable carries no information, and getting
+  // it "wrong" used to plot NOTHING at all. The converter is told that "latex"
+  // is always in x, and the model duly wrote a t-parametrised circle as
+  // \cos(x) — so both names bind to the same value.
+  const asX = await buildPlot({ curves: [{ x: '\\cos(x)', y: '\\sin(x)', t: [0, 6.2832] }] })
+  assert.ok(asX, 'a parametric curve written in x still plots')
+  const asT = await buildPlot({ curves: [{ x: '\\cos(t)', y: '\\sin(t)', t: [0, 6.2832] }] })
+  assert.deepEqual(asX.curves[0].pts[10], asT.curves[0].pts[10], 'and traces exactly the same points')
+  // The mirror case: an ordinary y=f(x) curve written in t.
+  const fnInT = await buildPlot({ curves: [{ latex: 't^2' }], domain: [-3, 3] })
+  assert.ok(fnInT, 'y = f(x) written in t still plots')
+  const at2 = fnInT.curves[0].pts.find((p) => Math.abs(p.x - 2) < 0.02)
+  assert.ok(Math.abs(at2.y - 4) < 0.2, 'and really is the square')
+}
+{
   const svg = await graphSVG({ curves: [{ x: '\\cos t', y: '\\sin t', t: [0, 6.2832] }] })
   assert.ok(svg.includes('<path'), 'parametric curve drawn')
   // Direction of travel is the whole point of a parametric curve.
