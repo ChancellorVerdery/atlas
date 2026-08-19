@@ -19,6 +19,7 @@ import { isAIConfigured, loadAI } from './ai.js'
 // ponytail: AI is single-provider (Claude) now; capability routing collapsed to "is AI connected"
 const providerForCapability = () => isAIConfigured(loadAI())
 import { sanitizeHTML } from './canvasui.js'
+import { graphSVG, tableMarkdown } from './notegraph.js'
 import { marked } from 'marked'
 import { convertLatexToMarkup } from 'mathlive' // mathlive CSS is loaded globally by view.js
 import { renderMath, fitEquations } from './view.js' // reuse the equations plugin's scale-to-fit
@@ -310,9 +311,36 @@ const stripOriginals = (md) => md.replace(/\n+---\s*\n\*\*Originals:\*\*[\s\S]*$
 // ponytail: [[…]] and $…$ inside code fences get transformed too, and two $ on
 // one prose line read as inline math — fine at personal scale; a marked
 // extension / real tokenizer is the upgrade path.
+// Generated blocks the converter can emit. Extracted FIRST, before the math
+// and wiki-link passes, so a spec's braces, backslashes and dollar signs are
+// never mangled by rules meant for prose.
+//   atlas-table  → a real markdown table (searchable, editable, diffable)
+//   atlas-graph  → a spec this app plots itself (notegraph.js)
+//   atlas-figure → SVG for the things neither of those can express
+const GEN_FENCE_RE = /```atlas-(graph|table|figure)[^\n]*\n([\s\S]*?)```/g
+const safeJSON = (s) => { try { return JSON.parse(s) } catch { return null } }
+
 function renderMarkdown(text, dir) {
   const math = []
+  const blocks = []
   const src = stripOriginals(text)
+    .replace(GEN_FENCE_RE, (m, kind, body) => {
+      if (kind === 'table') {
+        const md = tableMarkdown(safeJSON(body))
+        return md ? `\n\n${md}\n\n` : m // unparseable → leave the fence visible
+      }
+      if (kind === 'figure') {
+        // Model-authored markup, so it goes through the same sanitizer as any
+        // other untrusted HTML before it is ever inserted.
+        return `NTBLOCK${blocks.push(`<figure class="nt-figure">${sanitizeHTML(body)}</figure>`) - 1}NTBLOCK`
+      }
+      const spec = safeJSON(body)
+      if (!spec) return m
+      // Plotting needs compute-engine (a lazy ~1MB import) so it cannot happen
+      // in this synchronous pass; leave a mount and fill it after insertion,
+      // the same idiom view.js uses for charts.
+      return `NTBLOCK${blocks.push(`<div class="ng-mount" data-ng="${esc(JSON.stringify(spec))}"></div>`) - 1}NTBLOCK`
+    })
     // LaTeX-style delimiters → dollar form BEFORE extraction (marked would
     // otherwise eat the backslashes and leave raw LaTeX as plain text)
     .replace(/\\\[([\s\S]+?)\\\]/g, (m, l) => `$$${l}$$`)
@@ -331,7 +359,24 @@ function renderMarkdown(text, dir) {
     // emits a block <div>, invalid inside <p>); any remaining (inline) in place
     .replace(/<p>NTMATH(\d+)NTMATH<\/p>/g, (m, i) => math[Number(i)])
     .replace(/NTMATH(\d+)NTMATH/g, (m, i) => math[Number(i)])
+    // Generated blocks are block-level: a <p> wrapper around a <figure> or a
+    // graph mount is invalid HTML and the browser would hoist them out anyway.
+    .replace(/<p>NTBLOCK(\d+)NTBLOCK<\/p>/g, (m, i) => blocks[Number(i)])
+    .replace(/NTBLOCK(\d+)NTBLOCK/g, (m, i) => blocks[Number(i)])
   return sanitizeHTML(html)
+}
+
+// Fill the graph mounts left by renderMarkdown. Async and per-mount: one
+// unplottable spec must not cost the note its other graphs.
+async function hydrateGraphs(root) {
+  for (const el of root.querySelectorAll('.ng-mount')) {
+    let spec
+    try { spec = JSON.parse(el.dataset.ng) } catch { continue }
+    let svg = null
+    try { svg = await graphSVG(spec) } catch { svg = null }
+    if (!document.body.contains(el)) return // navigated away mid-render
+    el.innerHTML = svg || '<p class="cal-wnote">This graph could not be drawn.</p>'
+  }
 }
 
 async function openNote(rel) {
@@ -352,6 +397,7 @@ async function openNote(rel) {
       <p class="gf-card__file" title="${esc(rel)}">${esc(rel)}</p>
       <div class="cv-annbody nt-md">${renderMarkdown(text, s.dir)}</div>`
     fitEquations(view) // scale any overflowing block equations to fit
+    hydrateGraphs(view) // fill any ```atlas-graph mounts (async, lazy engine)
   } catch (err) {
     view.innerHTML = `<p class="cal-wnote">${esc(err.message)}</p>`
   }

@@ -2388,6 +2388,22 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 .nt-note { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--ink-dim); font: inherit; font-size: 12.5px; padding: 3px 8px; border-radius: 6px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nt-note:hover { color: var(--ink); background: rgba(var(--ink-rgb), 0.04); }
 .nt-note.is-open { color: var(--brass); background: rgba(var(--ink-rgb), 0.05); }
+/* Generated blocks inside a note: plotted graphs, redrawn figures, tables.
+   Everything is stroked in currentColor so one rule covers light and dark. */
+.ng-mount, .nt-figure { margin: 14px 0; overflow-x: auto; }
+.nt-figure { color: var(--ink); }
+.nt-figure svg, .ng-svg { max-width: 100%; height: auto; display: block; }
+.ng-svg .ng-grid { stroke: var(--line, currentColor); opacity: .18; stroke-width: 1; }
+.ng-svg .ng-axis { stroke: currentColor; opacity: .55; stroke-width: 1.2; }
+.ng-svg .ng-tick { fill: currentColor; opacity: .7; font-size: 11px; }
+.ng-svg .ng-title { fill: currentColor; font-size: 13px; font-weight: 600; }
+.ng-svg .ng-pt { fill: currentColor; }
+.ng-svg { color: var(--ink); }
+/* Markdown tables in notes — the converter now emits real ones. */
+.nt-md table { border-collapse: collapse; margin: 12px 0; font-size: 14px; display: block; overflow-x: auto; max-width: 100%; }
+.nt-md th, .nt-md td { border: 1px solid var(--line, rgba(127,127,127,.3)); padding: 6px 10px; text-align: left; }
+.nt-md th { background: var(--hover, rgba(127,127,127,.08)); font-weight: 600; }
+
 /* 30-day archive of deleted notes. The path may be long and must not push the
    buttons off the row, so it is the only thing allowed to shrink. */
 .nt-arch { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; }

@@ -578,6 +578,24 @@ Formatting rules — apply these EXACTLY the same way every time:
 - Math: use $...$ for inline and $$...$$ for display math. NEVER use \\( \\) or \\[ \\] delimiters. Write ellipses as \\ldots or \\cdots, never \\dots.
 - Headings: ## for sections, ### for subsections; start the body with a single # title line.
 
+Drawings — when the source contains one, REDRAW it, do not describe it in prose. Only ever emit these for something actually present in the material; never invent one.
+- TABLE (any grid of values, hand-ruled or not): a normal markdown table. Never an image. If it needs a caption or column alignment, use a fence instead:
+  \`\`\`atlas-table
+  {"columns":["Ion","Charge"],"rows":[["Na","+1"],["O","-2"]],"align":["left","right"],"caption":"Common ions"}
+  \`\`\`
+- GRAPH or PLOT (axes with a function, a curve, or plotted points): emit a SPEC and let the app plot it. Do NOT draw axes yourself and do NOT describe the shape.
+  \`\`\`atlas-graph
+  {"title":"Projectile height","xLabel":"t (s)","yLabel":"h (m)","domain":[0,4],
+   "curves":[{"latex":"-4.9x^2+20x","label":"h(t)"}],
+   "points":[{"x":2.04,"y":20.4,"label":"apex"}]}
+  \`\`\`
+  The independent variable in "latex" is ALWAYS x, whatever the axis is called (write t as x). Use "series" for measured/tabulated data points: {"series":[{"label":"trial 1","data":[[0,0],[1,4.9]]}]}. Give "domain" whenever the source implies one. Read the function off the page if it is written down; only fit an approximate one if it is not, and say so in the label.
+- FIGURE — anything that is neither of the above (free-body diagram, circuit, apparatus sketch, labelled diagram): redraw it as clean inline SVG.
+  \`\`\`atlas-figure
+  <svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg">…</svg>
+  \`\`\`
+  Use stroke="currentColor" with fill="none" for strokes so it follows the app's light/dark theme, keep text in <text> elements, and set a viewBox so it scales. No <script>, no <foreignObject>, no external or embedded raster images.
+
 Output:
 - Begin the markdown with YAML frontmatter: date, source (one of: handwritten, screenshot, pdf, text, web), and source_url when a URL was given.
 - title: a short, filename-safe note title (no slashes, no extension).
