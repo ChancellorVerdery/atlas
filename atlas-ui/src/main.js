@@ -42,8 +42,13 @@ const writtenSinceBoot = new Set()
 // silently undo it. That write already pushed, so letting local win keeps both
 // ends agreeing instead of diverging.
 const applyStates = (states, skip) => {
+  // A key with a push still queued from a PREVIOUS run (the app was closed
+  // before it reached the server) must not be overwritten by the server's older
+  // copy — that is exactly how a delete came back after a relaunch. The queued
+  // value is the newer one; it flushes as soon as the socket is up.
+  const pending = sync.pendingKeys()
   for (const [key, value] of Object.entries(states || {})) {
-    if (value == null || skip?.has(key)) continue
+    if (value == null || skip?.has(key) || pending.has(key)) continue
     origSetItem(key, asRaw(value))
   }
 }

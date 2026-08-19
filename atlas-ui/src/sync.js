@@ -154,39 +154,89 @@ function encodePush(key, raw) {
   return { code: 'page.save', payload: { storageKey: key, value } }
 }
 
+// The queue OUTLIVES the process. It used to be a bare in-memory Map, which
+// meant an edit made while the socket was down — or one still inside its 400ms
+// debounce when the app was closed — simply evaporated, and the next launch
+// applied the server's older copy straight over it. That is the "I deleted a
+// widget and after relaunch it was back" shape: nothing errored, the write just
+// never left the device, and then the stale server copy won.
+//
+// NOT an 'atlas.' key on purpose: pushKey ignores anything without that prefix,
+// so persisting the queue can never enqueue itself, and the backup/export
+// filters skip it too (same trick as atlasLastUser / atlasNotesSync).
+const PENDING_KEY = 'atlasPendingPushes'
+
+function loadPending() {
+  try {
+    const o = JSON.parse(localStorage.getItem(PENDING_KEY))
+    if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) if (typeof v === 'string') offlinePushes.set(k, v)
+  } catch { /* corrupt queue — start empty rather than refuse to boot */ }
+}
+function persistPending() {
+  try {
+    if (!offlinePushes.size) localStorage.removeItem(PENDING_KEY)
+    else localStorage.setItem(PENDING_KEY, JSON.stringify(Object.fromEntries(offlinePushes)))
+  } catch { /* quota or private mode: the in-memory queue still works this session */ }
+}
+if (typeof localStorage !== 'undefined') loadPending()
+
+// Anything still queued when this session STARTED holds a local value the
+// server has not seen. It stays protected for the whole session, not just
+// until it drains: the flush happens on the hello ack and the pull is a
+// separate round trip, so by the time sync.pull.all is answered the queue is
+// usually already empty — and the guard would be looking at nothing exactly
+// when it was needed. Once the flush lands, the server's copy matches ours
+// anyway, so keeping the key skipped costs nothing.
+const bootPending = new Set(offlinePushes.keys())
+
+const queuePush = (key, raw) => { offlinePushes.set(key, raw); persistPending() }
+const unqueuePush = (key, raw) => {
+  // Only drop it if a NEWER value hasn't replaced it while this one was in
+  // flight, or the newer edit would never be sent.
+  if (offlinePushes.get(key) === raw) { offlinePushes.delete(key); persistPending() }
+}
+
 function sendPush(key, raw) {
   const enc = encodePush(key, raw)
   if (!enc) return // unparseable data store — don't sync garbage
+  // Recorded BEFORE the attempt, cleared only once the server has acked. A
+  // value that exists only in an in-flight request is lost if the process dies
+  // mid-request — which on a phone is just "the user closed the app".
+  queuePush(key, raw)
   const ws = sockets.inbox
-  if (currentStatus !== 'online' || !ws || ws.readyState !== WebSocket.OPEN) {
-    offlinePushes.set(key, raw)
-    return
-  }
-  sync.request(enc.code, enc.payload).catch(() => {
-    // Re-queue for the next reconnect, unless a newer value is already queued.
-    if (!offlinePushes.has(key)) offlinePushes.set(key, raw)
-  })
+  if (currentStatus !== 'online' || !ws || ws.readyState !== WebSocket.OPEN) return
+  sync.request(enc.code, enc.payload)
+    .then(() => unqueuePush(key, raw))
+    .catch(() => { /* stays queued for the next flush */ })
 }
 
 function flushPushes() {
-  const queued = [...offlinePushes]
-  offlinePushes.clear()
-  for (const [key, raw] of queued) sendPush(key, raw)
+  for (const [key, raw] of [...offlinePushes]) sendPush(key, raw)
 }
 
-// Best-effort flush on unload: a reload must not strand debounced pushes
-// (e.g. renderer.js importData rewrites every key then reloads). Send them
-// immediately — data buffered on an open WebSocket is flushed by the browser
-// during the graceful close, so this usually lands even mid-navigation.
+// Keys whose local value has not been confirmed by the server yet. main.js
+// refuses to apply the server's copy over these on boot: the pull would
+// otherwise undo the very edit that is still waiting to be sent.
+const pendingKeys = () => new Set([...bootPending, ...offlinePushes.keys(), ...debounces.keys()])
+
+// Flush debounced writes when the page goes away. beforeunload alone is not
+// enough: WKWebView does not reliably fire it when the app is terminated, and
+// iOS Safari often skips it too — pagehide/visibilitychange are the ones that
+// actually run. sendPush persists first, so even a hard kill keeps the value.
 if (typeof addEventListener === 'function') {
-  addEventListener('beforeunload', () => {
+  const flushDebounced = () => {
     const pendingPushes = [...debounces]
     debounces.clear()
     for (const [key, { timer, raw }] of pendingPushes) {
       clearTimeout(timer)
       sendPush(key, raw)
     }
-  })
+  }
+  addEventListener('beforeunload', flushDebounced)
+  addEventListener('pagehide', flushDebounced)
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => { if (document.hidden) flushDebounced() })
+  }
 }
 
 export const sync = {
@@ -273,5 +323,6 @@ export const sync = {
 
   onUpdate(cb) { updateCbs.push(cb) },
   onStatus(cb) { statusCbs.push(cb) },
+  pendingKeys,
   get status() { return currentStatus },
 }
