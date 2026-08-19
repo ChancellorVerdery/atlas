@@ -565,12 +565,18 @@ final class LocalServer {
         case "/icloud/notes/root":
             guard req.method == "GET" else { return HTTPResponse(status: 405) }
             let custom = NotesRoot.url() != nil
+            // notesBase() falls back to ~/Documents/Notes when there is no
+            // ubiquity container (iCloud Documents not enabled for the target).
+            // Saying "iCloud" then would be a lie about where the user's notes
+            // actually are — which matters more now that they sync.
+            let cloud = FileManager.default.url(forUbiquityContainerIdentifier: nil) != nil
             let obj: [String: Any] = [
                 "path": base.path,
                 "custom": custom,
+                "cloud": !custom && cloud,
                 // What the page puts in the toolbar: the folder's own name once
-                // the user has chosen one, otherwise the built-in location.
-                "label": custom ? base.lastPathComponent : "iCloud",
+                // the user has chosen one, otherwise the real default location.
+                "label": custom ? base.lastPathComponent : (cloud ? "iCloud" : "Documents"),
             ]
             let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
             return HTTPResponse(status: 200, headers: [("Content-Type", "application/json")], body: data)

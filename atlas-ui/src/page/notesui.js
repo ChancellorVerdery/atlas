@@ -118,7 +118,7 @@ async function showNativeRoot() {
     b.type = 'button'
     b.className = 'gym-btn gym-btn--ghost'
     b.dataset.nt = 'root-reset'
-    b.textContent = 'Use iCloud'
+    b.textContent = 'Use default'
     el.parentElement.insertBefore(b, el)
   }
 }
