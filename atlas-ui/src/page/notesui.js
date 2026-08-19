@@ -10,8 +10,9 @@ import {
   loadNotesStore, saveNotesStore, pickFolder, fetchTree, convertNote, saveNote,
   readNote, deleteNote,
   appleNotesTree, appleNotesFetch, fileURL, revealFile, WIKI_RE, EMBED_RE, IMG_RE,
-  syncNotes, remoteNotes,
+  syncNotes, remoteNotes, notesRoot, resetNotesRoot,
 } from './notes.js'
+import { clearSnapshot } from './notessync.js'
 import { isNative, isNativeIOS } from '../platform.js'
 import { confirmDelete } from './confirm.js'
 import { isAIConfigured, loadAI } from './ai.js'
@@ -83,10 +84,10 @@ export function renderNotesPage(root) {
   root.innerHTML = `<div class="nt">
     <div class="gf-bar">
       <button type="button" class="gym-btn" data-nt="new" ${noAI ? 'disabled' : ''}>+ New note</button>
-      ${native ? '' : '<button type="button" class="gym-btn gym-btn--ghost" data-nt="pick">Change folder…</button>'}
+      <button type="button" class="gym-btn gym-btn--ghost" data-nt="pick">Change folder…</button>
       <button type="button" class="gym-btn gym-btn--ghost" data-nt="sync">Sync</button>
       <button type="button" class="gym-btn gym-btn--ghost" data-nt="archive">Archive</button>
-      <span class="gf-dir" title="${native ? 'iCloud' : esc(s.dir)}">${native ? 'iCloud' : esc(dirName(s.dir))}</span>
+      <span class="gf-dir" id="nt-root" title="${native ? 'iCloud' : esc(s.dir)}">${native ? 'iCloud' : esc(dirName(s.dir))}</span>
       <span class="gf-status" id="nt-status">${noAI ? esc(NO_AI_MSG) : ''}</span>
     </div>
     <div class="nt-queue" id="nt-queue"></div>
@@ -98,7 +99,28 @@ export function renderNotesPage(root) {
   root.onclick = onPageClick
   renderQueue()
   loadTree(s.dir)
+  showNativeRoot()
   runSync({ quiet: true }) // opening the page is the natural moment to converge
+}
+
+// On native the notes root lives in the app, not in atlas.notes.v1, so the
+// label has to be asked for. Shows the folder name plus a way back to the
+// built-in iCloud location once the user has chosen their own.
+async function showNativeRoot() {
+  if (!isNative()) return
+  const r = await notesRoot().catch(() => null)
+  const el = document.getElementById('nt-root')
+  if (!r || !el) return
+  el.textContent = r.label || 'iCloud'
+  el.title = r.path || ''
+  if (r.custom && !document.querySelector('[data-nt="root-reset"]')) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'gym-btn gym-btn--ghost'
+    b.dataset.nt = 'root-reset'
+    b.textContent = 'Use iCloud'
+    el.parentElement.insertBefore(b, el)
+  }
 }
 
 // ---- synced folder ----------------------------------------------------------
@@ -184,6 +206,11 @@ async function loadTree(dir, openPath = null) {
   try {
     pg.tree = await fetchTree(dir)
     if (!document.getElementById('nt-tree')) return // navigated away mid-fetch
+    // A note opened programmatically (just saved, followed a wiki-link) may sit
+    // inside collapsed folders, where the tree would simply not show it. Reveal
+    // its ancestors only — the point of collapsing is that everything ELSE
+    // stays shut.
+    if (openPath) revealAncestors(openPath)
     renderTree()
     if (openPath) openNote(openPath)
     else if (pg.open && pg.tree.notes.some((n) => n.path === pg.open)) openNote(pg.open)
@@ -197,6 +224,20 @@ async function loadTree(dir, openPath = null) {
       renderNotesPage(document.querySelector('.nt').parentElement)
     }
   }
+}
+
+// Mark every folder above a note as open, so revealing it does not mean
+// expanding the whole tree.
+function revealAncestors(rel) {
+  const parts = String(rel).split('/').slice(0, -1)
+  if (!parts.length) return
+  const s = loadNotesStore()
+  const open = new Set(s.openDirs)
+  const before = open.size
+  for (let i = 1; i <= parts.length; i++) open.add(parts.slice(0, i).join('/'))
+  if (open.size === before) return
+  s.openDirs = [...open]
+  saveNotesStore(s)
 }
 
 // dirs + note paths → nested {dirs: Map, notes: []}, rendered as native
@@ -358,14 +399,26 @@ function onPageClick(e) {
     el.disabled = true
     pickFolder().then((r) => {
       el.disabled = false
-      if (r.canceled || !r.path) return
+      if (r.canceled || !r.path) { if (r.error) setStatus(r.error); return }
+      // MUST clear the sync snapshot. It records the state of the OLD folder,
+      // so keeping it would make every file in that folder look locally
+      // deleted on the next pass — and the reconciler would faithfully
+      // propagate those deletions to the server and every other device.
+      // Cleared, the first pass treats both sides as additions and merges.
+      clearSnapshot()
       s.dir = r.path
       s.lastSubdir = ''
+      s.openDirs = [] // folder paths belong to the old root
       saveNotesStore(s)
       pg.tree = null
       pg.open = null
       renderNotesPage(document.querySelector('.nt').parentElement)
     })
+  } else if (act === 'root-reset') {
+    clearSnapshot()
+    resetNotesRoot()
+      .then(() => { s.openDirs = []; saveNotesStore(s); pg.tree = null; pg.open = null; renderNotesPage(document.querySelector('.nt').parentElement) })
+      .catch((err) => setStatus(err.message))
   } else if (act === 'sync') runSync()
   else if (act === 'archive') renderArchive()
   else if (act === 'arch-restore') {
@@ -539,8 +592,13 @@ function renderUpload() {
 // are buttons keyed by their stable id, never by title.
 function appleTreeHTML(accounts) {
   if (!accounts.length) return '<p class="cal-wnote">No notes found in Apple Notes.</p>'
-  return accounts.map((a) => `<details class="nt-dir" open><summary>${esc(a.account)}</summary>${
-    a.folders.map((f) => `<details class="nt-dir" open><summary>${esc(f.name)}</summary>${
+  // Collapsed by default and remembered, exactly like the vault tree. Keys are
+  // namespaced 'apple:' so an Apple folder called "Classes" and a vault folder
+  // called "Classes" cannot toggle each other.
+  const open = new Set(loadNotesStore().openDirs)
+  const key = (...parts) => `apple:${parts.join('/')}`
+  return accounts.map((a) => `<details class="nt-dir" data-dir="${esc(key(a.account))}"${open.has(key(a.account)) ? ' open' : ''}><summary>${esc(a.account)}</summary>${
+    a.folders.map((f) => `<details class="nt-dir" data-dir="${esc(key(a.account, f.name))}"${open.has(key(a.account, f.name)) ? ' open' : ''}><summary>${esc(f.name)}</summary>${
       f.notes.length
         ? f.notes.map((n) => `<button type="button" class="nt-note" data-nt="apple-pick" data-id="${esc(n.id)}">${esc(n.title)}</button>`).join('')
         : '<p class="cal-wnote">Empty</p>'

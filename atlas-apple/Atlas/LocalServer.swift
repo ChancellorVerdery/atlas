@@ -2,6 +2,104 @@ import Foundation
 import Network
 #if os(macOS)
 import AppKit
+#else
+import UIKit
+import UniformTypeIdentifiers
+#endif
+
+// Where notes live ON THIS DEVICE. Stored as a security-scoped BOOKMARK, never
+// a path: the picker's grant is the only reason an arbitrary folder is
+// readable at all, and a bare path loses that grant the moment the app
+// relaunches. Unresolvable or missing -> nil, and notesBase() falls back to
+// the iCloud container, so a folder that went away can never break notes.
+enum NotesRoot {
+    private static let key = "atlas.notes.rootBookmark"
+    private static var accessing: URL?
+
+    static func url() -> URL? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        var stale = false
+        #if os(macOS)
+        let opts: URL.BookmarkResolutionOptions = [.withSecurityScope]
+        #else
+        let opts: URL.BookmarkResolutionOptions = []
+        #endif
+        guard let u = try? URL(resolvingBookmarkData: data, options: opts, relativeTo: nil, bookmarkDataIsStale: &stale)
+        else { return nil }
+        // Hold the scope open for the process's lifetime — every notes request
+        // resolves through here, so starting/stopping per call would race the
+        // sync pass's concurrent reads.
+        if accessing?.path != u.path {
+            accessing?.stopAccessingSecurityScopedResource()
+            _ = u.startAccessingSecurityScopedResource()
+            accessing = u
+        }
+        return u.standardizedFileURL
+    }
+
+    static func set(_ u: URL) -> Bool {
+        let scoped = u.startAccessingSecurityScopedResource()
+        defer { if scoped { u.stopAccessingSecurityScopedResource() } }
+        #if os(macOS)
+        let opts: URL.BookmarkCreationOptions = [.withSecurityScope]
+        #else
+        let opts: URL.BookmarkCreationOptions = []
+        #endif
+        guard let data = try? u.bookmarkData(options: opts, includingResourceValuesForKeys: nil, relativeTo: nil)
+        else { return false }
+        UserDefaults.standard.set(data, forKey: key)
+        accessing?.stopAccessingSecurityScopedResource()
+        accessing = nil
+        return true
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+        accessing?.stopAccessingSecurityScopedResource()
+        accessing = nil
+    }
+}
+
+#if os(iOS)
+// UIDocumentPicker answers through a delegate, and nothing else retains it for
+// the length of the presentation — hence the static hold, released on the one
+// resume path so the continuation can never fire twice.
+final class FolderPicker: NSObject, UIDocumentPickerDelegate {
+    private var cont: CheckedContinuation<URL?, Never>?
+    private static var retained: FolderPicker?
+
+    @MainActor static func pick() async -> URL? {
+        guard let host = topViewController() else { return nil }
+        return await withCheckedContinuation { c in
+            let p = FolderPicker()
+            p.cont = c
+            retained = p
+            let vc = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+            vc.delegate = p
+            vc.allowsMultipleSelection = false
+            host.present(vc, animated: true)
+        }
+    }
+
+    func documentPicker(_ c: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { finish(urls.first) }
+    func documentPickerWasCancelled(_ c: UIDocumentPickerViewController) { finish(nil) }
+
+    private func finish(_ u: URL?) {
+        cont?.resume(returning: u)
+        cont = nil
+        Self.retained = nil
+    }
+
+    @MainActor private static func topViewController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        var vc = scene?.windows.first { $0.isKeyWindow }?.rootViewController
+            ?? scene?.windows.first?.rootViewController
+        while let presented = vc?.presentedViewController { vc = presented }
+        return vc
+    }
+}
 #endif
 
 // The app's own web host: WKWebView loads http://127.0.0.1:5180, the same
@@ -290,6 +388,34 @@ final class LocalServer {
             claudeOAuth(req, ctx)
             return
         }
+        // Folder picking is the one notes route that cannot be synchronous: it
+        // puts a system panel on screen and waits for the user.
+        if req.path == "/icloud/notes/pick", req.method == "POST" {
+            Task { @MainActor in
+                #if os(macOS)
+                let panel = NSOpenPanel()
+                panel.canChooseDirectories = true
+                panel.canChooseFiles = false
+                panel.allowsMultipleSelection = false
+                panel.prompt = "Use as Notes folder"
+                panel.message = "Choose the folder Atlas should use for your notes on this Mac."
+                NSApp.activate(ignoringOtherApps: true)
+                let picked: URL? = panel.runModal() == .OK ? panel.url : nil
+                #else
+                let picked: URL? = await FolderPicker.pick()
+                #endif
+                guard let url = picked else {
+                    self.respond(ctx, HTTPResponse.json(200, ["canceled": "true"]))
+                    return
+                }
+                guard NotesRoot.set(url) else {
+                    self.respond(ctx, HTTPResponse.json(500, ["error": "could not keep access to that folder"]))
+                    return
+                }
+                self.respond(ctx, HTTPResponse.json(200, ["path": url.path]))
+            }
+            return
+        }
         // Native iCloud (or local-Documents fallback) notes storage.
         if req.path.hasPrefix("/icloud/notes/") {
             respond(ctx, Self.notesRoute(req))
@@ -386,6 +512,12 @@ final class LocalServer {
     // work (un-synced) and nothing crashes.
     static func notesBase() -> URL {
         let fm = FileManager.default
+        // A folder the user picked on this device wins. Creating it is safe —
+        // the picker only ever returns something that already exists.
+        if let custom = NotesRoot.url() {
+            try? fm.createDirectory(at: custom, withIntermediateDirectories: true)
+            return custom.standardizedFileURL
+        }
         let cloud = fm.url(forUbiquityContainerIdentifier: nil)?
             .appendingPathComponent("Documents/Notes")
         let base = cloud ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -430,6 +562,22 @@ final class LocalServer {
         let base = notesBase()
         let coordinator = NSFileCoordinator()
         switch req.path {
+        case "/icloud/notes/root":
+            guard req.method == "GET" else { return HTTPResponse(status: 405) }
+            let custom = NotesRoot.url() != nil
+            let obj: [String: Any] = [
+                "path": base.path,
+                "custom": custom,
+                // What the page puts in the toolbar: the folder's own name once
+                // the user has chosen one, otherwise the built-in location.
+                "label": custom ? base.lastPathComponent : "iCloud",
+            ]
+            let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+            return HTTPResponse(status: 200, headers: [("Content-Type", "application/json")], body: data)
+        case "/icloud/notes/root/reset":
+            guard req.method == "POST" else { return HTTPResponse(status: 405) }
+            NotesRoot.clear()
+            return .json(200, ["ok": "true"])
         case "/icloud/notes/tree":
             guard req.method == "GET" else { return HTTPResponse(status: 405) }
             var dirs: [String] = []

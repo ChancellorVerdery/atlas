@@ -43,10 +43,26 @@ const postAI = async (url, payload) => {
   return j
 }
 
+// Choose where notes live ON THIS DEVICE. Native opens the platform folder
+// picker and keeps a security-scoped bookmark (a bare path stops working the
+// moment the grant is gone); web/macOS-dev opens the sidecar's Finder dialog.
 export async function pickFolder() {
-  const r = await fetch('/notes-api/pick')
-  return r.json() // {path} | {canceled:true}
+  const r = await fetch(isNative() ? '/icloud/notes/pick' : '/notes-api/pick', {
+    method: isNative() ? 'POST' : 'GET',
+  })
+  return r.json() // {path} | {canceled:true} | {error}
 }
+
+// Where notes live right now on this device, and whether that is the user's
+// own choice or the built-in default. Native only — on web the answer is
+// atlas.notes.v1.dir, which the page already holds.
+export async function notesRoot() {
+  if (!isNative()) return null
+  const r = await fetch('/icloud/notes/root')
+  return r.ok ? r.json() : null // {path, custom, label}
+}
+
+export const resetNotesRoot = () => post('/icloud/notes/root/reset', {})
 
 // {dirs: ['Physics', 'Physics/Labs', …], notes: [{path: 'Physics/Waves.md', mtime}]}
 // On Apple devices (isNative) STORAGE is the app's iCloud container via the
