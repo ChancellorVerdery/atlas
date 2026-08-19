@@ -19,7 +19,7 @@ import { renderLadderPage, renderLadderSettings } from './page/ladderui.js'
 import { bindSleep, renderSleepSettings } from './page/sleepui.js'
 import { bindFormal } from './page/formalui.js'
 import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/courseui.js'
-import { renderNotesPage } from './page/notesui.js'
+import { renderNotesPage, startNotesSyncLoop } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
 import { renderFlashcardsPage } from './page/flashcardsui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus, primeGoogleConfig } from './page/email.js'
@@ -763,6 +763,9 @@ localStorage.removeItem('atlas.widgetSize.v2')
 // is genuinely usable and again on every reconnect (sleep/wake, network change).
 refreshGoogleView() // warm socket (in-app reload) can still win here
 sync.onStatus((s) => { if (s === 'online') refreshGoogleView() })
+
+// Notes folder <-> server convergence, while the notes page is on screen.
+startNotesSyncLoop()
 
 bindGym(render) // gym logging / complete / exercise-modal delegation (view mode)
 bindCanvas() // canvas widget interactions (course pills, filters, dismissals)

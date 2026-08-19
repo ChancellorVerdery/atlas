@@ -59,7 +59,7 @@ final class LocalServer {
     // Mac-only plugin backends, spliced raw to the Node sidecar (503 without one).
     static let sidecarPrefixes = ["/graph-api", "/notes-api", "/study-api"]
     // Forwarded to the Atlas server's uiapi with the session token.
-    static let proxyPrefixes = ["/canvas-proxy", "/finance-api"]
+    static let proxyPrefixes = ["/canvas-proxy", "/finance-api", "/notes-sync"]
 
     // Claude subscription-OAuth (PKCE) — the token exchange must carry the
     // code_verifier and can't run in the browser (CORS), so LocalServer brokers

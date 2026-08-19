@@ -14,6 +14,7 @@ import http from 'node:http'
 import { userForToken } from '../lib/session.js'
 import { appAssets } from './uiapi/app.js'
 import { canvasProxy } from './uiapi/canvas.js'
+import { notesSync } from './uiapi/notes.js'
 import { plaidApi } from './uiapi/plaid.js'
 
 const PORT = Number(process.env.PORT || 80)
@@ -27,6 +28,8 @@ const ROUTES = [
   // The built web bundle for the Swift shells' self-updater — static files,
   // but token-gated like everything else here.
   { prefix: '/app', handler: appAssets },
+  // The synced notes folder: the server side of the device<->server file sync.
+  { prefix: '/notes-sync', handler: notesSync },
 ]
 
 function mount(req) {

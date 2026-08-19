@@ -10,6 +10,7 @@ import {
   loadNotesStore, saveNotesStore, pickFolder, fetchTree, convertNote, saveNote,
   readNote, deleteNote,
   appleNotesTree, appleNotesFetch, fileURL, revealFile, WIKI_RE, EMBED_RE, IMG_RE,
+  syncNotes, remoteNotes,
 } from './notes.js'
 import { isNative, isNativeIOS } from '../platform.js'
 import { confirmDelete } from './confirm.js'
@@ -83,6 +84,8 @@ export function renderNotesPage(root) {
     <div class="gf-bar">
       <button type="button" class="gym-btn" data-nt="new" ${noAI ? 'disabled' : ''}>+ New note</button>
       ${native ? '' : '<button type="button" class="gym-btn gym-btn--ghost" data-nt="pick">Change folder…</button>'}
+      <button type="button" class="gym-btn gym-btn--ghost" data-nt="sync">Sync</button>
+      <button type="button" class="gym-btn gym-btn--ghost" data-nt="archive">Archive</button>
       <span class="gf-dir" title="${native ? 'iCloud' : esc(s.dir)}">${native ? 'iCloud' : esc(dirName(s.dir))}</span>
       <span class="gf-status" id="nt-status">${noAI ? esc(NO_AI_MSG) : ''}</span>
     </div>
@@ -95,6 +98,75 @@ export function renderNotesPage(root) {
   root.onclick = onPageClick
   renderQueue()
   loadTree(s.dir)
+  runSync({ quiet: true }) // opening the page is the natural moment to converge
+}
+
+// ---- synced folder ----------------------------------------------------------
+
+// A pass reads and writes the same folder loadTree() renders, so the tree is
+// reloaded whenever anything actually moved. Quiet passes (page open, timer)
+// say nothing unless there IS something to say.
+let syncTimer = null
+async function runSync({ quiet = false } = {}) {
+  if (!quiet) setStatus('Syncing…')
+  let r
+  try {
+    r = await syncNotes()
+  } catch (e) {
+    setStatus(`Sync failed — ${e.message}`)
+    return null
+  }
+  if (!r) { if (!quiet) setStatus('') ; return null }
+  const moved = r.pulled.length + r.pushed.length + r.deletedLocal.length + r.deletedRemote.length + r.conflicts.length
+  if (moved) { pg.tree = null; loadTree(loadNotesStore().dir) }
+  const bits = []
+  if (r.pulled.length) bits.push(`${r.pulled.length} in`)
+  if (r.pushed.length) bits.push(`${r.pushed.length} out`)
+  if (r.deletedLocal.length) bits.push(`${r.deletedLocal.length} removed here`)
+  if (r.deletedRemote.length) bits.push(`${r.deletedRemote.length} removed on the server`)
+  if (r.conflicts.length) bits.push(`${r.conflicts.length} kept as conflict ${r.conflicts.length === 1 ? 'copy' : 'copies'}`)
+  if (r.errors.length) bits.push(`${r.errors.length} failed`)
+  if (bits.length) setStatus(`Synced — ${bits.join(', ')}`)
+  else if (!quiet) setStatus('Synced — already up to date')
+  return r
+}
+
+// Poll while the notes page is on screen. Deliberately not a global background
+// loop: syncing a folder the user is not looking at buys nothing and would run
+// on every page of the app.
+export function startNotesSyncLoop() {
+  clearInterval(syncTimer)
+  syncTimer = setInterval(() => {
+    if (!location.hash.startsWith('#/notes') || document.hidden) return
+    runSync({ quiet: true })
+  }, 60_000)
+}
+
+const fmtBytes = (n) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`)
+const daysLeft = (expiresAt) => Math.max(0, Math.ceil((expiresAt - Date.now()) / 86400e3))
+
+async function renderArchive() {
+  const view = document.getElementById('nt-view')
+  if (!view) return
+  view.innerHTML = '<p class="cal-wnote">Loading the archive…</p>'
+  let j
+  try { j = await remoteNotes.archive() } catch (e) {
+    view.innerHTML = `<p class="cal-wnote">Couldn't load the archive — ${esc(e.message)}</p>`
+    return
+  }
+  if (!j.files.length) {
+    view.innerHTML = `<h3 class="nt-title">Archive</h3><p class="cal-wnote">Nothing deleted in the last ${j.days} days.</p>`
+    return
+  }
+  view.innerHTML = `<h3 class="nt-title">Archive</h3>
+    <p class="cal-wnote">Deleted notes are kept for ${j.days} days, then permanently removed.</p>
+    <div class="nt-arch">${j.files.map((f) => `
+      <div class="nt-arch__row">
+        <span class="nt-arch__path" title="${esc(f.path)}">${esc(f.path)}</span>
+        <span class="nt-arch__meta">${fmtBytes(f.size)} · deleted ${new Date(f.deletedAt).toLocaleDateString()} · ${daysLeft(f.expiresAt)}d left</span>
+        <button type="button" class="gym-btn gym-btn--ghost" data-nt="arch-restore" data-path="${esc(f.path)}">Restore</button>
+        <button type="button" class="nt-chip__x" data-nt="arch-purge" data-path="${esc(f.path)}" aria-label="Delete forever">×</button>
+      </div>`).join('')}</div>`
 }
 
 function setStatus(t) {
@@ -294,7 +366,22 @@ function onPageClick(e) {
       pg.open = null
       renderNotesPage(document.querySelector('.nt').parentElement)
     })
-  } else if (act === 'new') openUpload()
+  } else if (act === 'sync') runSync()
+  else if (act === 'archive') renderArchive()
+  else if (act === 'arch-restore') {
+    // Restore un-deletes it server-side; the sync pass is what brings the file
+    // back to this device (and every other one) — same path as any other change.
+    remoteNotes.restore(el.dataset.path)
+      .then(() => runSync())
+      .then(() => renderArchive())
+      .catch((err) => setStatus(`Restore failed — ${err.message}`))
+  } else if (act === 'arch-purge') {
+    confirmDelete(`Delete “${el.dataset.path}” forever? This cannot be undone.`).then((yes) => {
+      if (!yes) return
+      remoteNotes.purge(el.dataset.path).then(renderArchive).catch((err) => setStatus(`Failed — ${err.message}`))
+    })
+  }
+  else if (act === 'new') openUpload()
   else if (act === 'open') openNote(el.dataset.path)
   else if (act === 'note-del') deleteNoteFlow(el.dataset.path)
   else if (act === 'wiki') { e.preventDefault(); followWiki(el.dataset.target) }

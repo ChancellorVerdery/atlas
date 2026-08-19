@@ -664,6 +664,26 @@ Output:
       if (u.pathname === '/tree') return json(200, walk(dir))
       if (u.pathname === '/convert' && req.method === 'POST') return json(200, await convert(dir, body, credsFromRequest(req, body)))
       if (u.pathname === '/save' && req.method === 'POST') return json(200, save(dir, body))
+      // Raw write / delete at an EXACT relative path — what folder sync needs,
+      // and what save() deliberately is not: save() is the composer's route, so
+      // it sanitizes the filename and 409s on an existing file. Mirroring a
+      // remote change has to land on the path it was given and overwrite.
+      if (u.pathname === '/put' && req.method === 'POST') {
+        const rel = String(body.path || '')
+        const abs = safeJoin(dir, rel)
+        if (!abs || abs === path.resolve(dir)) throw fail(400, 'bad path')
+        fs.mkdirSync(path.dirname(abs), { recursive: true })
+        fs.writeFileSync(abs, String(body.content ?? ''))
+        return json(200, { ok: true, path: rel, mtime: fs.statSync(abs).mtimeMs })
+      }
+      if (u.pathname === '/delete' && req.method === 'POST') {
+        const abs = safeJoin(dir, String(body.path || ''))
+        if (!abs || abs === path.resolve(dir)) throw fail(400, 'bad path')
+        // Already absent is success: the sync pass and the user can race, and
+        // both outcomes are "the file is gone", which is what was asked for.
+        if (fs.existsSync(abs)) fs.rmSync(abs, { force: true })
+        return json(200, { ok: true })
+      }
       json(404, { error: 'unknown notes-api endpoint' })
     } catch (err) {
       json(err.code >= 400 && err.code <= 599 ? err.code : 500, { error: err.message })
@@ -1161,6 +1181,9 @@ export const MIDDLEWARES = [
   // still fetches the same root-relative paths, which is the whole point.
   { prefix: '/canvas-proxy', handler: remote('/canvas-proxy') },
   { prefix: '/finance-api', handler: remote('/finance-api') },
+  // The server half of the synced notes folder. Same reverse-proxy trick: the
+  // page fetches a same-origin path and the session token is attached here.
+  { prefix: '/notes-sync', handler: remote('/notes-sync') },
   // STILL LOCAL, and not because of missing Linux tooling — the DATA is here.
   // graph reads a graphify corpus and opens a native folder dialog; notes reads
   // the Apple Notes store and a vault path that came from a Finder dialog.

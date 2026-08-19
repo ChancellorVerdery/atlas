@@ -7,6 +7,7 @@
 // Run: node test/uiapi.check.mjs
 import { allowedHost } from '../services/uiapi/canvas.js'
 import { mount, ROUTES } from '../services/uiapi.js'
+import { cleanPath, sha256 as nsha } from '../services/uiapi/notes.js'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { strictEqual, ok } from 'node:assert'
@@ -65,7 +66,7 @@ check('prefixes match only on a path boundary', () => {
   strictEqual(mounted('/graph-api/file'), null, 'graph-api must never be served here')
 })
 check('only the moved prefixes and the app bundle are routed', () => {
-  strictEqual(ROUTES.map((r) => r.prefix).sort().join(','), '/app,/canvas-proxy,/finance-api')
+  strictEqual(ROUTES.map((r) => r.prefix).sort().join(','), '/app,/canvas-proxy,/finance-api,/notes-sync')
 })
 
 // ---- app bundle route ----------------------------------------------------
@@ -134,6 +135,41 @@ const PLAID = readFileSync(fileURLToPath(new URL('../services/uiapi/plaid.js', i
 check('the plaid body reader is capped', () => {
   ok(/BODY_CAP\s*=\s*1e6/.test(PLAID), 'cap is gone')
   ok(/size > BODY_CAP/.test(PLAID), 'cap is declared but never enforced')
+})
+
+// ---- notes-sync --------------------------------------------------------------
+// Path handling is the security-relevant half of the notes sync: every path
+// arrives from a device and is used to key a row that other devices will
+// happily write to disk. Rejecting is deliberate — a silently rewritten path
+// would sync to a different file than the caller believes it wrote.
+check('notes-sync is mounted', () => {
+  ok(ROUTES.some((r) => r.prefix === '/notes-sync'), 'route missing')
+  const req = { url: '/notes-sync/changes?since=4' }
+  ok(mount(req), 'did not mount')
+  strictEqual(req.url, '/changes?since=4', 'prefix must be stripped, query kept')
+  ok(!mount({ url: '/notes-syncfoo/changes' }), 'must match on a path boundary')
+})
+check('notes-sync rejects every traversal shape', () => {
+  for (const bad of [
+    '../secrets.md', 'a/../../b.md', '/etc/passwd', '..', 'a/./b.md', 'a//b.md',
+    '', null, undefined, 'a/../b/../../c.md', 'x\0.md', '\\..\\win.md',
+  ]) strictEqual(cleanPath(bad), null, `accepted ${JSON.stringify(bad)}`)
+  // 'C:\x.md' normalizes to the relative 'C:/x.md' and is deliberately allowed:
+  // it escapes nothing, it is just an odd folder name, and the device side
+  // (safeJoin / notesResolve) is what actually contains a write.
+})
+check('notes-sync keeps ordinary relative paths intact', () => {
+  strictEqual(cleanPath('note.md'), 'note.md')
+  strictEqual(cleanPath('Classes/Thermo/entropy.md'), 'Classes/Thermo/entropy.md')
+  // Backslashes are normalized to '/' BEFORE validation, so a Windows-shaped
+  // path cannot smuggle a traversal past the segment check.
+  strictEqual(cleanPath('Classes\\Thermo\\a.md'), 'Classes/Thermo/a.md')
+  strictEqual(cleanPath('a note with spaces & ünicode.md'), 'a note with spaces & ünicode.md')
+  strictEqual(cleanPath('x'.repeat(1025)), null, 'absurd lengths are refused')
+})
+check('notes-sync hashes content stably', () => {
+  strictEqual(nsha('hello'), '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824')
+  strictEqual(nsha(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
 })
 
 console.log(failures ? `\n${failures} failed` : '\nuiapi.check: all good')

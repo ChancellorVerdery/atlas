@@ -7,7 +7,8 @@
 // syncing would force a backend mapper change.
 
 import { loadAI, ensureFreshClaude, credsForClaude, credsHeader } from './ai.js'
-import { isNative } from '../platform.js'
+import { isNative, nativePlatform } from '../platform.js'
+import { reconcile, loadSnapshot, saveSnapshot } from './notessync.js'
 
 const KEY = 'atlas.notes.v1'
 
@@ -126,6 +127,98 @@ export async function appleNotesFetch(id) {
 // note contents + original images are read via the graph middleware (sandboxed)
 export const fileURL = (dir, rel) => `/graph-api/file?${q(dir)}&path=${encodeURIComponent(rel)}`
 export const revealFile = (dir, rel) => fetch(`/graph-api/reveal?${q(dir)}&path=${encodeURIComponent(rel)}`, { method: 'POST' })
+
+// ---- synced folder ----------------------------------------------------------
+// The reconciler (notessync.js) is platform-agnostic on purpose; these two
+// adapters are the ONLY place that knows whether "the notes folder" is a
+// Finder-picked directory behind the sidecar or the app's iCloud container.
+
+const deviceLabel = () =>
+  nativePlatform() === 'ios' ? 'iPhone' : nativePlatform() === 'macos' ? 'Mac' : 'browser'
+
+export function localNotes(dir) {
+  if (isNative()) {
+    return {
+      async list() {
+        const r = await fetch('/icloud/notes/tree')
+        const j = await r.json().catch(() => ({}))
+        // iCloud's tree carries no mtime, so every file is re-read and re-hashed
+        // each pass. Fine at vault scale; the Mac side skips unchanged files.
+        return (j.notes || []).map((n) => ({ path: n.path, mtime: n.mtime ?? null }))
+      },
+      async read(path) {
+        const r = await fetch(`/icloud/notes/read?path=${encodeURIComponent(path)}`)
+        return r.ok ? r.text() : null
+      },
+      write: (path, content) => post('/icloud/notes/save', { path, content }),
+      remove: (path) => post('/icloud/notes/delete', { path }),
+    }
+  }
+  return {
+    async list() {
+      const t = await fetchTree(dir)
+      return (t.notes || []).map((n) => ({ path: n.path, mtime: n.mtime ?? null }))
+    },
+    async read(path) {
+      const r = await fetch(fileURL(dir, path))
+      return r.ok ? r.text() : null
+    },
+    write: (path, content) => post('/notes-api/put', { dir, path, content }),
+    remove: (path) => post('/notes-api/delete', { dir, path }),
+  }
+}
+
+// Root-relative and same-origin: the Mac dev server and the Swift shell both
+// mount '/notes-sync' as a reverse proxy that attaches the session token, so
+// nothing here ever sees a credential or an absolute backend URL.
+const syncGet = async (url) => {
+  const r = await fetch(url)
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(j.error || `notes sync failed (${r.status})`)
+  return j
+}
+
+export const remoteNotes = {
+  changes: (since) => syncGet(`/notes-sync/changes?since=${encodeURIComponent(since || 0)}`),
+  get: (path) => syncGet(`/notes-sync/file?path=${encodeURIComponent(path)}`),
+  async put(path, content, mtime) {
+    const r = await fetch(`/notes-sync/file?path=${encodeURIComponent(path)}&mtime=${encodeURIComponent(mtime || Date.now())}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: content,
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.error || `upload failed (${r.status})`)
+    return j
+  },
+  del: (path) => post('/notes-sync/delete', { path }),
+  archive: () => syncGet('/notes-sync/archive'),
+  restore: (path) => post('/notes-sync/restore', { path }),
+  purge: (path) => post('/notes-sync/purge', { path }),
+  archivedContent: (path) => syncGet(`/notes-sync/file?path=${encodeURIComponent(path)}&archived=1`),
+}
+
+// One pass. Returns the reconcile report, or null when there is no folder to
+// sync yet (web with no folder picked). Single-flight: two overlapping passes
+// would both read the same snapshot and fight.
+let syncing = null
+export function syncNotes() {
+  if (syncing) return syncing
+  syncing = (async () => {
+    const s = loadNotesStore()
+    if (!isNative() && !s.dir) return null
+    const snapshot = loadSnapshot()
+    const report = await reconcile({
+      local: localNotes(s.dir),
+      remote: remoteNotes,
+      snapshot,
+      label: deviceLabel(),
+    })
+    saveSnapshot(report.snapshot)
+    return report
+  })().finally(() => { syncing = null })
+  return syncing
+}
 
 export const WIKI_RE = /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g
 export const EMBED_RE = /!\[\[([^\]|]+?)\]\]/g
