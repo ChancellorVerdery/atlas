@@ -140,5 +140,35 @@ await check('a hydrate event after the timer already fired does not double-run',
   strictEqual(loaded.length, 1, `expected exactly one warm pass, got ${loaded.length}`)
 })
 
+// The resume path (main.js re-dispatches 'atlas:hydrated' when the page becomes
+// visible). A phone suspends and resumes rather than cold-booting, so if a later
+// hydrate could not re-warm, the app would paint its first-boot cache forever.
+await check('a later hydrate re-warms once the interval has passed', async () => {
+  const { startPrefetch: start } = await import('../src/page/prefetch.js?resume-rewarm')
+  const loaded = []
+  const tasks = [{ plugin: 'canvas', load: () => { loaded.push('canvas'); return Promise.resolve(() => {}) } }]
+  const win = fakeWindow()
+  globalThis.window = win
+  start(() => true, { tasks, delay: 10_000, warmEvery: 10 }) // timer must not be what fires these
+  win.dispatchEvent(new CustomEvent('atlas:hydrated'))
+  await new Promise((r) => setTimeout(r, 30)) // longer than warmEvery
+  win.dispatchEvent(new CustomEvent('atlas:hydrated'))
+  await new Promise((r) => setTimeout(r, 20))
+  strictEqual(loaded.length, 2, `a resume should warm again, got ${loaded.length} pass(es)`)
+})
+
+await check('two hydrates inside the interval still only warm once', async () => {
+  const { startPrefetch: start } = await import('../src/page/prefetch.js?resume-throttle')
+  const loaded = []
+  const tasks = [{ plugin: 'canvas', load: () => { loaded.push('canvas'); return Promise.resolve(() => {}) } }]
+  const win = fakeWindow()
+  globalThis.window = win
+  start(() => true, { tasks, delay: 10_000, warmEvery: 10_000 })
+  win.dispatchEvent(new CustomEvent('atlas:hydrated'))
+  win.dispatchEvent(new CustomEvent('atlas:hydrated')) // app-switch churn
+  await new Promise((r) => setTimeout(r, 30))
+  strictEqual(loaded.length, 1, `expected the interval to swallow the second, got ${loaded.length}`)
+})
+
 console.log(failures ? `\n${failures} failed` : '\nprefetch.check: all good')
 process.exit(failures ? 1 : 0)

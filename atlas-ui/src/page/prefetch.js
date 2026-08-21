@@ -46,6 +46,14 @@ const GAP_MS = 250
 // already wins that race.
 const START_DELAY_MS = 1500
 
+// A resumed app re-hydrates — main.js dispatches 'atlas:hydrated' again when the
+// page becomes visible — and that has to re-warm, or a phone (which suspends
+// and resumes rather than cold-booting) keeps painting the cache it warmed on
+// whatever day it was last launched. warmEmail and warmCalendar have no
+// freshness guard of their own, so this interval is the only thing standing
+// between app-switching and a refetch storm.
+const WARM_MIN_MS = 60e3
+
 // Each entry names the plugin that owns it, so a disabled plugin is never
 // fetched for. The module is imported lazily so a plugin the user does not have
 // on is not even parsed. Every warm() self-guards on its own connectivity
@@ -69,17 +77,19 @@ let started = false
 // warm as soon as it's safe rather than after a fixed guess — while the timer
 // still guarantees a start on a cold boot, an offline session, or a dead sync
 // tunnel, where the event never comes at all.
-export function startPrefetch(isEnabled, { tasks = TASKS, delay = START_DELAY_MS } = {}) {
+export function startPrefetch(isEnabled, { tasks = TASKS, delay = START_DELAY_MS, warmEvery = WARM_MIN_MS } = {}) {
   if (started) return
   started = true
   const due = tasks.filter((t) => isEnabled(t.plugin))
   if (!due.length) return
-  let fired = false
+  // Replaces the old one-shot `fired` flag: the first pass always runs (0 is
+  // longer ago than any interval), and everything after it is rate-limited
+  // rather than refused outright.
+  let lastWarm = 0
   const go = () => {
-    if (fired) return
-    fired = true
+    if (Date.now() - lastWarm < warmEvery) return
+    lastWarm = Date.now()
     clearTimeout(timer)
-    window.removeEventListener('atlas:hydrated', go)
     runLimited(
       due.map((t) => async () => {
         const warm = await t.load()
@@ -89,5 +99,7 @@ export function startPrefetch(isEnabled, { tasks = TASKS, delay = START_DELAY_MS
     ).then(() => window.dispatchEvent(new CustomEvent('atlas:prefetched')))
   }
   const timer = setTimeout(go, delay)
-  window.addEventListener('atlas:hydrated', go, { once: true })
+  // Deliberately NOT { once: true } any more: every later hydrate is a resume,
+  // and re-warming on it is the point. `warmEvery` is what keeps that safe.
+  window.addEventListener('atlas:hydrated', go)
 }

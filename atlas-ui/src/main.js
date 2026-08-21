@@ -392,3 +392,30 @@ async function hydrateInBackground(auth) {
   applyTheme() // the pull may have brought a scheme set on another device
   window.dispatchEvent(new CustomEvent('atlas:hydrated'))
 }
+
+// ---- resume ----------------------------------------------------------------
+// A phone never cold-boots a backgrounded app: iOS suspends the process and
+// resumes it. So for a phone, "launch" is this event — not this module's first
+// evaluation, which may have been days ago. Every refresh path (the sync pull,
+// the plugin prefetch) used to run at boot and only at boot, which is exactly
+// why a resumed app went on serving whatever it had cached back then.
+//
+// Re-running hydrateInBackground IS the fix: it reconnects the socket, pulls,
+// applies, and dispatches 'atlas:hydrated' — which the renderer already
+// re-renders on and prefetch.js now re-warms on. Nothing native needed;
+// WKWebView fires visibilitychange on background/foreground, and the same
+// handler covers a hidden/occluded window on the Mac.
+const RESUME_MIN_MS = 60e3
+let lastResume = Date.now()
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !auth?.token) return
+  // App switching fires this constantly and warmEmail/warmCalendar have no
+  // freshness guard, so without an interval this is a refetch storm.
+  if (Date.now() - lastResume < RESUME_MIN_MS) return
+  // hydrating re-renders, and a re-render discards an open modal — with it, a
+  // half-written email. Refreshing can wait until the user is done.
+  if (document.querySelector('#app-modal .modal')) return
+  lastResume = Date.now()
+  hydrateInBackground(auth)
+})
