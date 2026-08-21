@@ -1315,6 +1315,12 @@ html[data-page="email"] .content { padding: 0; overflow: hidden; display: flex; 
 .tm__controls { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .tm__slider { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-faint); }
 .tm__slider input { flex: 1; accent-color: var(--brass); }
+/* A range input's UA-default width (129px in WebKit) is its flex min-content
+   floor while min-width stays "auto", so flex:1 alone can't shrink it — on the
+   phone-width modal the wheel + "Shade"/"Tint" labels leave the slider well
+   under 129px and it ran ~7px past the screen edge. min-width:0 lets it
+   actually shrink to the space left over, same as .tm__controls already does. */
+body.is-mobile .tm__slider input { min-width: 0; }
 .tm__inputs { display: flex; gap: 8px; align-items: center; }
 .tm__inputs input[type="color"] {
   width: 40px; height: 32px; padding: 0; cursor: pointer;
@@ -2859,6 +2865,12 @@ body.is-mobile .nt-chip__x { min-width: 40px; min-height: 40px; display: inline-
    description text (side-by-side .set-row was colliding at phone width). */
 body.is-mobile .set-row { flex-direction: column; align-items: stretch; gap: 10px; }
 body.is-mobile .set-row__meta { width: 100%; }
+/* Gym cycle "add" row (workout picker + Add + Reset) has no wrap on desktop
+   because there's always room; on a phone the picker plus both buttons don't
+   fit one line and "Reset position" ran off the right edge. Put the picker on
+   its own line so the two buttons land together on the line below it. */
+body.is-mobile .gym-add-row { flex-wrap: wrap; }
+body.is-mobile .gym-add-row .gym-cycle-add-sel { flex: 1 1 100%; }
 /* Calendar cells: the @container(max-width) rules can't style .cal-cell itself
    (an element isn't styled by its own container query), so tighten padding
    directly on mobile, and narrow the week/day columns a touch. */
