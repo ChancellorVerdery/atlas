@@ -128,7 +128,7 @@ function render() {
 // ---- chrome: course tabs + tool pills ---------------------------------------
 
 const tabBtnHTML = (t, active) =>
-  `<button type="button" class="st-tab${active ? ' is-active' : ''}" data-st="tab" data-id="${esc(t.id)}"${active ? ' title="Double-click to rename"' : ''}>${esc(t.name)}${active ? `<span class="st-tab__x" data-st="tab-del" data-id="${esc(t.id)}" aria-label="Delete course">×</span>` : ''}</button>`
+  `<button type="button" class="st-tab${active ? ' is-active' : ''}" data-st="tab" data-id="${esc(t.id)}"${active ? ' title="Double-click to rename"' : ''}><span class="st-tab__name">${esc(t.name)}</span>${active ? `<span class="st-tab__x" data-st="tab-del" data-id="${esc(t.id)}" aria-label="Delete course">×</span>` : ''}</button>`
 
 function tabsBar(s) {
   return `<div class="st-tabs">

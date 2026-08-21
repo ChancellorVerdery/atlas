@@ -2861,6 +2861,15 @@ body.is-mobile .pw-item-remove,
 body.is-mobile .pw-delete,
 body.is-mobile .st-tab__x,
 body.is-mobile .nt-chip__x { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+/* Course tabs (Study, Flashcards). .st-tabs wraps BETWEEN tabs, but .st-tab is
+   white-space:nowrap with min-width:auto, so a single tab whose course name is
+   longer than the screen can neither wrap nor shrink — it ran to right=484 in a
+   375px viewport, taking its delete X with it, and the row doesn't scroll, so
+   that tab was simply unreachable. Cap the tab and ellipsize the NAME only, so
+   the X stays on screen and tappable. Desktop keeps full-length tab labels. */
+body.is-mobile .st-tab { max-width: 100%; min-width: 0; }
+body.is-mobile .st-tab__name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
 /* Settings rows stack on mobile so the action button never overlaps the
    description text (side-by-side .set-row was colliding at phone width). */
 body.is-mobile .set-row { flex-direction: column; align-items: stretch; gap: 10px; }
