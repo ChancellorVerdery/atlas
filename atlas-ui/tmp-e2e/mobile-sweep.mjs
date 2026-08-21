@@ -49,6 +49,23 @@ const PLUGINS = ['calendar', 'canvas', 'course', 'email', 'equations', 'formal',
 
 // Enough data that pages render their real furniture instead of empty states —
 // an empty page hides exactly the overflow bugs this is looking for.
+const line = (id, widgets) => ({ id: `l-${id}`, widgets })
+const DASH_BOARD = { v: 1, rows: [
+  { id: 'r-d1', title: 'Today', cols: [{ id: 'c-d1', sections: [{ id: 's-d1', lines: [
+    line('d1', [{ id: 'w-card', kind: 'card', title: 'A note to self', text: 'Remember the tip-out sheet before close.' }]),
+    line('d2', [{ id: 'w-list', kind: 'list', title: 'Errands', items: ['Lab report', 'Refill protein', 'Text landlord about formal deposit'] }]),
+    line('d3', [{ id: 'w-graph', kind: 'graph', title: 'Weekly hours', graphType: 'line', xLabel: 'day', yLabel: 'hrs',
+      points: [{ label: 'Mon', value: 6 }, { label: 'Tue', value: 4 }, { label: 'Wed', value: 8 }, { label: 'Thu', value: 5 }, { label: 'Fri', value: 9 }] }]),
+    line('d4', [{ id: 'w-gymcur', kind: 'gymcurrent' }]),
+    line('d5', [{ id: 'w-gymgraph', kind: 'gymscoregraph' }]),
+    line('d6', [{ id: 'w-wkinc', kind: 'wkincome' }]),
+    line('d7', [{ id: 'w-slhrs', kind: 'slhours' }]),
+    line('d8', [{ id: 'w-eq', kind: 'eqcard', title: 'Gauss', latex: '\\oint \\vec{E}\\cdot d\\vec{A} = \\frac{Q}{\\epsilon_0}' }]),
+    line('d9', [{ id: 'w-calag', kind: 'calagenda' }]),
+    line('d10', [{ id: 'w-cvup', kind: 'cvupcoming' }]),
+  ] }] }] },
+] }
+
 const SEED = {
   'atlas.gym.v1': {
     v: 1,
@@ -103,6 +120,12 @@ const SEED = {
       { id: 'c2', front: 'Coulomb constant', back: '8.99e9 N m^2 / C^2', box: 1, due: '' }] },
   ], active: 'f-phys' },
   'atlas.notes.v1': { dir: process.env.ATLAS_NOTES_DIR || '', lastSubdir: '', openDirs: ['Physics'] },
+  // The dashboard seeds its mobile board from the desktop one, so with neither
+  // seeded the LANDING PAGE audits as an empty state — the most widget-dense
+  // page in the app, measuring nothing. Seed both keys with a mix of every
+  // widget family (plain, chart, and one live view per plugin).
+  'atlas.page.v1': DASH_BOARD,
+  'atlas.page.v1.mobile': DASH_BOARD,
 }
 
 const b = await webkit.launch({ headless: true })
