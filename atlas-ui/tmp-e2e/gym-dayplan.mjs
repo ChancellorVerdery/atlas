@@ -4,7 +4,9 @@
 // Run: node tmp-e2e/gym-dayplan.mjs
 import { webkit } from 'playwright'
 
-const BASE = 'http://localhost:5173'
+// ATLAS_BASE lets a second checkout point this at its own dev server —
+// vite is strictPort, so parallel agents cannot share 5173.
+const BASE = process.env.ATLAS_BASE || 'http://localhost:5173'
 let passed = 0, failed = 0
 const ok = (cond, name) => { if (cond) { passed++; console.log(`  ok ${name}`) } else { failed++; console.log(`  FAIL ${name}`) } }
 

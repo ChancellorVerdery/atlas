@@ -7,11 +7,21 @@ import { seedFreshPluginState } from './page/plugins.js'
 import { clearCache } from './page/datacache.js'
 import './auth.css'
 import { applyTheme, loadTheme, logoDataURL, pushAppIcon } from './page/theme.js'
+import { initPlatform } from './platform.js'
 
 // Before anything paints: the scheme is cached locally, so the first frame is
 // already the user's colours rather than the default ones swapped out a beat
 // later. ponytail: a fresh device still flashes Brass until the pull lands.
 applyTheme()
+
+// Same reasoning, for layout. index.html ships the app shell (.app > .sidebar +
+// .main) as static markup, and renderer.js — which used to be the only caller
+// of initPlatform — is imported inside bootApp(), i.e. AFTER the login gate. So
+// a phone painted the DESKTOP shell until the moment it signed in: a 248px
+// sidebar on a 402px screen, main squeezed to 154px, Customize 64px off the
+// right edge. Measured on an iOS simulator; a headless sweep cannot see it
+// because seeding auth skips the gate entirely.
+initPlatform()
 const logoUrl = logoDataURL()
 
 const AUTH_KEY = 'atlas.auth.v1'

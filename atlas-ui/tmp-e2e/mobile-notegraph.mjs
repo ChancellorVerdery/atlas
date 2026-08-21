@@ -6,7 +6,9 @@
 // Run: node tmp-e2e/mobile-notegraph.mjs
 import { chromium, webkit } from 'playwright'
 
-const BASE = 'http://localhost:5173'
+// ATLAS_BASE lets a second checkout point this at its own dev server —
+// vite is strictPort, so parallel agents cannot share 5173.
+const BASE = process.env.ATLAS_BASE || 'http://localhost:5173'
 
 const SPECS = [
   ['function', { title: 'Function', xLabel: '$x$', yLabel: '$y$', curves: [{ latex: '\\sin x', label: '$\\sin x$' }] }],

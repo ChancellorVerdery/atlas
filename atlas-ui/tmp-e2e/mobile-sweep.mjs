@@ -15,7 +15,9 @@
 import { webkit } from 'playwright'
 import fs from 'node:fs'
 
-const BASE = 'http://localhost:5173'
+// ATLAS_BASE lets a second checkout point this at its own dev server —
+// vite is strictPort, so parallel agents cannot share 5173.
+const BASE = process.env.ATLAS_BASE || 'http://localhost:5173'
 const argv = process.argv.slice(2)
 const jsonOut = argv.includes('--json') ? argv[argv.indexOf('--json') + 1] : null
 const shotDir = argv.includes('--shots') ? argv[argv.indexOf('--shots') + 1] : null
