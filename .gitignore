@@ -32,6 +32,8 @@ plugins-dist/
 # atlas-apple/build.sh. 135 of these files got committed once by a `git add -A`.
 atlas-apple/build/
 atlas-apple/build-device/
+# and build-test/ (xcodebuild build-for-testing, for the XCUITest runner)
+atlas-apple/build-test/
 
 # Retired-plugin archive (formal/graph/finance source zips + exported data) —
 # lives on the Desktop beside the repo, never committed.
