@@ -19,6 +19,13 @@ const isObj = (o) => o !== null && typeof o === 'object'
 export const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 export const DAY_LABELS = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday' }
 
+// A day can deviate from the plan two ways: not training at all (SKIP), or
+// training a workout the plan didn't pick. Both are per-date, so neither
+// disturbs the plan itself — a skipped cycle day leaves the position where it
+// was, which is the whole point: you skipped the DAY, not the workout.
+export const SKIP = 'skip'
+const OVERRIDE_KEEP_DAYS = 90
+
 export const todayKey = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const dayOf = (d = new Date()) => DAYS[(d.getDay() + 6) % 7] // JS sunday=0 → our mon-first keys
@@ -39,6 +46,17 @@ export function loadGym() {
   if (!isObj(g.plan.cycle)) g.plan.cycle = {}
   g.plan.cycle.order = Array.isArray(g.plan.cycle.order) ? g.plan.cycle.order : []
   g.plan.cycle.position = Number.isInteger(g.plan.cycle.position) ? g.plan.cycle.position : 0
+  // One-day deviations from the plan, keyed by date so they expire on their own
+  // instead of needing to be cleared the next morning. Entries pointing at a
+  // deleted workout are dropped here rather than guarded at every read site,
+  // and dates drop out after OVERRIDE_KEEP_DAYS so this can't grow forever —
+  // it rides the synced atlas.* blob. YYYY-MM-DD compares correctly as a string.
+  if (!isObj(g.plan.overrides)) g.plan.overrides = {}
+  const cutoff = todayKey(new Date(Date.now() - OVERRIDE_KEEP_DAYS * 86400000))
+  for (const [date, v] of Object.entries(g.plan.overrides)) {
+    const known = v === SKIP || g.workouts.some((w) => w.id === v)
+    if (typeof v !== 'string' || !known || date < cutoff) delete g.plan.overrides[date]
+  }
   g.unit = g.unit === 'lbs' ? 'lbs' : 'kg'
   if (typeof g.address !== 'string') g.address = '' // gym location, used by the Ladder planner
   // Per-weekday open/close — the gym's actual hours, not a preferred window.
@@ -178,7 +196,23 @@ export function generalSeries(g) {
 
 // ---- plan -------------------------------------------------------------------
 
+// null when nothing is on: no plan, or the day was skipped. Callers that need
+// to tell those apart ask dayOverride() — the widget says "skipped", not
+// "set up your plan".
+export const dayOverride = (g, date = todayKey()) => g.plan.overrides?.[date] ?? null
+
+// Today's override, if any, wins over the plan; 'skip' means nothing is on.
+export function setDayOverride(g, value, date = todayKey()) {
+  if (value) g.plan.overrides[date] = value
+  else delete g.plan.overrides[date]
+  saveGym(g)
+  return g
+}
+
 export function currentWorkout(g, now = new Date()) {
+  const ov = dayOverride(g, todayKey(now))
+  if (ov === SKIP) return null
+  if (ov) return workoutById(g, ov) ?? null
   if (g.plan.type === 'weekly') return workoutById(g, g.plan.weekly[dayOf(now)])
   const o = g.plan.cycle.order
   return o.length ? workoutById(g, o[g.plan.cycle.position % o.length]) : null
@@ -211,7 +245,17 @@ export function completeWorkout(g, now = new Date(), times = {}) {
   if (!w) return null
   g.completions.push({ workoutId: w.id, date: todayKey(now), ts: now.getTime(), start: times.start || '', end: times.end || '' })
   if (g.plan.type === 'cycle' && g.plan.cycle.order.length) {
-    g.plan.cycle.position = (g.plan.cycle.position + 1) % g.plan.cycle.order.length
+    // Normally the cycle was already pointing at what was just done, so advance
+    // from the position. But if today was overridden to a different workout,
+    // resume after the one ACTUALLY done — advancing from the position would
+    // silently consume the workout that was passed over.
+    // ponytail: indexOf, so an order listing the same workout twice resumes at
+    // its first occurrence. Store the chosen index on the override if that ever
+    // matters; it doesn't for a plan you'd hand-build.
+    const ov = dayOverride(g, todayKey(now))
+    const chosen = ov && ov !== SKIP ? g.plan.cycle.order.indexOf(w.id) : -1
+    const from = chosen >= 0 ? chosen : g.plan.cycle.position
+    g.plan.cycle.position = (from + 1) % g.plan.cycle.order.length
   }
   saveGym(g)
   return w
@@ -246,6 +290,11 @@ const localDayMs = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).g
 
 export function plannedWorkoutFor(g, date, now = new Date()) {
   if (g.completions.some((c) => c.date === todayKey(date))) return null // already done that day
+  // A skipped day has nothing to schedule, and an overridden one schedules the
+  // workout actually chosen — so the Ladder plans the real day, not the plan's.
+  const ov = dayOverride(g, todayKey(date))
+  if (ov === SKIP) return null
+  if (ov) { const w = workoutById(g, ov); return w && !w.rest ? w : null }
   if (g.plan.type === 'weekly') {
     const w = workoutById(g, g.plan.weekly[dayOf(date)])
     return w && !w.rest ? w : null

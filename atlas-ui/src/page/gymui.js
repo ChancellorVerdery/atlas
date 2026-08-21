@@ -9,6 +9,7 @@ import {
   logSet, removeSetAt, removeLogsForDate, logsFor, est1RM,
   exerciseSeries, generalScore, generalSeries,
   currentWorkout, upcomingWorkouts, completeWorkout,
+  SKIP, dayOverride, setDayOverride,
 } from './gym.js'
 import { lineChart } from './chart.js'
 import { confirmDelete } from './confirm.js'
@@ -71,12 +72,22 @@ export function gymWidgetHTML(w, cz, secCtx) {
     ).join('')
   }
   // gymcurrent
+  const ov = dayOverride(g)
+  if (ov === SKIP) {
+    return head('Current workout') + `<div class="gym-big">Skipped</div>
+      <p class="gym-sub">Today is off — the plan stays where it was, so nothing is lost.</p>` +
+      (cz ? '' : `<button type="button" class="gym-btn gym-btn--ghost" data-gym-act="unskip">Undo skip</button>`)
+  }
   const w0 = currentWorkout(g)
-  if (!w0) return head('Current workout') + `<p class="gym-empty">No workout scheduled — set up your plan in Gym → Settings.</p>`
+  if (!w0) {
+    return head('Current workout') + `<p class="gym-empty">No workout scheduled — set up your plan in Gym → Settings.</p>`
+      + (cz ? '' : dayPicker(g, ov))
+  }
   if (w0.rest) {
     return head('Current workout') + `<div class="gym-big">${esc(w0.name)}</div>
       <p class="gym-sub">Rest day${w0.flex ? ' · flex' : ''} — recovery counts as training.</p>` +
-      (cz ? '' : `<button type="button" class="btn-gym-complete" data-gym-act="complete">Complete rest day</button>`)
+      (cz ? '' : `<button type="button" class="btn-gym-complete" data-gym-act="complete">Complete rest day</button>`
+        + dayPicker(g, ov))
   }
   const exs = exercisesOf(g, w0.id)
   const today = todayKey()
@@ -117,8 +128,21 @@ export function gymWidgetHTML(w, cz, secCtx) {
       <input class="pw-field gym-time-out" type="time" title="Session end" aria-label="Session end time">
       <span class="gym-times-hint">session times (feeds the planner)</span>
     </div>
-    <button type="button" class="btn-gym-complete" data-gym-act="complete">Complete workout</button>`)
+    <button type="button" class="btn-gym-complete" data-gym-act="complete">Complete workout</button>`
+    + dayPicker(g, ov))
 }
+
+// Today only: do a different workout than the plan picked, or take the day off.
+// Both write a date-keyed override (gym.js), so tomorrow is the plan's again
+// without anything to undo.
+const dayPicker = (g, ov) => (g.workouts.length ? `<div class="gym-pick">
+  <select class="pw-field pw-field--select gym-pick-sel" data-gym-act="pick" aria-label="Workout for today">
+    <option value=""${ov ? '' : ' selected'}>Today: as planned</option>
+    ${g.workouts.map((w) =>
+      `<option value="${esc(w.id)}"${w.id === ov ? ' selected' : ''}>${esc(w.name)}</option>`).join('')}
+  </select>
+  <button type="button" class="gym-btn gym-btn--ghost" data-gym-act="skip">Skip today</button>
+</div>` : '')
 
 // Line chart of the general strength score, drawn by view.js's ResizeObserver.
 export function gymScoreGraphSVG(w, h) {
@@ -133,6 +157,15 @@ let rerenderApp = null
 export function bindGym(rerender) {
   rerenderApp = rerender
   document.body.addEventListener('click', onGymClick)
+  // The workout picker is a <select>, so it reports on change, not on click.
+  document.body.addEventListener('change', onGymChange)
+}
+
+function onGymChange(e) {
+  const sel = e.target.closest('select[data-gym-act="pick"]')
+  if (!sel) return
+  setDayOverride(loadGym(), sel.value || null)
+  rerenderApp?.()
 }
 
 async function onGymClick(e) {
@@ -151,6 +184,12 @@ async function onGymClick(e) {
     } else if (a === 'del-set') {
       if (!(await confirmDelete('Delete this set?'))) return
       removeSetAt(loadGym(), act.dataset.exId, act.dataset.side || null, act.dataset.date, Number(act.dataset.idx))
+      rerenderApp?.()
+    } else if (a === 'skip') {
+      setDayOverride(g, SKIP)
+      rerenderApp?.()
+    } else if (a === 'unskip') {
+      setDayOverride(g, null)
       rerenderApp?.()
     } else if (a === 'complete') {
       const card = act.closest('.pwidget')

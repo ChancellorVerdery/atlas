@@ -2257,6 +2257,11 @@ html[data-page="ladder"] .content { padding: 0; overflow: hidden; display: flex;
 .gym-times { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 12px; }
 .gym-times-hint { font-size: 11px; color: var(--ink-faint); min-width: 0; }
 .gym-hours { display: flex; align-items: center; gap: 7px; }
+/* Today-only plan override. Wraps and lets the select shrink, so a narrow
+   widget (or a phone) stacks the two controls instead of pushing the button
+   off the card's right edge. */
+.gym-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.gym-pick-sel { flex: 1 1 150px; min-width: 0; }
 
 /* recategorize modal */
 .fin-panel { width: min(480px, calc(100vw - 48px)); }
