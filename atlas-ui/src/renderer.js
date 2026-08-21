@@ -3,7 +3,7 @@
 // Customize mode (src/page/customize.js) live-edits the page in place.
 
 import { sync } from './sync.js'
-import { loadPage, loadPageMobile, pageKeyFor, findWidget, uid } from './page/model.js'
+import { loadPage, loadPageMobile, pageKeyFor, findWidget } from './page/model.js'
 import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenAll } from './page/view.js'
 import { enterCustomize, exitCustomize, paletteHTML } from './page/customize.js'
 import { PAGES, pageById, activePages, saveNavOrder } from './page/pages.js'
@@ -815,9 +815,9 @@ const FORMAL_STARTER = { v: 1, rows: [
   { id: 'r-fm1', cols: [
     { id: 'c-fm1', sections: [{ id: 's-fm1', lines: [{ id: 'l-fm1', widgets: [{ id: 'w-fmh', kind: 'fmhouses', house: { name: '', link: '', price: 0, couches: 0, rooms: [{ id: 'fr-fm1', beds: { king: 0, queen: 0, full: 0, twin: 0, futon: 0 } }] } }] }] }] } ] },
 ] }
-// Gym's board seeds on a different trigger (first time gym data exists — see
-// seedGymLayout), but its layout lives in the same starter map so the mobile
-// seedFn can seed a fresh Gym board from it too.
+// Gym's board layout lives in the same starter map as the others so the mobile
+// seedFn can seed a fresh Gym board from it too. (It used to also be seeded by
+// the gym import seed, which is gone — see the note further down.)
 const GYM_STARTER = { v: 1, rows: [
   { id: 'r-gym1', title: 'Today', cols: [
     { id: 'c-gym1', width: 1.4, sections: [{ id: 's-gym1', lines: [{ id: 'l-gym1', widgets: [{ id: 'w-gymcur', kind: 'gymcurrent' }] }] }] },
@@ -907,98 +907,24 @@ try {
   }
 } catch { /* corrupted legacy store — nothing to migrate */ }
 bindPlugins(render, seedStarters) // Settings → Plugins toggles + zip install
-// One-time seed: if the gym store holds no real data and a seed file is
-// served (e.g. data imported from an older Atlas), adopt it. "No real data"
-// rather than "key absent" — merely opening Gym Settings once writes an
-// empty store, which must not block the import. Removing the file (or
-// having any workout/log/completion) disables it.
-const gymStoreEmpty = () => {
-  try {
-    const g = JSON.parse(localStorage.getItem('atlas.gym.v1'))
-    return !g || (!g.workouts?.length && !g.logs?.length && !g.completions?.length)
-  } catch { return true }
-}
-// A gym page with no widgets reads as "nothing imported" even when the data
-// is there — give it a starter board (STARTERS.gym) the first time gym data
-// exists.
-const gymPageEmpty = () => {
-  try { const p = JSON.parse(localStorage.getItem('atlas.page.gym.v1')); return !p || !p.rows?.length } catch { return true }
-}
-const seedGymLayout = () => {
-  if (!gymStoreEmpty() && gymPageEmpty()) {
-    localStorage.setItem('atlas.page.gym.v1', JSON.stringify(GYM_STARTER))
-    render()
-  }
-}
-// ponytail: import seeds only run while their plugin is on at boot — enabling
-// one later picks the import up on the next reload, which is fine for a
-// one-time convenience path.
-if (isPluginEnabled('gym')) {
-  if (gymStoreEmpty()) {
-    fetch('/gym-import.json').then((r) => (r.ok ? r.json() : null)).then((g) => {
-      if (g && gymStoreEmpty()) {
-        localStorage.setItem('atlas.gym.v1', JSON.stringify(g))
-        seedGymLayout()
-        render()
-      }
-    }).catch(() => {})
-  } else seedGymLayout()
-}
-
-// Same one-time seed for the Course Planner: with no classes yet, adopt a
-// served course list (e.g. a degree checksheet import). Non-destructive —
-// keeps any terms/settings already present; the empty-store check makes it
-// self-disabling once classes exist.
-const courseStoreEmpty = () => {
-  try { const c = JSON.parse(localStorage.getItem('atlas.course.v1')); return !c || !c.courses?.length } catch { return true }
-}
-if (isPluginEnabled('course') && courseStoreEmpty()) {
-  fetch('/course-import.json').then((r) => (r.ok ? r.json() : null)).then((incoming) => {
-    if (!Array.isArray(incoming) || !incoming.length || !courseStoreEmpty()) return
-    let s; try { s = JSON.parse(localStorage.getItem('atlas.course.v1')) || {} } catch { s = {} }
-    if (!Array.isArray(s.courses)) s.courses = []
-    s.courses.push(...incoming)
-    localStorage.setItem('atlas.course.v1', JSON.stringify(s))
-    render()
-  }).catch(() => {})
-}
-// Same one-time seed for Equations: adopt a served formula sheet as its own
-// column of eqlist cards, dropped beside the column that already holds the
-// matching subject (anchor). The flag key is the guard — not the column's
-// presence — so deleting the column doesn't resurrect it on the next load,
-// and a second device that pulled the flag won't import a dup.
-// ponytail: one sheet at a time; a multi-sheet queue is the upgrade path.
-const EQ_IMPORT_FLAG = 'atlas.eqimport.v3'
-if (isPluginEnabled('equations') && localStorage.getItem(EQ_IMPORT_FLAG) === null) {
-  fetch('/equations-import.json').then((r) => (r.ok ? r.json() : null)).then((imp) => {
-    if (!imp?.title || !Array.isArray(imp.sections) || !imp.sections.length) return
-    if (localStorage.getItem(EQ_IMPORT_FLAG) !== null) return // a pull landed it while we fetched
-    let page
-    try { page = JSON.parse(localStorage.getItem('atlas.page.equations.v1')) } catch { /* corrupted → fresh */ }
-    if (!page || !Array.isArray(page.rows)) page = { v: 1, rows: [] }
-    const col = { id: uid('c'), sections: [{ id: uid('s'), title: imp.title, lines: imp.sections.map((sec) => ({
-      id: uid('l'), widgets: [{ id: uid('w'), kind: 'eqlist', title: sec.title, items: sec.items }],
-    })) }] }
-    const re = imp.anchor ? new RegExp(imp.anchor, 'i') : null
-    const labels = (s) => [s.title, ...(s.lines || []).flatMap((l) => (l.widgets || []).map((w) => w.title))]
-    // An earlier import of this same sheet may already be on the page — drop
-    // it so bumping the flag re-places rather than duplicates.
-    for (const row of page.rows) row.cols = (row.cols || []).filter((c) => !(c.sections || []).some((s) => s.title === imp.title))
-    page.rows = page.rows.filter((r) => (r.cols || []).length)
-    let placed = false
-    if (re) for (const row of page.rows) {
-      const at = (row.cols || []).findIndex((c) => (c.sections || []).some((s) => labels(s).some((t) => re.test(String(t || '')))))
-      if (at > -1) { row.cols.splice(at + 1, 0, col); placed = true; break }
-    }
-    if (!placed) {
-      if (!page.rows.length) page.rows.push({ id: uid('r'), cols: [] })
-      page.rows[0].cols.push(col)
-    }
-    localStorage.setItem('atlas.page.equations.v1', JSON.stringify(page))
-    localStorage.setItem(EQ_IMPORT_FLAG, imp.title)
-    render()
-  }).catch(() => {})
-}
+// The one-time import seeds (gym / course / equations, added 2026-08-10 to
+// carry data over from the pre-monorepo Atlas) are GONE, and deliberately.
+//
+// They fetched a fixture from public/ whenever the matching store looked empty
+// and wrote it straight into localStorage — which the sync hook then pushed. On
+// any device that booted with an empty store they raced the server pull and
+// won every time: bootApp() imports this module (starting the fetch) BEFORE
+// hydrateInBackground() even begins, and a 6KB local file always beats a
+// WebSocket round trip. The gym one did a full setItem replace, so it
+// overwrote the server's real gym blob with a fixture holding 0 logs,
+// 0 completions and cycle position 0 — destroying logged workout history.
+// Confirmed against the live database: the account's workouts were the
+// fixture's own gw-import1..7 ids, with every log and completion gone.
+//
+// The migration they existed for finished on 2026-08-10. Re-running one could
+// only ever destroy newer data, so the fixtures were deleted from public/ too.
+// ponytail: if a future import is needed, it must run AFTER the first pull
+// resolves and must merge rather than replace.
 // Navigating closes the mobile drawer (a same-route nav tap is handled in the
 // click delegate; this catches every other route change) before re-rendering.
 window.addEventListener('hashchange', () => { document.body.classList.remove('nav-open'); render() })
