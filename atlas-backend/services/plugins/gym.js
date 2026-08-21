@@ -4,7 +4,8 @@
 //   { v:1, workouts[], exercises[], logs[], completions[],
 //     plan:{type:'weekly'|'cycle', weekly:{day→workoutId|null},
 //           cycle:{order:[workoutId,...], position:int},
-//           overrides:{'YYYY-MM-DD'→workoutId|'skip'}},
+//           overrides:{'YYYY-MM-DD'→workoutId|'skip'},
+//           extras:{'YYYY-MM-DD'→[exerciseId,...]}},
 //     unit:'kg'|'lbs', address:'', hours:{day→{open,close}}, defaultDuration }
 //
 // IMPORTANT: the wire carries RAW localStorage — backup imports (renderer.js
@@ -123,6 +124,13 @@ CREATE TABLE IF NOT EXISTS gym.plan_overrides (
   PRIMARY KEY (user_id, date)            -- one deviation per day, last write wins
 );
 
+CREATE TABLE IF NOT EXISTS gym.plan_extras (
+  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  date        text NOT NULL,             -- 'YYYY-MM-DD'
+  exercise_id text NOT NULL,             -- soft ref, like gym.logs
+  ord         integer NOT NULL DEFAULT 0 -- add order within the day
+);
+
 CREATE TABLE IF NOT EXISTS gym.plan_cycle (
   user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   position   integer NOT NULL,           -- array index; duplicate workout_ids allowed
@@ -187,6 +195,12 @@ function normalizeGym(raw) {
         Object.entries(isObj(plan.overrides) ? plan.overrides : {})
           .filter(([d, v]) => typeof d === 'string' && d && typeof v === 'string' && v),
       ),
+      // date → [exerciseId]: exercises pulled into one day's session.
+      extras: Object.fromEntries(
+        Object.entries(isObj(plan.extras) ? plan.extras : {})
+          .map(([d, list]) => [d, (Array.isArray(list) ? list : []).filter(x => typeof x === 'string' && x)])
+          .filter(([d, list]) => typeof d === 'string' && d && list.length),
+      ),
     },
     unit: g.unit === 'lbs' ? 'lbs' : 'kg',
     address: typeof g.address === 'string' ? g.address : '',
@@ -213,6 +227,7 @@ const mapper = {
     'plan_weekly',
     'plan_cycle',
     'plan_overrides',
+    'plan_extras',
   ],
 
   decompose(raw) {
@@ -272,6 +287,9 @@ const mapper = {
         date,
         workout_id: g.plan.overrides[date],  // workout id or 'skip'
       })),
+      // flattened; ord preserves add order, and recompose regroups by date
+      plan_extras: Object.keys(g.plan.extras).flatMap(date =>
+        g.plan.extras[date].map(exercise_id => ({ date, exercise_id }))),
     }
   },
 
@@ -321,6 +339,10 @@ const mapper = {
         },
         // fromEntries so a hostile date key stays an own property
         overrides: Object.fromEntries(rows.plan_overrides.map(r => [r.date, r.workout_id])),
+        extras: rows.plan_extras.reduce((acc, r) => {
+          ;(acc[r.date] ||= []).push(r.exercise_id)
+          return acc
+        }, Object.create(null)),
       },
       unit: s.unit,
       address: s.address,

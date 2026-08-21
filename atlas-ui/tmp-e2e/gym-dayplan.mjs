@@ -17,9 +17,13 @@ const GYM = {
     { id: 'gw-pull', name: 'Pull' },
     { id: 'gw-legs', name: 'Legs' },
   ],
-  exercises: [{ id: 'ge-bench', workoutId: 'gw-push', name: 'Bench Press' }],
+  exercises: [
+    { id: 'ge-bench', workoutId: 'gw-push', name: 'Bench Press' },
+    { id: 'ge-pec', workoutId: 'gw-pull', name: 'Reverse Pec Deck' },
+    { id: 'ge-squat', workoutId: 'gw-legs', name: 'Squat' },
+  ],
   logs: [], completions: [],
-  plan: { type: 'cycle', weekly: {}, cycle: { order: ['gw-push', 'gw-pull', 'gw-legs'], position: 0 }, overrides: {} },
+  plan: { type: 'cycle', weekly: {}, cycle: { order: ['gw-push', 'gw-pull', 'gw-legs'], position: 0 }, overrides: {}, extras: {} },
   unit: 'lbs',
 }
 
@@ -32,7 +36,10 @@ const ctx = await b.newContext({
 await ctx.addInitScript((gym) => {
   localStorage.setItem('atlas.auth.v1', JSON.stringify({ offline: true }))
   localStorage.setItem('atlas.plugins.v1', JSON.stringify({ enabled: { gym: true }, installed: {} }))
-  localStorage.setItem('atlas.gym.v1', JSON.stringify(gym))
+  // Seed ONCE: addInitScript runs on every navigation, so an unconditional
+  // write would re-seed on reload and silently undo whatever the test just did
+  // — which is exactly how a real persistence bug would be hidden.
+  if (localStorage.getItem('atlas.gym.v1') === null) localStorage.setItem('atlas.gym.v1', JSON.stringify(gym))
   // The shell's own signal, so isMobile()/is-native-ios take the real iOS path.
   window.__ATLAS_NATIVE__ = { platform: 'ios' }
 }, GYM)
@@ -69,6 +76,31 @@ await page.waitForFunction(() => document.querySelector('.gym-big')?.textContent
 ok(true, 'undo returns to the planned workout')
 ok(await page.evaluate(() => JSON.parse(localStorage.getItem('atlas.gym.v1')).plan.cycle.position) === 0,
   'the cycle position survived skip + undo untouched')
+
+// --- add an exercise the day's workout doesn't own (busy machine) ---
+ok(await page.locator('select[data-gym-act="add-extra"]').count() === 1, 'the add-exercise control renders at the end of the workout')
+const before = await page.locator('.gym-exercise').count()
+await page.selectOption('select[data-gym-act="add-extra"]', 'ge-squat')
+await page.waitForFunction((n) => document.querySelectorAll('.gym-exercise').length === n + 1, before, { timeout: 5000 })
+ok(true, 'choosing one adds it to today\'s session')
+ok((await page.locator('.gym-exercise').last().innerText()).includes('Squat'), 'the added exercise lands at the END of the list')
+ok(await page.locator('.gym-extra').count() === 1, 'it is marked as added for today')
+ok(await page.locator('.gym-log-row[data-ex-id="ge-squat"] .gym-w').count() === 1, 'and it can be logged like any other')
+
+// it persists across a reload, and belongs to today only
+await page.reload({ waitUntil: 'domcontentloaded' })
+await page.waitForSelector('.gym-pick', { timeout: 15000 })
+ok((await page.locator('.gym-exercise').count()) === before + 1, 'the added exercise survives a reload')
+ok(await page.evaluate(() => {
+  const p = JSON.parse(localStorage.getItem('atlas.gym.v1')).plan
+  const days = Object.keys(p.extras || {})
+  return days.length === 1 && p.extras[days[0]].length === 1
+}), 'it is stored against one date only')
+
+// and can be taken back off
+await page.click('[data-gym-act="drop-extra"]')
+await page.waitForFunction((n) => document.querySelectorAll('.gym-exercise').length === n, before, { timeout: 5000 })
+ok(true, 'removing it returns the session to the planned exercises')
 
 // --- the picker must not overflow the phone's width ---
 const overflow = await page.evaluate(() => {

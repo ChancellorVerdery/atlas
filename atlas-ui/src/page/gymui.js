@@ -10,6 +10,7 @@ import {
   exerciseSeries, generalScore, generalSeries,
   currentWorkout, upcomingWorkouts, completeWorkout,
   SKIP, dayOverride, setDayOverride,
+  exercisesForDay, dayExtras, addDayExercise, removeDayExercise,
 } from './gym.js'
 import { lineChart } from './chart.js'
 import { confirmDelete } from './confirm.js'
@@ -89,8 +90,9 @@ export function gymWidgetHTML(w, cz, secCtx) {
       (cz ? '' : `<button type="button" class="btn-gym-complete" data-gym-act="complete">Complete rest day</button>`
         + dayPicker(g, ov))
   }
-  const exs = exercisesOf(g, w0.id)
   const today = todayKey()
+  const exs = exercisesForDay(g, w0.id, today)
+  const extras = new Set(dayExtras(g, today))
   const logRow = (e, side) => {
     const entry = logsFor(g, e.id, today, side)
     const sets = entry?.sets ?? []
@@ -118,10 +120,11 @@ export function gymWidgetHTML(w, cz, secCtx) {
   return head('Current workout') + `<div class="gym-big">${esc(w0.name)}</div>` +
     (exs.length ? exs.map((e) =>
       `<div class="gym-exercise">
-        <p class="gym-ex-title">${esc(e.name)}${e.target ? ` <span class="gym-target">${esc(e.target)}</span>` : ''}${e.unilateral ? ' <span class="gym-uni">L/R</span>' : ''}</p>
+        <p class="gym-ex-title">${esc(e.name)}${e.target ? ` <span class="gym-target">${esc(e.target)}</span>` : ''}${e.unilateral ? ' <span class="gym-uni">L/R</span>' : ''}${extras.has(e.id) && !cz ? ` <span class="gym-extra">added</span><button type="button" class="pw-item-remove" data-gym-act="drop-extra" data-ex-id="${esc(e.id)}" title="Remove from today">x</button>` : ''}</p>
         ${e.unilateral ? logRow(e, 'L') + logRow(e, 'R') : logRow(e, null)}
       </div>`
     ).join('') : `<p class="gym-empty">No exercises in this workout yet.</p>`) +
+    (cz ? '' : addExerciseRow(g, exs)) +
     (cz ? '' : `<div class="gym-times">
       <input class="pw-field gym-time-in" type="time" title="Session start" aria-label="Session start time">
       <span class="wk-or">→</span>
@@ -130,6 +133,24 @@ export function gymWidgetHTML(w, cz, secCtx) {
     </div>
     <button type="button" class="btn-gym-complete" data-gym-act="complete">Complete workout</button>`
     + dayPicker(g, ov))
+}
+
+// Swap in an exercise the day's workout doesn't own — the machine was busy, so
+// something else got done. Lists every OTHER exercise, grouped by its workout,
+// so the same name from a different day is still tellable apart.
+const addExerciseRow = (g, shown) => {
+  const have = new Set(shown.map((e) => e.id))
+  const rest = g.exercises.filter((e) => !have.has(e.id))
+  if (!rest.length) return ''
+  const nameOf = (id) => workoutById(g, id)?.name || 'Other'
+  return `<div class="gym-addex">
+    <select class="pw-field pw-field--select gym-addex-sel" data-gym-act="add-extra" aria-label="Add an exercise to today">
+      <option value="">+ Add an exercise to today…</option>
+      ${[...new Set(rest.map((e) => e.workoutId))].map((wid) =>
+        `<optgroup label="${esc(nameOf(wid))}">${rest.filter((e) => e.workoutId === wid)
+          .map((e) => `<option value="${esc(e.id)}">${esc(e.name)}</option>`).join('')}</optgroup>`).join('')}
+    </select>
+  </div>`
 }
 
 // Today only: do a different workout than the plan picked, or take the day off.
@@ -162,10 +183,17 @@ export function bindGym(rerender) {
 }
 
 function onGymChange(e) {
-  const sel = e.target.closest('select[data-gym-act="pick"]')
-  if (!sel) return
-  setDayOverride(loadGym(), sel.value || null)
-  rerenderApp?.()
+  const pick = e.target.closest('select[data-gym-act="pick"]')
+  if (pick) {
+    setDayOverride(loadGym(), pick.value || null)
+    rerenderApp?.()
+    return
+  }
+  const add = e.target.closest('select[data-gym-act="add-extra"]')
+  if (add && add.value) {
+    addDayExercise(loadGym(), add.value)
+    rerenderApp?.()
+  }
 }
 
 async function onGymClick(e) {
@@ -184,6 +212,9 @@ async function onGymClick(e) {
     } else if (a === 'del-set') {
       if (!(await confirmDelete('Delete this set?'))) return
       removeSetAt(loadGym(), act.dataset.exId, act.dataset.side || null, act.dataset.date, Number(act.dataset.idx))
+      rerenderApp?.()
+    } else if (a === 'drop-extra') {
+      removeDayExercise(g, act.dataset.exId)
       rerenderApp?.()
     } else if (a === 'skip') {
       setDayOverride(g, SKIP)

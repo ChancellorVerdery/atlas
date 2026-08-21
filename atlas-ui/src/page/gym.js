@@ -57,6 +57,16 @@ export function loadGym() {
     const known = v === SKIP || g.workouts.some((w) => w.id === v)
     if (typeof v !== 'string' || !known || date < cutoff) delete g.plan.overrides[date]
   }
+  // Exercises pulled into a single day's session that the workout doesn't own —
+  // the machine was busy, so something else got done instead. Same date-keyed,
+  // self-pruning shape as overrides.
+  if (!isObj(g.plan.extras)) g.plan.extras = {}
+  for (const [date, list] of Object.entries(g.plan.extras)) {
+    const kept = (Array.isArray(list) ? list : [])
+      .filter((id) => typeof id === 'string' && g.exercises.some((e) => e.id === id))
+    if (!kept.length || date < cutoff) delete g.plan.extras[date]
+    else g.plan.extras[date] = [...new Set(kept)]
+  }
   g.unit = g.unit === 'lbs' ? 'lbs' : 'kg'
   if (typeof g.address !== 'string') g.address = '' // gym location, used by the Ladder planner
   // Per-weekday open/close — the gym's actual hours, not a preferred window.
@@ -117,6 +127,38 @@ export function removeExercise(g, id) {
 export const workoutById = (g, id) => g.workouts.find((w) => w.id === id)
 export const exerciseById = (g, id) => g.exercises.find((e) => e.id === id)
 export const exercisesOf = (g, workoutId) => g.exercises.filter((e) => e.workoutId === workoutId)
+
+// ---- one-day extra exercises -------------------------------------------------
+// A session is the workout's own exercises PLUS anything added for that date.
+// Extras are appended in the order they were added, after the planned ones, and
+// an exercise already in the workout is never duplicated.
+export const dayExtras = (g, date = todayKey()) => g.plan.extras?.[date] ?? []
+
+export function exercisesForDay(g, workoutId, date = todayKey()) {
+  const planned = exercisesOf(g, workoutId)
+  const have = new Set(planned.map((e) => e.id))
+  const extra = dayExtras(g, date)
+    .filter((id) => !have.has(id))
+    .map((id) => exerciseById(g, id))
+    .filter(Boolean)
+  return [...planned, ...extra]
+}
+
+export function addDayExercise(g, exerciseId, date = todayKey()) {
+  if (!exerciseById(g, exerciseId)) return g
+  const list = g.plan.extras[date] ?? []
+  if (!list.includes(exerciseId)) g.plan.extras[date] = [...list, exerciseId]
+  saveGym(g)
+  return g
+}
+
+export function removeDayExercise(g, exerciseId, date = todayKey()) {
+  const list = (g.plan.extras[date] ?? []).filter((id) => id !== exerciseId)
+  if (list.length) g.plan.extras[date] = list
+  else delete g.plan.extras[date]
+  saveGym(g)
+  return g
+}
 
 // ---- logging ----------------------------------------------------------------
 

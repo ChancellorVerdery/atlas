@@ -15,8 +15,9 @@ globalThis.localStorage = {
 }
 
 const {
-  loadGym, saveGym, addWorkout, currentWorkout, completeWorkout,
+  loadGym, saveGym, addWorkout, addExercise, currentWorkout, completeWorkout,
   plannedWorkoutFor, setDayOverride, dayOverride, todayKey, SKIP,
+  exercisesForDay, dayExtras, addDayExercise, removeDayExercise,
 } = await import('../src/page/gym.js')
 
 const NOW = new Date(2026, 7, 21) // a Friday
@@ -119,6 +120,73 @@ check('overrides older than the keep window are pruned', () => {
   const reloaded = loadGym()
   assert.equal(dayOverride(reloaded, old), null, 'an ancient override should be gone')
   assert.equal(dayOverride(reloaded, recent), legs.id, 'a recent one should survive')
+})
+
+// ---- one-day extra exercises ------------------------------------------------
+
+const withExercises = () => {
+  const { g, push, pull, legs } = cycleGym()
+  const bench = addExercise(g, push.id, 'Bench Press')
+  const row = addExercise(g, pull.id, 'Reverse Pec Deck')
+  const squat = addExercise(g, legs.id, 'Squat')
+  saveGym(g)
+  return { g, push, pull, legs, bench, row, squat }
+}
+
+check('a day session is the workout exercises until something is added', () => {
+  const { g, push, bench } = withExercises()
+  const day = exercisesForDay(g, push.id, todayKey(NOW))
+  assert.deepEqual(day.map((e) => e.id), [bench.id])
+})
+
+check('an added exercise joins today only, after the planned ones', () => {
+  const { g, push, bench, squat } = withExercises()
+  addDayExercise(g, squat.id, todayKey(NOW))
+  const day = exercisesForDay(g, push.id, todayKey(NOW))
+  assert.deepEqual(day.map((e) => e.id), [bench.id, squat.id], 'extras append after planned')
+  const tomorrow = todayKey(new Date(2026, 7, 22))
+  assert.deepEqual(exercisesForDay(g, push.id, tomorrow).map((e) => e.id), [bench.id],
+    'the extra belongs to that day only')
+})
+
+check('adding an exercise the workout already has does not duplicate it', () => {
+  const { g, push, bench } = withExercises()
+  addDayExercise(g, bench.id, todayKey(NOW))
+  assert.deepEqual(exercisesForDay(g, push.id, todayKey(NOW)).map((e) => e.id), [bench.id])
+})
+
+check('adding the same extra twice is idempotent', () => {
+  const { g, push, squat } = withExercises()
+  addDayExercise(g, squat.id, todayKey(NOW))
+  addDayExercise(g, squat.id, todayKey(NOW))
+  assert.deepEqual(dayExtras(g, todayKey(NOW)), [squat.id])
+})
+
+check('an extra can be taken back off', () => {
+  const { g, push, bench, squat } = withExercises()
+  addDayExercise(g, squat.id, todayKey(NOW))
+  removeDayExercise(g, squat.id, todayKey(NOW))
+  assert.deepEqual(exercisesForDay(g, push.id, todayKey(NOW)).map((e) => e.id), [bench.id])
+  assert.deepEqual(dayExtras(g, todayKey(NOW)), [])
+})
+
+check('an extra naming a deleted exercise is dropped on load', () => {
+  const { g, squat } = withExercises()
+  addDayExercise(g, squat.id, todayKey(NOW))
+  g.exercises = g.exercises.filter((e) => e.id !== squat.id)
+  saveGym(g)
+  assert.deepEqual(dayExtras(loadGym(), todayKey(NOW)), [], 'a dangling extra must not survive')
+})
+
+check('extras older than the keep window are pruned', () => {
+  const { g, squat } = withExercises()
+  const old = todayKey(new Date(Date.now() - 200 * 86400000))
+  const recent = todayKey(new Date(Date.now() - 3 * 86400000))
+  addDayExercise(g, squat.id, old)
+  addDayExercise(g, squat.id, recent)
+  const reloaded = loadGym()
+  assert.deepEqual(dayExtras(reloaded, old), [], 'an ancient extra should be gone')
+  assert.deepEqual(dayExtras(reloaded, recent), [squat.id], 'a recent one should survive')
 })
 
 console.log(failures ? `\n${failures} failed` : '\ngym-plan.check: all good')
