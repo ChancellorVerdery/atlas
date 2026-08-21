@@ -3,7 +3,8 @@
 // Blob shape (see atlas-ui/src/page/gym.js loadGym()):
 //   { v:1, workouts[], exercises[], logs[], completions[],
 //     plan:{type:'weekly'|'cycle', weekly:{day→workoutId|null},
-//           cycle:{order:[workoutId,...], position:int}},
+//           cycle:{order:[workoutId,...], position:int},
+//           overrides:{'YYYY-MM-DD'→workoutId|'skip'}},
 //     unit:'kg'|'lbs', address:'', hours:{day→{open,close}}, defaultDuration }
 //
 // IMPORTANT: the wire carries RAW localStorage — backup imports (renderer.js
@@ -114,6 +115,14 @@ CREATE TABLE IF NOT EXISTS gym.plan_weekly (
   PRIMARY KEY (user_id, day)
 );
 
+CREATE TABLE IF NOT EXISTS gym.plan_overrides (
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  date       text NOT NULL,              -- 'YYYY-MM-DD'
+  workout_id text NOT NULL,              -- a workout id, or the literal 'skip'
+  ord        integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, date)            -- one deviation per day, last write wins
+);
+
 CREATE TABLE IF NOT EXISTS gym.plan_cycle (
   user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   position   integer NOT NULL,           -- array index; duplicate workout_ids allowed
@@ -171,6 +180,13 @@ function normalizeGym(raw) {
         order: Array.isArray(cycle.order) ? cycle.order : [],
         position: Number.isInteger(cycle.position) ? cycle.position : 0,
       },
+      // Per-date deviations: 'skip' or a workout id. Shape-validated only —
+      // the CLIENT prunes dangling ids and stale dates on load, because that
+      // pruning is time-based and the server's clock is not the user's.
+      overrides: Object.fromEntries(
+        Object.entries(isObj(plan.overrides) ? plan.overrides : {})
+          .filter(([d, v]) => typeof d === 'string' && d && typeof v === 'string' && v),
+      ),
     },
     unit: g.unit === 'lbs' ? 'lbs' : 'kg',
     address: typeof g.address === 'string' ? g.address : '',
@@ -196,6 +212,7 @@ const mapper = {
     'completions',
     'plan_weekly',
     'plan_cycle',
+    'plan_overrides',
   ],
 
   decompose(raw) {
@@ -251,6 +268,10 @@ const mapper = {
         position: i,
         workout_id: workoutId ?? null,       // null entries are loader-valid
       })),
+      plan_overrides: Object.keys(g.plan.overrides).map(date => ({
+        date,
+        workout_id: g.plan.overrides[date],  // workout id or 'skip'
+      })),
     }
   },
 
@@ -298,6 +319,8 @@ const mapper = {
           order: rows.plan_cycle.map(r => r.workout_id),
           position: s.cycle_position,
         },
+        // fromEntries so a hostile date key stays an own property
+        overrides: Object.fromEntries(rows.plan_overrides.map(r => [r.date, r.workout_id])),
       },
       unit: s.unit,
       address: s.address,
