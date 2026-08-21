@@ -68,17 +68,30 @@ export const resetNotesRoot = () => post('/icloud/notes/root/reset', {})
 // On Apple devices (isNative) STORAGE is the app's iCloud container via the
 // native LocalServer /icloud/notes/* endpoints — same JSON shape, so notesui
 // stays unchanged; web/macOS-dev keeps the /notes-api sidecar.
+// A 200 whose body is not the shape above still has to be rejected HERE. An
+// SPA fallback page or a proxy error page parses to {} via the .catch, sails
+// past the r.ok check, and only fails later inside renderTree — which showed
+// the user the raw "undefined is not an object (evaluating 'pg.tree.notes.
+// length')". Validating at the boundary means loadTree's existing catch can
+// render something a person can act on, and no call site needs its own guard.
+const asTree = (j, status) => {
+  if (!j || !Array.isArray(j.notes) || !Array.isArray(j.dirs)) {
+    throw new Error(`notes folder could not be read — unexpected response (${status})`)
+  }
+  return j
+}
+
 export async function fetchTree(dir) {
   if (isNative()) {
     const r = await fetch('/icloud/notes/tree')
     const j = await r.json().catch(() => ({}))
     if (!r.ok) throw new Error(j.error || `tree failed (${r.status})`)
-    return j
+    return asTree(j, r.status)
   }
   const r = await fetch(`/notes-api/tree?${q(dir)}`)
   const j = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(j.error || `tree failed (${r.status})`)
-  return j
+  return asTree(j, r.status)
 }
 
 // A saved note's markdown text. Native reads it from iCloud by relative path;

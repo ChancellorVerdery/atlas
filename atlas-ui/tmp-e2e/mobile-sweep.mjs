@@ -85,11 +85,32 @@ const SEED = {
     scale: 'plusminus', credits: {}, semesters: [], dismissed: [], hiddenCourses: [], labels: {}, scales: {},
   },
   'atlas.ai.v1': { providers: { claude: { oauth: { access: 'layout-audit-not-a-real-token', expires: 4102444800000 } } } },
+  // Study, Flashcards and Notes render course tabs / a file tree, so with no
+  // tabs and no folder they paint an empty state and the sweep audits nothing.
+  // A first pass scored all three as clean purely because they were blank.
+  'atlas.study.v1': { tabs: [
+    { id: 't-phys', name: 'Physics II', chat: [
+      { role: 'you', text: 'Explain Gauss law' },
+      { role: 'tutor', text: 'The flux through a closed surface is proportional to the enclosed charge.' }],
+      questions: [{ id: 'q1', prompt: 'A point charge sits at the centre of a sphere. What is the flux?',
+        choices: ['Zero', 'q over epsilon-nought', 'Proportional to the radius', 'Undefined'],
+        answer: 1, category: 'Gauss', explanation: 'Flux depends only on enclosed charge.' }] },
+    { id: 't-calc', name: 'Calculus III', chat: [], questions: [] },
+  ], active: 't-phys' },
+  'atlas.flashcards.v1': { tabs: [
+    { id: 'f-phys', name: 'Physics II', cards: [
+      { id: 'c1', front: 'Gauss law', back: 'Flux is proportional to enclosed charge', box: 0, due: '' },
+      { id: 'c2', front: 'Coulomb constant', back: '8.99e9 N m^2 / C^2', box: 1, due: '' }] },
+  ], active: 'f-phys' },
+  'atlas.notes.v1': { dir: process.env.ATLAS_NOTES_DIR || '', lastSubdir: '', openDirs: ['Physics'] },
 }
 
 const b = await webkit.launch({ headless: true })
+// Defaults to iPhone 17 Pro; ATLAS_VP=375x667 checks the narrow end (SE/mini),
+// which is where a layout that merely fits at 402 tends to give out.
+const [VW, VH] = (process.env.ATLAS_VP || '402x874').split('x').map(Number)
 const ctx = await b.newContext({
-  viewport: { width: 402, height: 874 }, // iPhone 17 Pro CSS px
+  viewport: { width: VW, height: VH },
   deviceScaleFactor: 3,
   hasTouch: true,
 })
@@ -99,7 +120,12 @@ await ctx.addInitScript(({ plugins, seed }) => {
     enabled: Object.fromEntries(plugins.map((p) => [p, true])), installed: {},
   }))
   for (const [k, v] of Object.entries(seed)) localStorage.setItem(k, JSON.stringify(v))
-  window.__ATLAS_NATIVE__ = { platform: 'ios' } // the shell's own signal
+  // The shell's own signal. Skipped for Notes: fetchTree branches on isNative()
+  // and calls /icloud/notes/tree, which only the Swift LocalServer serves — a
+  // dev server answers with its SPA fallback, so the tree never renders and the
+  // route gets audited empty. body.is-mobile still applies at this width, which
+  // is what the layout actually keys off; Notes-on-native is the simulator's job.
+  if (!location.hash.startsWith('#/notes')) window.__ATLAS_NATIVE__ = { platform: 'ios' }
 }, { plugins: PLUGINS, seed: SEED })
 
 // Runs in the page. Returns findings for the CURRENT DOM, so it can be called
