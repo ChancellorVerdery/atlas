@@ -2705,7 +2705,7 @@ html[data-page="study"].st-fit .st-view, html[data-page="flashcards"].st-fit .st
 #nav-toggle { display: none; }
 body.is-mobile #nav-toggle {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; flex: none;
+  width: 44px; height: 44px; flex: none;
   border: 1px solid var(--line-2); border-radius: 10px;
   background: rgba(var(--ink-rgb), 0.03); color: var(--ink-dim); cursor: pointer;
 }
@@ -2829,13 +2829,16 @@ body.is-mobile .modal-overlay { padding: 12px; }
 body.is-mobile .modal { max-width: 96vw; max-height: 92vh; padding: 20px 18px; overflow: auto; }
 /* tap targets */
 body.is-mobile .action-btn,
-body.is-mobile .mail-btn { min-height: 40px; }
-/* Delete/close X's: 40px hit box on mobile (the broken-X root cause was a hit
-   area smaller than a fingertip). Scoped to mobile so desktop X's stay small. */
+body.is-mobile .mail-btn { min-height: 44px; }
+/* Delete/close X's: 44pt hit box on mobile (Apple HIG minimum — the broken-X
+   root cause was a hit area smaller than a fingertip). Scoped to mobile so
+   desktop X's stay small. .pw-delete (widget-corner delete) has its own,
+   later, more specific override further down that keeps IT at 30px — an
+   overhang risk documented there — so this bump doesn't reach it. */
 body.is-mobile .pw-item-remove,
 body.is-mobile .pw-delete,
 body.is-mobile .st-tab__x,
-body.is-mobile .nt-chip__x { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+body.is-mobile .nt-chip__x { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 /* Settings rows stack on mobile so the action button never overlaps the
    description text (side-by-side .set-row was colliding at phone width). */
 body.is-mobile .set-row { flex-direction: column; align-items: stretch; gap: 10px; }
@@ -2887,3 +2890,148 @@ body.is-mobile .page-tabs { flex-wrap: wrap; gap: 8px; }
 /* The widget delete sits on the widget's corner — a 40px circle there overhangs
    into the neighbouring widget, so keep it modest and tuck it back in. */
 body.is-mobile .pw-delete { min-width: 30px; min-height: 30px; width: 30px; height: 30px; top: -6px; right: -6px; }
+
+/* ==== Mobile tap targets (44pt) ============================================
+   Apple's HIG wants a 44x44pt minimum hit area. A WebKit sweep of all mobile
+   routes found controls well under that — some in both dimensions, which are
+   genuinely hard to hit with a finger. Two techniques, chosen per control:
+
+   1. Real resize — min-width/min-height (or just min-height for a form
+      field) actually grows the painted box. Only used where growing it is
+      harmless or is already the mobile idiom (a taller select/button) or
+      matches a resize this file already made for the same reason (the X
+      buttons below were already bumped once for exactly this).
+
+   2. Invisible hit-area — a transparent ::before/::after, absolutely
+      positioned and centred over the control, sized up to 44px without
+      changing the element's own box. Used wherever the real fix would
+      change how the control *looks* (an icon, a star, a pill whose modest
+      size was a deliberate choice elsewhere in this file) — the painted
+      size the eye sees stays exactly the same; only the invisible catchment
+      around it grows. getBoundingClientRect() (what any automated size
+      sweep measures) can't see this — it only sees the real box — so this
+      is verified by simulating a tap in the enlarged-but-invisible zone,
+      not by the sweep's raw numbers.
+      ::after is already spoken for by a couple of these controls (the
+      checkbox checkmark), so those use ::before instead — same effect. */
+
+/* Star rating (sleep log): 5 stars ~18px apart. A full 44px-wide hit zone
+   per star would overlap its neighbours enough to make adjacent stars hard
+   to select independently, so only height is expanded here (there's no
+   control above/below to collide with); width intentionally stays at the
+   star's own painted width. Ceiling: the star's clickable width stays
+   ~17px — fixing that would mean spacing the stars out, a layout change,
+   not a tap-target one. */
+body.is-mobile .sl-star { position: relative; }
+body.is-mobile .sl-star::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%;
+  height: 44px; transform: translateY(-50%);
+}
+
+/* Checkboxes (custom-drawn, appearance:none — see the .gym-check rule up top)
+   are 16x16. ::after already draws the checkmark, so the hit area uses
+   ::before instead; it's empty/transparent so it never overlaps the
+   checkmark visually. Each checkbox sits inside a <label> with its own text
+   ("Rest day", "L/R", …) and an 8px gap to its neighbour, and 44px reaches
+   at most 14px past the checkbox's own edges — that lands inside the same
+   label's text or the gap, never on the next control. */
+body.is-mobile .gym-check input[type="checkbox"]::before,
+body.is-mobile .fin-ex-check::before {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%);
+}
+
+/* Mail toolbar icon buttons: 30x30, no pseudo-element in use, so ::after is
+   free. Toolbar gap is 10px; 44px reaches 7px past each edge, so adjacent
+   icons' zones touch by a couple of px in the middle of the gap — never
+   reaching the neighbouring icon's own painted box. */
+body.is-mobile .mail-iconbtn { position: relative; }
+body.is-mobile .mail-iconbtn::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%);
+}
+
+/* Gym-style buttons (.gym-btn / .gym-btn--ghost): the narrowest is 48px wide,
+   already over 44, so only height (29px) needs help — a full-width band
+   keeps the hit zone inside the button's own footprint, so two buttons in
+   the same row (e.g. "Add to cycle" + "Reset position") never bleed into
+   each other regardless of the gap between them. */
+body.is-mobile .gym-btn { position: relative; }
+body.is-mobile .gym-btn::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%;
+  height: 44px; transform: translateY(-50%);
+}
+/* .gym-btn--sm is the exception: pagination arrows ("‹"/"›", 27px) and short
+   pill buttons (43px) are both under 44 in width too, so this overrides the
+   band above with a full centred box. The arrows sit far from any other
+   control (a text span, not another button, is their nearest neighbour);
+   where a --sm button sits directly beside a .pw-item-remove "×" (e.g. the
+   shift row's Edit + Delete), the × is a later, real 44px box in normal
+   flow, so it always paints on top of any reach from this invisible
+   overlay — a stray tap in that sliver can only ever hit the ×, never
+   misfire the wrong control. */
+body.is-mobile .gym-btn--sm::after {
+  left: 50%; right: auto; width: 44px; transform: translate(-50%, -50%);
+}
+
+/* Settings toggle switch: track is 42x24, and .switch already has its own
+   position:relative (base rule, not mobile-only) for the sliding dot. */
+body.is-mobile .switch::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%);
+}
+
+/* Formal roommate planner: "duplicate house" icon button, 20x23, sits beside
+   a text input with nothing else nearby. */
+body.is-mobile .fm-dup { position: relative; }
+body.is-mobile .fm-dup::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%);
+}
+
+/* Page tabs, income-range pills, theme-mode pills: all comfortably wider
+   than 44px already (64px+), only short (23-34px), and each already has a
+   documented reason to stay visually compact (the .page-tab rule above says
+   so explicitly). A full-width band, like the gym-btn one above, can't
+   reach a neighbour since it never exceeds the control's own width. */
+body.is-mobile .page-tab,
+body.is-mobile .wk-pill,
+body.is-mobile .set-theme__mode { position: relative; }
+body.is-mobile .page-tab::after,
+body.is-mobile .wk-pill::after,
+body.is-mobile .set-theme__mode::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%;
+  height: 44px; transform: translateY(-50%);
+}
+
+/* Selects: 20-22px tall is a real miss, and a taller select is the normal
+   mobile idiom (no visual downside), so this is a genuine resize rather
+   than a hit-area trick. `height`, not `min-height` — WebKit's native
+   <select> (appearance:auto, kept native on purpose — see the :root comment
+   at the top of this file) sizes itself off font metrics and ignores
+   min-height entirely; only an explicit height actually grows it. Excludes
+   the two that sit in tight, already-compact rows next to much smaller
+   controls, where 44px would look oversized: .pw-field--sm (the
+   shift-history "N / page" picker, inline beside the ‹/› pagination arrows)
+   and .sl-type (the sleep log's Night/Nap picker, inline beside the
+   date/time fields and the star row). */
+body.is-mobile select.pw-field:not(.pw-field--sm):not(.sl-type) { height: 44px; }
+
+/* Full-width "complete workout" button: 38px is a near-miss on an
+   already-100%-wide block button — raising it is free. */
+body.is-mobile .btn-gym-complete { min-height: 44px; }
+
+/* ponytail: left as near-misses, not touched — raising them would bloat
+   already-dense settings forms for a few px of gain:
+   - input.pw-field / input.pw-field.wk-num (35-39px): the generic text/
+     date/number fields used throughout gym, work, ladder, sleep, formal
+     settings. Case-by-case there are dozens of these; all sit in tight rows
+     with labels or other fields, and every one is within 9px of 44.
+   - .cal-view-pill / "New event": the calendar toolbar already has a
+     pre-existing, unrelated overflow bug at 402px width (Week/Day pills and
+     the New-event button run past the viewport edge) — out of scope for a
+     tap-target pass, and not a good place to add more sizing changes.
+   - the two inline <a> links inside settings prose ("Work → Settings",
+     "Gym → Settings"): plain text-flow links inside a paragraph, not in the
+     both-dimensions-under-44 set, and not worth the inline-pseudo-element
+     complexity for two low-traffic links. */
