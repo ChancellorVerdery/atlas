@@ -3,7 +3,7 @@
 // Customize mode (src/page/customize.js) live-edits the page in place.
 
 import { sync } from './sync.js'
-import { loadPage, loadPageMobile, findWidget, uid } from './page/model.js'
+import { loadPage, loadPageMobile, pageKeyFor, findWidget, uid } from './page/model.js'
 import { renderPageInto, observeCharts, renderMath, fitEquations, pageHasHiddenAll } from './page/view.js'
 import { enterCustomize, exitCustomize, paletteHTML } from './page/customize.js'
 import { PAGES, pageById, activePages, saveNavOrder } from './page/pages.js'
@@ -627,7 +627,12 @@ function render() {
     if ((!page.rows.length || pageHasHiddenAll(page)) && !customizing) content.innerHTML = emptyDash(r.def)
     else {
       const anchor = captureScrollAnchor(content)
-      renderPageInto(content, page, customizing, r.def.storageKey)
+      // The key must name the board actually on screen: `page` above came from
+      // the .mobile key on a phone, and view.js's drawChart re-reads the model
+      // by this key to find each chart's widget. Passing the desktop key there
+      // meant every chart lookup missed on mobile and silently drew nothing —
+      // same trap customize.js documents at pageNow().
+      renderPageInto(content, page, customizing, pageKeyFor(r.def.storageKey))
       restoreScrollAnchor(content, anchor)
     }
   }
