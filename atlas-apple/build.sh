@@ -11,6 +11,14 @@ cd "$(dirname "$0")"
 
 (cd ../atlas-ui && npm run build && node scripts/gen-manifest.mjs)
 
+# Xcode copies dist/ as a FOLDER REFERENCE, and that copy is additive: a file
+# deleted from dist/ stays in the previously built .app forever. That is how a
+# retired public/gym-import.json — deleted for destroying real workout history —
+# kept shipping inside the app after the repo no longer had it, with the bundle
+# serving a file its own manifest didn't list. Drop the copied dist so every
+# build re-copies it exactly; object files are untouched, so this is cheap.
+find build build-device build-test -type d -path '*/Atlas.app/*' -name dist -prune -exec rm -rf {} + 2>/dev/null || true
+
 case "${1:-mac}" in
   mac)
     xcodebuild -project Atlas.xcodeproj -scheme Atlas -configuration Release \
