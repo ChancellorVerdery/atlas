@@ -55,6 +55,7 @@ CREATE SCHEMA IF NOT EXISTS work;
       open_ended boolean NOT NULL DEFAULT false,
       address    text NOT NULL DEFAULT '',
       cal_id     text NOT NULL DEFAULT '',
+      job_type   text NOT NULL DEFAULT 'shift',  -- 'shift' | 'salary' (mapper normalizes)
       ord        integer NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS work.shifts (
@@ -87,16 +88,32 @@ CREATE SCHEMA IF NOT EXISTS work;
       ord       integer NOT NULL DEFAULT 0,
       PRIMARY KEY (user_id, widget_id)
     );
+    -- shifts-per-page in each history widget (state.histPer: widgetId → number).
+    -- Same per-widget shape as widget_ranges; numeric because the loader only
+    -- ever reads it through Number().
+    CREATE TABLE IF NOT EXISTS work.widget_hist_per (
+      user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+      widget_id text NOT NULL,
+      per       numeric,
+      ord       integer NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, widget_id)
+    );
+    -- CREATE TABLE IF NOT EXISTS is a NO-OP on a table that already exists, so
+    -- a column added to an existing schema needs its own idempotent ALTER or it
+    -- silently never appears and every save fails on checkInsertTargets.
+    ALTER TABLE work.settings
+      ADD COLUMN IF NOT EXISTS job_type text NOT NULL DEFAULT 'shift';
   `,
 
   // No FKs between these tables; settings first for readability.
-  tables: ['settings', 'shifts', 'upcoming', 'widget_ranges'],
+  tables: ['settings', 'shifts', 'upcoming', 'widget_ranges', 'widget_hist_per'],
 
   decompose(state) {
     const wage = Number(state.wage) // loader keeps numeric strings; the column coerces anyway
     const shifts = (Array.isArray(state.shifts) ? state.shifts : []).filter(isObj)
     const upcoming = (Array.isArray(state.upcoming) ? state.upcoming : []).filter(isObj)
     const ranges = isObj(state.ranges) && !Array.isArray(state.ranges) ? state.ranges : {}
+    const histPer = isObj(state.histPer) && !Array.isArray(state.histPer) ? state.histPer : {}
     return {
       settings: [{
         wage: Number.isFinite(wage) ? wage : 0,
@@ -104,6 +121,8 @@ CREATE SCHEMA IF NOT EXISTS work;
         open_ended: !!state.openEnded,
         address: typeof state.address === 'string' ? state.address : '',
         cal_id: typeof state.calId === 'string' ? state.calId : '',
+        // loader's own gate: anything but 'salary' normalizes to 'shift'
+        job_type: state.jobType === 'salary' ? 'salary' : 'shift',
       }],
       shifts: shifts.map(sh => ({
         id: opt(sh.id),
@@ -123,6 +142,10 @@ CREATE SCHEMA IF NOT EXISTS work;
         end_mode: opt(sh.endMode),
         gcal_id: opt(sh.gcalId),
       })),
+      widget_hist_per: Object.entries(histPer).map(([widget_id, per]) => ({
+        widget_id,
+        per: Number.isFinite(Number(per)) ? Number(per) : null,
+      })),
       widget_ranges: Object.entries(ranges).map(([widget_id, period]) => ({
         widget_id,
         period: opt(period),
@@ -136,6 +159,7 @@ CREATE SCHEMA IF NOT EXISTS work;
       wage: st.wage,
       tips: st.tips,
       openEnded: st.open_ended,
+      jobType: st.job_type,
       shifts: rows.shifts.map(r => {
         const sh = {}
         put(sh, 'id', r.id)
@@ -148,6 +172,7 @@ CREATE SCHEMA IF NOT EXISTS work;
         return sh
       }),
       ranges: Object.fromEntries(rows.widget_ranges.map(r => [r.widget_id, r.period])),
+      histPer: Object.fromEntries(rows.widget_hist_per.map(r => [r.widget_id, r.per])),
       upcoming: rows.upcoming.map(r => {
         const sh = {}
         put(sh, 'id', r.id)
