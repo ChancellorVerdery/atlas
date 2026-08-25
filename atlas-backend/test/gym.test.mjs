@@ -42,6 +42,8 @@ const defaults = {
     type: 'weekly',
     weekly: allDays(() => null),
     cycle: { order: [], position: 0 },
+    overrides: {},
+    extras: {},
   },
   unit: 'kg',
   address: '',
@@ -80,6 +82,8 @@ const rich = {
     type: 'cycle',
     weekly: { mon: 'gw-aaa11', tue: null, wed: 'gw-ddd44', thu: null, fri: 'gw-aaa11', sat: null, sun: null },
     cycle: { order: ['gw-aaa11', 'gw-ddd44', 'gw-bbb22', 'gw-aaa11'], position: 2 },  // duplicate entry allowed
+    overrides: {},
+    extras: {},
   },
   unit: 'lbs',
   address: '123 Straße Ω, Kraków 🏋️',
@@ -133,6 +137,8 @@ const real = {
     type: 'weekly',
     weekly: { mon: 'gw-push1', tue: 'gw-pull1', wed: null, thu: 'gw-legs1', fri: 'gw-push1', sat: 'gw-rest1', sun: null },
     cycle: { order: ['gw-push1', 'gw-pull1', 'gw-legs1'], position: 1 },  // kept even while type=weekly
+    overrides: {},
+    extras: {},
   },
   unit: 'kg',
   address: '400 Gym St, Springfield',
@@ -225,11 +231,11 @@ normTrip(
   'plan cycle: null order entry + non-integer position',
   {
     ...defaults,
-    plan: { type: 'cycle', weekly: allDays(() => null), cycle: { order: ['gw-1', null, 'gw-1'], position: 1.5 } },
+    plan: { type: 'cycle', weekly: allDays(() => null), cycle: { order: ['gw-1', null, 'gw-1'], position: 1.5 }, overrides: {}, extras: {} },
   },
   {
     ...defaults,
-    plan: { type: 'cycle', weekly: allDays(() => null), cycle: { order: ['gw-1', null, 'gw-1'], position: 0 } },
+    plan: { type: 'cycle', weekly: allDays(() => null), cycle: { order: ['gw-1', null, 'gw-1'], position: 0 }, overrides: {}, extras: {} },
   },
 )
 
@@ -281,6 +287,46 @@ normTrip(
   { ...defaults, completions: [{ workoutId: 'gw-1', date: 'someday', ts: 'abc', start: '', end: '' }, {}] },
   { ...defaults, completions: [{ workoutId: 'gw-1', date: 'someday', start: '', end: '' }, {}] },
 )
+
+// ---- 5. per-date deviations from the plan ------------------------------------
+// A day picked by hand instead of the one the rotation planned. There was NO
+// coverage of this at all — the file's expected defaults predated the feature,
+// so every assertion here stopped running the day it shipped.
+
+roundTrip('plan overrides + extras survive the round trip', {
+  ...defaults,
+  workouts: [{ id: 'gw-push1', name: 'Push' }, { id: 'gw-legs1', name: 'Legs' }],
+  exercises: [{ id: 'ge-sq', workoutId: 'gw-legs1', name: 'Squat' }],
+  plan: {
+    type: 'cycle',
+    weekly: allDays(() => null),
+    cycle: { order: ['gw-push1', 'gw-legs1'], position: 0 },
+    // a swapped day, a skipped day, and one kept alongside them
+    overrides: { '2026-08-25': 'gw-legs1', '2026-08-24': 'skip', '2026-08-23': 'gw-push1' },
+    extras: { '2026-08-25': ['ge-sq'], '2026-08-23': ['ge-sq', 'ge-sq'] },
+  },
+})
+
+// Server-side normalization is shape-only on purpose: pruning dangling ids and
+// stale dates is the CLIENT's job, because it is time-based and the server's
+// clock is not the user's. An unknown id must therefore come back untouched.
+roundTrip('an override naming a deleted workout is NOT dropped server-side', {
+  ...defaults,
+  plan: { ...defaults.plan, overrides: { '2026-08-25': 'gw-deleted' } },
+})
+
+// A '__proto__' date key must stay an own property, like weekly/hours.
+{
+  const evil = JSON.parse('{"plan":{"overrides":{"__proto__":"gw-evil"},"extras":{"__proto__":["ge-evil"]}}}')
+  const back = mapper.recompose(simulatePg(mapper.decompose(evil)))
+  if (Object.getPrototypeOf(back.plan.overrides) !== Object.prototype) throw new Error('overrides prototype replaced')
+  if (Object.getPrototypeOf(back.plan.extras) !== Object.prototype) throw new Error('extras prototype replaced')
+  const oOwn = Object.getOwnPropertyDescriptor(back.plan.overrides, '__proto__')
+  const eOwn = Object.getOwnPropertyDescriptor(back.plan.extras, '__proto__')
+  deepStrictEqual(oOwn && oOwn.value, 'gw-evil', '__proto__ override entry kept')
+  deepStrictEqual(eOwn && eOwn.value, ['ge-evil'], '__proto__ extras entry kept')
+  console.log('  pass: __proto__ date keys stay own properties (overrides/extras)')
+}
 
 // Sanity: decompose leaves the runner room to stamp user_id/ord.
 for (const [t, rowsArr] of Object.entries(mapper.decompose(rich))) {

@@ -339,10 +339,14 @@ const mapper = {
         },
         // fromEntries so a hostile date key stays an own property
         overrides: Object.fromEntries(rows.plan_overrides.map(r => [r.date, r.workout_id])),
-        extras: rows.plan_extras.reduce((acc, r) => {
-          ;(acc[r.date] ||= []).push(r.exercise_id)
-          return acc
-        }, Object.create(null)),
+        // Grouped through a Map, then fromEntries — same reason as overrides
+        // above: a hostile date key stays a plain own property, and the result
+        // is an ordinary object, which is what loadGym() produces client-side.
+        extras: Object.fromEntries(rows.plan_extras.reduce((m, r) => {
+          if (!m.has(r.date)) m.set(r.date, [])
+          m.get(r.date).push(r.exercise_id)
+          return m
+        }, new Map())),
       },
       unit: s.unit,
       address: s.address,

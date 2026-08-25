@@ -448,7 +448,13 @@ export function renderGymSettings(container, rerender) {
       const sel = container.querySelector('.gym-cycle-add-sel')
       if (sel?.value) { order.push(sel.value); saveGym(g2) }
     } else if (k === 'cycle-remove') {
-      order.splice(Number(el.dataset.i), 1)
+      const i = Number(el.dataset.i)
+      order.splice(i, 1)
+      // position is an INDEX into `order`, so anything that shifts the array has
+      // to move it too — otherwise "current" silently becomes whichever workout
+      // slid into that slot, and the rotation is on a different day than the one
+      // you picked. Dropping an entry above the current one shifts it down by one.
+      if (i < g2.plan.cycle.position) g2.plan.cycle.position--
       g2.plan.cycle.position = Math.min(g2.plan.cycle.position, Math.max(0, order.length - 1))
       saveGym(g2)
     } else if (k === 'cycle-up' || k === 'cycle-down') {
@@ -456,6 +462,11 @@ export function renderGymSettings(container, rerender) {
       const j = k === 'cycle-up' ? i - 1 : i + 1
       if (j < 0 || j >= order.length) return
       ;[order[i], order[j]] = [order[j], order[i]]
+      // Same reason: follow the workout that was current across the swap rather
+      // than leaving the index pointing at a slot that now holds another one.
+      const pos = g2.plan.cycle.position
+      if (pos === i) g2.plan.cycle.position = j
+      else if (pos === j) g2.plan.cycle.position = i
       saveGym(g2)
     } else if (k === 'cycle-reset') { g2.plan.cycle.position = 0; saveGym(g2) }
     else return
