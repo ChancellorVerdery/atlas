@@ -82,8 +82,11 @@ await page.addInitScript((addr) => {
   window.WebSocket = FakeWS
 }, ADDR)
 
+// The connection cache is device-local and lives outside the synced namespace
+// (see GOOGLE_KEY in src/page/email.js) precisely so the pull below cannot
+// overwrite it.
 const connectedFlag = () => page.evaluate(() => {
-  try { return !!JSON.parse(localStorage.getItem('atlas.email.v1')).connected } catch { return null }
+  try { return !!JSON.parse(localStorage.getItem('atlasGoogle')).connected } catch { return null }
 })
 
 await page.goto(`${BASE}/#/calendar`)
@@ -97,7 +100,7 @@ ok(await page.locator('.mail-connect__title').count() > 0, 'Calendar shows its "
 // outbox gap cannot recover before its 30s timeout. No overlap, no flake.
 console.log('2. both sockets come up — the app must correct itself, unprompted')
 await page.waitForFunction(() => {
-  try { return !!JSON.parse(localStorage.getItem('atlas.email.v1')).connected } catch { return false }
+  try { return !!JSON.parse(localStorage.getItem('atlasGoogle')).connected } catch { return false }
 }, null, { timeout: 6000 }).catch(() => {})
 ok(await connectedFlag() === true, 'status refreshed from the server once BOTH sockets were ready')
 await page.waitForTimeout(600) // let the re-render land

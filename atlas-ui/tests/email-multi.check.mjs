@@ -16,7 +16,15 @@ if (!globalThis.crypto) globalThis.crypto = (await import('node:crypto')).webcry
 
 const m = await import('../src/page/email.js')
 const KEY = 'atlas.email.v1'
-const setState = (o) => store.set(KEY, JSON.stringify(o))
+// The Google connection (connected/address/accounts) is device-local and lives
+// in its own key — atlas.email.v1 syncs, and the server's copy has no such
+// fields, so keeping them there let a boot pull wipe the connection. A fixture
+// therefore has to seed both halves the way the app writes them.
+const GKEY = 'atlasGoogle'
+const setState = ({ connected, address, accounts, ...atlas }) => {
+  store.set(KEY, JSON.stringify(atlas))
+  store.set(GKEY, JSON.stringify({ connected: !!connected, address, accounts: accounts || [] }))
+}
 
 // --- accounts cache + active account ---
 setState({ connected: true, accounts: ['a@x.com', 'b@y.com'], address: 'a@x.com' })
@@ -46,8 +54,24 @@ setState({ connected: true, accounts: ['primary@x.com', 'b@y.com'], pinned: ['ol
 assert.deepEqual(m.pinnedIds(), [{ id: 'oldThread', account: 'primary@x.com' }])
 assert.equal(m.isPinned('oldThread'), true) // legacy pins match id regardless of account arg
 
+// --- the connection is device-local: an overwrite of the SYNCED half must not
+//     drop it (this is exactly what main.js applyStates does on every boot) ---
+setState({ connected: true, address: 'a@x.com', accounts: ['a@x.com'], pinned: [], splitPct: 42 })
+store.set(KEY, JSON.stringify({ pinned: [], splitPct: 42 })) // the server's copy, verbatim
+assert.equal(m.isConnected(), true)
+assert.deepEqual(m.connectedAccounts(), ['a@x.com'])
+
+// --- a pre-split blob still carrying the fields migrates once, and survives ---
+store.delete(GKEY)
+store.set(KEY, JSON.stringify({ pinned: [], splitPct: 42, connected: true, address: 'l@x.com', accounts: ['l@x.com'] }))
+assert.equal(m.isConnected(), true)
+assert.deepEqual(m.connectedAccounts(), ['l@x.com'])
+store.set(KEY, JSON.stringify({ pinned: [], splitPct: 42 })) // pull strips them
+assert.equal(m.isConnected(), true)
+
 // --- loadEmail defaults accounts to an array even on a bare store ---
 store.delete(KEY)
+store.delete(GKEY)
 assert.deepEqual(m.loadEmail().accounts, [])
 
 console.log('email-multi.check: all assertions passed')

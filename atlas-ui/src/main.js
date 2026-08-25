@@ -5,6 +5,7 @@
 import { sync } from './sync.js'
 import { seedFreshPluginState } from './page/plugins.js'
 import { clearCache } from './page/datacache.js'
+import { clearGoogleCache } from './page/email.js'
 import './auth.css'
 import { applyTheme, loadTheme, logoDataURL, pushAppIcon } from './page/theme.js'
 import { initPlatform } from './platform.js'
@@ -148,11 +149,13 @@ const isForeignAccount = (userId) => {
 }
 const rememberAccount = (userId) => { if (userId) localStorage.setItem(LAST_USER_KEY, userId) }
 // Drops the cached remote data too (Canvas grades, Gmail threads, calendar
-// events). Those are just as account-specific as the atlas.* keys, and leaving
-// them would surface one profile's mail under another's login.
+// events) and the device-local Google connection cache. Those are just as
+// account-specific as the atlas.* keys, and leaving them would surface one
+// profile's mail — or their mailbox addresses — under another's login.
 const clearLocalAtlas = () => {
   for (const k of localAtlasKeys()) localStorage.removeItem(k)
   clearCache()
+  clearGoogleCache()
 }
 
 // Enough of this account's layout cached to paint the whole shell without the

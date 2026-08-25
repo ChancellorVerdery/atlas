@@ -10,19 +10,69 @@ import { isNative } from '../platform.js'
 
 const KEY = 'atlas.email.v1'
 
+// The Google connection (connected/address/accounts) is a DEVICE-LOCAL cache of
+// server state, not Atlas data, so it gets its own key — deliberately outside
+// the 'atlas.' namespace that sync.pushKey and the backup export filter on, the
+// same convention as atlasLastUser / atlasPendingPushes / atlasCache.*.
+//
+// It used to live inside atlas.email.v1, which DOES sync, and the backend's
+// email mapper drops these fields on purpose (atlas-backend/services/plugins/
+// email.js) — so the boot pull wrote a server copy without them straight over
+// the local one (main.js applyStates). Surviving that came down to whether
+// google.auth.status happened to answer before sync.pull.all. Lose the race and
+// the connection was wiped mid-boot: Email and Calendar drew their "Connect
+// Google" gate against a live connection, AND the boot prefetch skipped both
+// plugins (warmEmail/warmCalendar return early when disconnected, and it only
+// runs once), so the device cache still held last launch's mail and events for
+// the whole session. Settings -> Accounts was the only thing that re-asked the
+// server, which is exactly why visiting it appeared to fix both.
+const GOOGLE_KEY = 'atlasGoogle'
+
+function saveGoogle(g) {
+  localStorage.setItem(GOOGLE_KEY, JSON.stringify({
+    connected: !!g.connected,
+    address: g.address,
+    accounts: Array.isArray(g.accounts) ? g.accounts : [],
+  }))
+}
+
+// `legacy` is the atlas.email.v1 blob, which on the first load after this split
+// may still carry the fields — take them across once and persist, so the
+// migration is one-shot and a later pull cannot take them away again.
+function loadGoogle(legacy) {
+  let g
+  try { g = JSON.parse(localStorage.getItem(GOOGLE_KEY)) } catch { g = null }
+  if (!g || typeof g !== 'object') {
+    g = { connected: !!legacy.connected, address: legacy.address, accounts: legacy.accounts }
+    saveGoogle(g)
+  }
+  if (!Array.isArray(g.accounts)) g.accounts = [] // connected addresses, primary first
+  return g
+}
+
+// Dropped alongside the atlas.* cache when the signed-in account changes
+// (main.js clearLocalAtlas): one profile's mailbox addresses must never surface
+// under another's login.
+export const clearGoogleCache = () => localStorage.removeItem(GOOGLE_KEY)
+
 export function loadEmail() {
   let s
   try { s = JSON.parse(localStorage.getItem(KEY)) || {} } catch { s = {} }
   if (!Array.isArray(s.pinned)) s.pinned = []
   if (typeof s.splitPct !== 'number') s.splitPct = 42
-  if (!Array.isArray(s.accounts)) s.accounts = [] // cached connected addresses (primary first)
-  return s
+  return { ...s, ...loadGoogle(s) }
 }
-export function saveEmail(s) { localStorage.setItem(KEY, JSON.stringify(s)) }
+// Callers hold one merged object; the Google half is split back out to its own
+// key on the way down, so a pull of the synced half can never carry it off.
+export function saveEmail(s) {
+  const { connected, address, accounts, ...atlas } = s
+  saveGoogle({ connected, address, accounts })
+  localStorage.setItem(KEY, JSON.stringify(atlas))
+}
 
 // Connection is server-side per user; `connected`/`address`/`accounts` are a
 // local cache (refreshed by refreshGoogleStatus) so the many synchronous
-// isConnected() guards stay synchronous. The email mapper does not persist these.
+// isConnected() guards stay synchronous.
 export const isConnected = (s = loadEmail()) => !!s.connected
 export const connectedAccounts = (s = loadEmail()) => s.accounts || []
 
@@ -39,13 +89,12 @@ export const getActiveAccount = () => activeAccount
 export async function refreshGoogleStatus() {
   try {
     const d = await sync.request('google.auth.status', {})
-    const s = loadEmail()
-    s.connected = !!d.connected
-    s.accounts = Array.isArray(d.accounts) ? d.accounts : (d.address ? [d.address] : [])
-    if (d.address) s.address = d.address
-    else delete s.address
-    if (activeAccount && !s.accounts.includes(activeAccount)) activeAccount = null // account gone → primary
-    saveEmail(s)
+    // Writes ONLY the device-local half. Going through saveEmail would rewrite
+    // atlas.email.v1 too, which marks it written-since-boot and shadows the
+    // server's pinned/splitPct from the pull for the rest of the session.
+    const accounts = Array.isArray(d.accounts) ? d.accounts : (d.address ? [d.address] : [])
+    saveGoogle({ connected: !!d.connected, address: d.address, accounts })
+    if (activeAccount && !accounts.includes(activeAccount)) activeAccount = null // account gone → primary
     return d
   } catch { return null }
 }
