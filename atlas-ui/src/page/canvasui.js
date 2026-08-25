@@ -36,7 +36,13 @@ function canvasData(force = false) {
   dataAt = Date.now()
   dataPromise = fetchCanvasData().then((d) => {
     data = d
-    writeCache(CACHE_KEY, d)
+    // A whole semester of assignment groups can outgrow the cache budget, and a
+    // rejected write now drops the previous copy — which would leave the next
+    // launch with no Canvas cache at all. So fall back to the part everything
+    // else is derived from: courses carry the grades, so the GPA, the gradebook
+    // headline and the course list still paint instantly next time; only
+    // assignments, announcements and to-dos wait for the refresh.
+    if (!writeCache(CACHE_KEY, d)) writeCache(CACHE_KEY, { ...d, groups: {}, announcements: [], todos: [] })
     return d
   })
   dataPromise.catch(() => { dataPromise = null })
