@@ -18,9 +18,9 @@ const ok = (cond, name) => { if (cond) { passed++; console.log(`  ok   ${name}`)
 
 const browser = await chromium.launch({ headless: true })
 
-async function launch({ connectedLocally, warmCache = true, route = 'dashboard', statusLagMs = 0, serverConnected = true }) {
+async function launch({ connectedLocally, warmCache = true, route = 'dashboard', statusLagMs = 0, serverConnected = true, fillQuota = false }) {
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 1000 } })
-  await ctx.addInitScript(({ addr, connectedLocally, warmCache, statusLagMs, serverConnected }) => {
+  await ctx.addInitScript(({ addr, connectedLocally, warmCache, statusLagMs, serverConnected, fillQuota }) => {
     const USER = 'user-1'
     const DAY = 86_400_000
     localStorage.setItem('atlas.auth.v1', JSON.stringify({ token: 't', userId: USER, email: addr }))
@@ -39,6 +39,25 @@ async function launch({ connectedLocally, warmCache = true, route = 'dashboard',
     const stale = (k, v) => localStorage.setItem('atlasCache.' + k, JSON.stringify({ at: Date.now() - DAY, value: v }))
     stale(`email.threads.${addr}.INBOX`, { threads: [{ id: 'stale', subject: 'STALE SUBJECT', from: 'x', date: 1, snippet: '', count: 1, _account: addr }], nextPageToken: null })
     stale('calendar.cals', [{ id: 'primary', summary: 'STALE CALENDAR', backgroundColor: '#111' }])
+
+    // Months of ordinary use: evCacheKey mints one entry per calendar range ever
+    // opened and nothing ever evicts them, so localStorage ends up full and STAYS
+    // full. Fill it the same way here.
+    window.__filled = 0
+    if (fillQuota) {
+      // Coarse chunks first, then fine ones, so the store is left GENUINELY
+      // full — a few spare KB is not the state this reproduces.
+      for (const chunk of [50_000, 5_000, 500, 50]) {
+        const blob = 'x'.repeat(chunk)
+        try {
+          for (let i = 0; i < 2000; i++) {
+            localStorage.setItem(`atlasCache.calendar.events.${1e12 + window.__filled}.${1e12 + window.__filled}`,
+              JSON.stringify({ at: Date.now() - (window.__filled + 8) * DAY, value: blob }))
+            window.__filled++
+          }
+        } catch { /* this size no longer fits — drop to a smaller one */ }
+      }
+    }
 
     // ---- fake sync backend -------------------------------------------------
     const INBOX_OPEN = 600, OUTBOX_LAG = 600, RTT = 120
@@ -96,11 +115,14 @@ async function launch({ connectedLocally, warmCache = true, route = 'dashboard',
       close() { this.readyState = 3; if (!this.isInbox) out.acked = false; this.onclose && this.onclose() }
     }
     window.WebSocket = FakeWS
-  }, { addr: ADDR, connectedLocally, warmCache, statusLagMs: statusLagMs || 0, serverConnected })
+  }, { addr: ADDR, connectedLocally, warmCache, statusLagMs: statusLagMs || 0, serverConnected, fillQuota })
 
   const page = await ctx.newPage()
+  const errors = []
+  page.on('pageerror', (e) => errors.push('pageerror: ' + e.message))
+  page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()) })
   await page.goto(`${BASE}/#/${route}`)
-  return { ctx, page }
+  return { ctx, page, errors }
 }
 
 const cacheEntry = (page, key) => page.evaluate((k) => {
@@ -259,6 +281,32 @@ console.log('   (device cache says connected, server says no — the server wins
   console.log(`   on screen: connect-gate=${/Connect your Gmail|Reconnect Gmail/.test(body)}`)
   ok(local?.connected === false, 'the stale local flag was corrected to disconnected')
   ok(/Connect your Gmail|Reconnect Gmail/.test(body), 'Mail shows the Connect gate')
+  await ctx.close()
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\nI. localStorage full of old calendar ranges (months of ordinary use)')
+{
+  const { ctx, page, errors } = await launch({ connectedLocally: true, fillQuota: true })
+  await page.waitForTimeout(8000)
+
+  const filled = await page.evaluate(() => window.__filled)
+  const mail = await cacheEntry(page, `email.threads.${ADDR}.INBOX`)
+  const cals = await cacheEntry(page, 'calendar.cals')
+  const calls = await page.evaluate(() => window.__calls)
+  const ranges = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('atlasCache.calendar.events.')).length)
+  console.log(`   pre-seeded stale ranges: ${filled}; ranges now: ${ranges}`)
+  console.log(`   google.api calls: ${calls.length} (the fetch DID run)`)
+  console.log(`   mail cache age: ${mail ? Math.round((Date.now() - mail.at) / 86400) / 1000 + ' days' : 'absent'}; subject: ${mail?.value?.threads?.[0]?.subject}`)
+  console.log(`   cals cache age: ${cals ? Math.round((Date.now() - cals.at) / 86400) / 1000 + ' days' : 'absent'}; summary: ${cals?.value?.[0]?.summary}`)
+
+  console.log(`   errors (${errors.length}):`)
+  for (const e of [...new Set(errors)].slice(0, 6)) console.log(`     ${e.slice(0, 160)}`)
+  ok(calls.length > 0, 'the refresh still ran (the network was never the problem)')
+  ok(isFresh(mail), 'mail cache was rewritten despite a full store')
+  ok(isFresh(cals), 'calendar cache was rewritten despite a full store')
+  ok(mail?.value?.threads?.[0]?.subject === 'FRESH SUBJECT', 'and it holds current data, not last week\'s')
   await ctx.close()
 }
 

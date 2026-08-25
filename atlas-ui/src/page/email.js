@@ -7,6 +7,7 @@
 
 import { sync } from '../sync.js'
 import { isNative } from '../platform.js'
+import { setWithEviction } from './datacache.js'
 
 const KEY = 'atlas.email.v1'
 
@@ -28,12 +29,18 @@ const KEY = 'atlas.email.v1'
 // server, which is exactly why visiting it appeared to fix both.
 const GOOGLE_KEY = 'atlasGoogle'
 
+// Never throws. loadEmail() calls this on the migration path, and it is reached
+// from isConnected() on nearly every render — a full localStorage must not take
+// the whole Email/Calendar path down with it. setWithEviction reclaims space
+// from the plugin data cache first, so this tiny write does not lose out to a
+// store full of last spring's calendar ranges.
 function saveGoogle(g) {
-  localStorage.setItem(GOOGLE_KEY, JSON.stringify({
+  const raw = JSON.stringify({
     connected: !!g.connected,
     address: g.address,
     accounts: Array.isArray(g.accounts) ? g.accounts : [],
-  }))
+  })
+  try { setWithEviction(GOOGLE_KEY, raw) } catch { /* private mode: this session still has it in memory */ }
 }
 
 // `legacy` is the atlas.email.v1 blob, which on the first load after this split
