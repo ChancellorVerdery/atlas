@@ -84,6 +84,12 @@ const withTimeout = (promise, ms = 6000) => Promise.race([
 // nudge the app. renderer.js exposes no global render on window, so we
 // dispatch a CustomEvent instead ('atlas:sync-update').
 sync.onUpdate((key, value) => {
+  // Same rule the boot pull follows via pendingKeys: a broadcast must not
+  // stomp a local value the server hasn't acked. This is how a widget delete
+  // came back before the user's eyes — another device's stale board landed
+  // server-side while this device's edit was still debounced/queued, and the
+  // fan-out overwrote the edit. Skip it; our push lands and re-broadcasts.
+  if (sync.hasPendingWrite(key)) return
   origSetItem(key, asRaw(value))
   window.dispatchEvent(new CustomEvent('atlas:sync-update', { detail: { key, value } }))
 })

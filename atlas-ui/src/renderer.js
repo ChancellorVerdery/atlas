@@ -737,7 +737,7 @@ document.body.addEventListener('click', (e) => {
   const r = route()
   const card = e.target.closest('.pwidget--card, .pwidget--eqcard')
   if (!card || r.name !== 'page') return
-  const f = findWidget(loadPage(r.def.storageKey), card.dataset.widgetId)
+  const f = findWidget(loadPage(pageKeyFor(r.def.storageKey)), card.dataset.widgetId)
   if (!f) return
   // Cards show their full text; equation cards show the equation large.
   if (f.widget.kind === 'eqcard') openModal(f.widget.title, `<div class="modal__math">${renderMath(f.widget.latex)}</div>`)

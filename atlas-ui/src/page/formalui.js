@@ -22,7 +22,7 @@ import {
   ITEM_TYPES, roomCouples, roomBrothers, houseMax, fillHouse,
   normalizeExpense, normalizeExpenses, expenseTotal, expenseTotals,
 } from './formal.js'
-import { loadPage, savePage, findWidget } from './model.js'
+import { loadPage, savePage, findWidget, pageKeyFor } from './model.js'
 import { PAGES, pageById } from './pages.js'
 
 const esc = (s) =>
@@ -44,10 +44,13 @@ const ITEM_TITLES = {
 }
 
 // The board the visible widgets belong to (works on any widget page —
-// Formal, Dashboard, …). Same hash→page resolution as renderer.js's route().
+// Formal, Dashboard, …). Same hash→page resolution as renderer.js's route(),
+// and pageKeyFor for the same reason customize.js's pageNow gives: on mobile
+// the renderer draws the .mobile key, and loading the desktop key here made
+// every house edit mutate — and push — a whole board that wasn't on screen.
 const pageKey = () => {
   const id = location.hash.replace(/^#\/?/, '').split('/')[0]
-  return (pageById(id) || PAGES[0]).storageKey
+  return pageKeyFor((pageById(id) || PAGES[0]).storageKey)
 }
 
 // per-widget dates-slider position — session-only, like work's tip-share inputs

@@ -19,6 +19,16 @@ const PLUGINS = new Set(['calendar', 'canvas', 'course', 'email', 'gym', 'ladder
 const NEVER_PUSH = new Set(['atlas.auth.v1', 'atlas.devMode', 'atlas.backend', 'atlas.ai.v1'])
 const REQUEST_TIMEOUT = 30_000
 const PUSH_DEBOUNCE = 400
+// A failed push (rate-limited, timed out) used to wait for the NEXT reconnect
+// to retry — on a healthy socket that's never, so the value sat queued for
+// days while the server kept serving the stale copy it should have replaced.
+// Retry on a timer instead; 15s clears the inbox's 10s rate-limit window.
+const PUSH_RETRY = 15_000
+// Gap between queued pushes when the queue flushes. The inbox allows 60
+// messages per connection per 10s, and a boot-time flush fired as one burst
+// rode on top of boot traffic — the tail got rejected 'rate limited' and
+// those keys starved (deletes that never reached the server).
+const FLUSH_SPACING = 250
 // How long connect() waits for the outbox hello before degrading gracefully:
 // a dead outbox must delay boot briefly, never hang it. Kept well under
 // main.js's 6s withTimeout so the boot deadline still covers the sum.
@@ -207,17 +217,38 @@ function sendPush(key, raw) {
   if (currentStatus !== 'online' || !ws || ws.readyState !== WebSocket.OPEN) return
   sync.request(enc.code, enc.payload)
     .then(() => unqueuePush(key, raw))
-    .catch(() => { /* stays queued for the next flush */ })
+    .catch(() => scheduleFlush()) // stays queued — retry on the timer, not the next reconnect
+}
+
+let flushTimer = null
+function scheduleFlush() {
+  if (flushTimer) return
+  flushTimer = setTimeout(() => { flushTimer = null; flushPushes() }, PUSH_RETRY)
 }
 
 function flushPushes() {
-  for (const [key, raw] of [...offlinePushes]) sendPush(key, raw)
+  // Paced, not a burst. Each send re-reads the queue at fire time: a newer
+  // value replacing the snapshot's mid-flush must win, and re-sending the
+  // snapshot's raw would silently re-queue the OLD value over it.
+  let i = 0
+  for (const key of [...offlinePushes.keys()]) {
+    setTimeout(() => {
+      const raw = offlinePushes.get(key)
+      if (raw != null) sendPush(key, raw)
+    }, FLUSH_SPACING * i++)
+  }
 }
 
 // Keys whose local value has not been confirmed by the server yet. main.js
 // refuses to apply the server's copy over these on boot: the pull would
 // otherwise undo the very edit that is still waiting to be sent.
 const pendingKeys = () => new Set([...bootPending, ...offlinePushes.keys(), ...debounces.keys()])
+
+// Narrower live-update guard: does this key hold a local write the server has
+// not acked (debounced or queued)? Deliberately excludes bootPending — that
+// set protects the boot-time pull and never drains, and a broadcast landing
+// hours later is real news from another device, not the boot race.
+const hasPendingWrite = (key) => offlinePushes.has(key) || debounces.has(key)
 
 // Flush debounced writes when the page goes away. beforeunload alone is not
 // enough: WKWebView does not reliably fire it when the app is terminated, and
@@ -324,5 +355,6 @@ export const sync = {
   onUpdate(cb) { updateCbs.push(cb) },
   onStatus(cb) { statusCbs.push(cb) },
   pendingKeys,
+  hasPendingWrite,
   get status() { return currentStatus },
 }
