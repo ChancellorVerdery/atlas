@@ -50,7 +50,9 @@ ws2.addEventListener('message', e => {
   if (m.error === 'malformed JSON') malformed++
   if (m.error === 'rate limited') limited++
 })
-for (let i = 0; i < 200; i++) { try { ws2.send('junk') } catch { break } }
+// 400 clears the 240/10s allowance with enough overflow (>60 rejects) to
+// also trip the persistent-flooder disconnect.
+for (let i = 0; i < 400; i++) { try { ws2.send('junk') } catch { break } }
 const floodClose = await Promise.race([ws2.closed, new Promise(r => setTimeout(() => r('no-close'), 20000))])
 check('flood: over-limit messages rejected', limited > 0, `${limited} rejections, ${malformed} parsed`)
 check('flood: persistent flooder disconnected', floodClose === 1008, `close ${floodClose}`)

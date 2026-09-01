@@ -16,7 +16,12 @@ import { limiter, ipOf } from '../lib/ratelimit.js'
 const allowConn = limiter({ windowMs: 60_000, max: 30 })   // new sockets / IP / min
 const allowHello = limiter({ windowMs: 60_000, max: 30 })  // token lookups / IP / min
 const allowAuth = limiter({ windowMs: 600_000, max: 10 })  // login+signup / IP / 10 min
-const allowMsg = limiter({ windowMs: 10_000, max: 60 })    // messages / connection / 10s
+// 60 was too tight for legitimate traffic: a boot (pull + per-plugin warms)
+// riding on a queue flush tripped it daily — the log's 'rate limited' bursts —
+// and the rejects carry no reqId, so client-side each eaten push just times
+// out and its key sits queued serving stale data to every other device. 240
+// still shuts down floods; real boots peak well under half that.
+const allowMsg = limiter({ windowMs: 10_000, max: 240 })   // messages / connection / 10s
 const allowHttp = limiter({ windowMs: 60_000, max: 60 })   // plain HTTP / IP / min
 const MAX_CONNS_PER_IP = 10
 const liveConns = new Map() // ip -> currently open sockets
