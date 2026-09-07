@@ -45,6 +45,7 @@ const defaults = {
   overrides: {},
   customCategories: [],
   budgets: {},
+  vendorRules: {},
   netWorthHistory: [],
   dismissedAnomalies: [],
   dismissedSubscriptions: [],
@@ -111,6 +112,11 @@ const rich = {
     CUSTOM_COFFEE: 45.5,
     CUSTOM_DELETED: 10, // dangling budget after category.remove (tolerated)
   },
+  vendorRules: {
+    'café østerbro': 'CUSTOM_COFFEE',
+    'crédit agricole': 'FOOD_AND_DRINK',
+    'vendor-gone': 'CUSTOM_DELETED', // dangling ref to a deleted category (tolerated)
+  },
   netWorthHistory: [
     // two syncs on the same date — both rows kept, order matters
     { date: '2026-07-01', netWorth: 1234.56 },
@@ -146,6 +152,7 @@ const realistic = {
   overrides: { t5: { category: 'CUSTOM_SUBSCRIPTIONS' } },
   customCategories: [{ key: 'CUSTOM_SUBSCRIPTIONS', label: 'Subscriptions', color: '#e0b15c' }],
   budgets: { FOOD_AND_DRINK: 400, ENTERTAINMENT: 60 },
+  vendorRules: { 'trader joes': 'FOOD_AND_DRINK', netflix: 'CUSTOM_SUBSCRIPTIONS' },
   netWorthHistory: [
     { date: '2026-06-28', netWorth: 4890.5 },
     { date: '2026-07-03', netWorth: 4949.82 },
@@ -227,12 +234,14 @@ deepStrictEqual(
   'invalid env/lastSync → loader defaults',
 )
 
-// '__proto__' keys in overrides/budgets/ranges/categoryView must come back as
-// plain own properties — not vanish into (or replace) the prototype.
+// '__proto__' keys in overrides/budgets/vendorRules/ranges/categoryView must
+// come back as plain own properties — not vanish into (or replace) the
+// prototype.
 {
   const evil = JSON.parse(`{
     "overrides": {"__proto__": {"category": "EVIL"}},
     "budgets": {"__proto__": 10},
+    "vendorRules": {"__proto__": "EVIL_CAT"},
     "ranges": {"__proto__": "week"},
     "categoryView": {"__proto__": "trend"}
   }`)
@@ -240,6 +249,7 @@ deepStrictEqual(
   for (const [name, obj, want] of [
     ['overrides', back.overrides, { category: 'EVIL' }],
     ['budgets', back.budgets, 10],
+    ['vendorRules', back.vendorRules, 'EVIL_CAT'],
     ['ranges', back.ranges, 'week'],
     ['categoryView', back.categoryView, 'trend'],
   ]) {
@@ -256,6 +266,17 @@ deepStrictEqual(
   roundTrip({ ...defaults, overrides: { 'txn-1': 'junk', 'txn-2': { isTransfer: 'yes' } } }),
   { ...defaults, overrides: { 'txn-1': {}, 'txn-2': {} } },
   'non-object override / non-boolean isTransfer degrade to empty override',
+)
+
+// Regression: vendorRules was entirely unhandled by decompose/recompose until
+// now (the field vanished on every cloud round-trip — setVendorRule's rules
+// were silently lost). A non-string category value (foreign blob) degrades
+// to '' rather than failing the vendor_rules.category_key NOT NULL column,
+// matching the override/isTransfer degrade-to-safe-default pattern above.
+deepStrictEqual(
+  roundTrip({ ...defaults, vendorRules: { 'weird-vendor': 42, 'ok-vendor': 'FOOD_AND_DRINK' } }),
+  { ...defaults, vendorRules: { 'weird-vendor': '', 'ok-vendor': 'FOOD_AND_DRINK' } },
+  'non-string vendorRules value degrades to empty category_key',
 )
 
 console.log('OK finance')

@@ -8,6 +8,7 @@
 //     overrides: { txnId -> {category?, isTransfer?} },          // PARTIAL; isTransfer:false meaningful
 //     customCategories: [{key, label, color}],
 //     budgets: { categoryKey -> monthly limit (number) },
+//     vendorRules: { vendorKey -> categoryKey },                 // auto-categorize by vendor (setVendorRule)
 //     netWorthHistory: [{date:'YYYY-MM-DD', netWorth}],          // append-only, order matters
 //     dismissedAnomalies: [transactionId, ...],
 //     dismissedSubscriptions: [normMerchant key, ...],             // "not a subscription" marks
@@ -42,15 +43,19 @@
 // - budgets.monthly_limit is jsonb: setBudget writes positive numbers, but
 //   Infinity stringifies to null and the loader keeps budgets verbatim — a
 //   NOT NULL numeric column would permanently break saves.
+// - vendor_rules.category_key is plain text (not jsonb like budgets): unlike
+//   a budget limit, setVendorRule only ever writes a category-key string, so
+//   there's no Infinity-style edge case to preserve; a non-string value from
+//   a foreign blob stores as '' rather than failing the NOT NULL column.
 // - dismissedAnomalies/dismissedSubscriptions fold into settings as
 //   jsonb (order-preserving); the loader only checks Array.isArray, so
 //   entries can be anything.
 // - ranges{} + categoryView{} share widget_prefs via nullable columns:
-//   NULL range = widgetId absent from ranges, NULL cat_view = absent from
+//   NULL range = widgetId absent from ranges{}, NULL cat_view = absent from
 //   categoryView. No CHECK constraints on the values: the loader passes stored
 //   values through unvalidated (rangeFor/categoryViewFor coerce at READ time),
 //   so the DB must accept whatever the blob holds.
-// - recompose rebuilds overrides/budgets/ranges/categoryView with
+// - recompose rebuilds overrides/budgets/vendorRules/ranges/categoryView with
 //   Object.fromEntries so a '__proto__' key stays a plain own property.
 
 import { runPlugin } from '../../lib/runner.js'
@@ -133,6 +138,25 @@ CREATE TABLE IF NOT EXISTS finance.budgets (
   PRIMARY KEY (user_id, category_key)
 );
 
+-- vendorKey(txn) -> categoryKey auto-categorization rules (setVendorRule /
+-- clearVendorRule). Was entirely unhandled by this mapper until now — every
+-- rule a user set was silently dropped on the next cloud load.
+--
+-- Source location, because it is not where you would look: finance is a RETIRED
+-- plugin. There is no atlas-ui/src/page/finance.js. The client source ships only
+-- as a built plugin zip (plugins-dist/finance.zip -> src/finance.js, with the
+-- archived original under 'custom plugins/finance/'), and BOTH paths are
+-- gitignored, so a clean checkout has no client half to read at all. That is
+-- also why test/sync-coverage.check.mjs cannot cover this mapper, and why this
+-- field went unmapped for so long — see the NOT-covered note in that file.
+CREATE TABLE IF NOT EXISTS finance.vendor_rules (
+  user_id      uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  vendor_key   text NOT NULL,                          -- vendorKey(txn); soft ref, may dangle (tolerated)
+  category_key text NOT NULL,                          -- builtin or custom; may dangle after category.remove (tolerated)
+  ord          integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, vendor_key)
+);
+
 CREATE TABLE IF NOT EXISTS finance.networth_history (
   id        bigserial PRIMARY KEY,
   user_id   uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -170,6 +194,7 @@ function normalizeFinance(raw) {
     overrides: isObj(s.overrides) ? s.overrides : {},
     customCategories: Array.isArray(s.customCategories) ? s.customCategories : [],
     budgets: isObj(s.budgets) ? s.budgets : {},
+    vendorRules: isObj(s.vendorRules) ? s.vendorRules : {},
     netWorthHistory: Array.isArray(s.netWorthHistory) ? s.netWorthHistory : [],
     dismissedAnomalies: Array.isArray(s.dismissedAnomalies) ? s.dismissedAnomalies : [],
     dismissedSubscriptions: Array.isArray(s.dismissedSubscriptions) ? s.dismissedSubscriptions : [],
@@ -192,6 +217,7 @@ const mapper = {
     'overrides',
     'custom_categories',
     'budgets',
+    'vendor_rules',
     'networth_history',
     'widget_prefs',
   ],
@@ -250,6 +276,12 @@ const mapper = {
         category_key: key,
         monthly_limit: JSON.stringify(limit ?? null),    // jsonb: null (Infinity) / strings survive
       })),
+      vendor_rules: Object.entries(state.vendorRules).map(([vendorKey, categoryKey]) => ({
+        vendor_key: vendorKey,
+        // setVendorRule only ever writes a string; a foreign blob's non-string
+        // value stores as '' rather than failing the NOT NULL column.
+        category_key: typeof categoryKey === 'string' ? categoryKey : '',
+      })),
       networth_history: state.netWorthHistory.map(e => ({
         date: str(e?.date),
         net_worth: num(e?.netWorth),
@@ -276,6 +308,8 @@ const mapper = {
     }))
     const budgets = Object.fromEntries(
       (rows.budgets || []).map(r => [r.category_key, r.monthly_limit]))
+    const vendorRules = Object.fromEntries(
+      (rows.vendor_rules || []).map(r => [r.vendor_key, r.category_key]))
     const prefs = rows.widget_prefs || []
     const ranges = Object.fromEntries(
       prefs.filter(r => r.range !== null).map(r => [r.widget_id, r.range]))
@@ -291,6 +325,7 @@ const mapper = {
       overrides,
       customCategories: (rows.custom_categories || []).map(r => r.cat), // verbatim
       budgets,
+      vendorRules,
       netWorthHistory: (rows.networth_history || []).map(r => r.raw),   // verbatim
       dismissedAnomalies: st.dismissed_anomalies,
       dismissedSubscriptions: st.dismissed_subscriptions,
