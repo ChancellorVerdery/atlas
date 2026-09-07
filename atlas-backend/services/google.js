@@ -21,9 +21,13 @@
 // google.api errors are delivered as ok:false with a KIND-prefixed message the
 // client maps to its AuthError: 'auth: …' (reconnect) / 'scope: …' (re-consent).
 
+import path from 'node:path'
+import { realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import { applyDdl, serveHttp, deliver } from '../lib/runner.js'
 import { pool } from '../lib/db.js'
 import { fetchRetry } from '../lib/http.js'
+import { allowedApiUrl } from './google/apiurl.js'
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || ''
@@ -111,41 +115,52 @@ async function upsert(userId, address, fields) {
 
 // One refresh in flight per (user, account); concurrent google.api calls share it.
 const refreshing = new Map()
-function refreshToken(userId, address, row) {
+export function refreshToken(userId, address, row) {
   const key = `${userId}::${address}`
   if (!refreshing.has(key)) {
-    refreshing.set(key, (async () => {
-      try {
-        if (!row.refresh_token) throw authErr('Not connected to Google.')
-        const { ok, t, status } = await tokenPost({
-          client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
-          refresh_token: row.refresh_token, grant_type: 'refresh_token',
-        })
-        if (!ok || !t.access_token) {
-          // invalid_grant is the ONLY answer that means the grant itself is
-          // dead (revoked, expired, password changed): drop just this account
-          // so the user is cleanly prompted to reconnect it.
-          if (t.error === 'invalid_grant') {
-            await pool.query('DELETE FROM google.tokens WHERE user_id = $1 AND address = $2', [userId, address])
-            throw authErr('Google session expired — reconnect.')
-          }
-          // Anything else — a bad client config, a garbled body, Google having
-          // a moment — is not evidence the connection is gone. Reporting it as
-          // an auth failure would drop a working account.
-          throw new Error(`Google refused the token refresh (${status}${t.error ? ': ' + t.error : ''}).`)
+    const p = (async () => {
+      if (!row.refresh_token) throw authErr('Not connected to Google.')
+      const { ok, t, status } = await tokenPost({
+        client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
+        refresh_token: row.refresh_token, grant_type: 'refresh_token',
+      })
+      if (!ok || !t.access_token) {
+        // invalid_grant is the ONLY answer that means the grant itself is
+        // dead (revoked, expired, password changed): drop just this account
+        // so the user is cleanly prompted to reconnect it.
+        if (t.error === 'invalid_grant') {
+          await pool.query('DELETE FROM google.tokens WHERE user_id = $1 AND address = $2', [userId, address])
+          throw authErr('Google session expired — reconnect.')
         }
-        const expires_at = Date.now() + (Number(t.expires_in) || 3600) * 1000
-        await upsert(userId, address, { access_token: t.access_token, expires_at })
-        return t.access_token
-      } finally {
-        refreshing.delete(key)
+        // Anything else — a bad client config, a garbled body, Google having
+        // a moment — is not evidence the connection is gone. Reporting it as
+        // an auth failure would drop a working account.
+        throw new Error(`Google refused the token refresh (${status}${t.error ? ': ' + t.error : ''}).`)
       }
-    })())
+      const expires_at = Date.now() + (Number(t.expires_in) || 3600) * 1000
+      await upsert(userId, address, { access_token: t.access_token, expires_at })
+      return t.access_token
+    })()
+    refreshing.set(key, p)
+    // Cleanup is chained AFTER the set, and a .finally() callback is always a
+    // microtask — never synchronous. A `finally` INSIDE the async body was not.
+    // The `!row.refresh_token` throw above is reached with no await in front of
+    // it, so on that one path the whole body (finally included) ran to
+    // completion BEFORE refreshing.set() executed: the delete hit an absent key
+    // and the set then parked the already-rejected promise in the map
+    // permanently. Every later google.api call for that (user, account)
+    // replayed 'Not connected to Google.' from the cache — including after a
+    // successful reconnect, which is exactly what the message tells the user to
+    // do — until the container restarted. Every other failure path here has an
+    // await in front of it and so cleaned up correctly, which is why only this
+    // one leaked. Reproduced before fixing; see test/google-refresh.check.mjs.
+    // The identity test matters if a later refresh has already replaced ours.
+    p.finally(() => { if (refreshing.get(key) === p) refreshing.delete(key) }).catch(() => {})
   }
   return refreshing.get(key)
 }
 
-async function accessTokenFor(userId, address, { force = false } = {}) {
+export async function accessTokenFor(userId, address, { force = false } = {}) {
   const row = await getRow(userId, address)
   if (!row) throw authErr('Not connected to Google.')
   if (!force && row.access_token && Number(row.expires_at) > Date.now() + 60_000) return row.access_token
@@ -154,7 +169,10 @@ async function accessTokenFor(userId, address, { force = false } = {}) {
 
 // Proxy a Google REST call with a valid server-held token; refresh + retry once
 // on 401. Returns parsed JSON (null on 204). Throws AuthErr on auth/scope loss.
-async function googleApi(userId, address, { method = 'GET', url, body }, retried = false) {
+export async function googleApi(userId, address, { method = 'GET', url, body }, retried = false) {
+  // Checked before a token is even fetched: a rejected target must never cause
+  // a refresh, and must never see an Authorization header.
+  if (!allowedApiUrl(url)) throw new Error('google.api: target not allowed')
   const token = await accessTokenFor(userId, address, { force: retried })
   const r = await fetchRetry(url, {
     method,
@@ -228,30 +246,46 @@ async function disconnect(userId, address) {
   return { connected: accounts.length > 0, accounts }
 }
 
-await applyDdl(ddl)
+// Request dispatch, exported so it can be exercised without a server or a
+// Postgres.
+export async function handle({ userId, sessionId, reqId, code, payload }) {
+  const p = payload || {}
+  try {
+    let data
+    if (code === 'google.config') data = { clientId: CLIENT_ID, scopes: SCOPES, configured }
+    else if (code === 'google.auth.exchange') data = await exchange(userId, p.code, p.redirect_uri || 'postmessage')
+    else if (code === 'google.auth.status') {
+      const accounts = (await getAccounts(userId)).map((r) => r.address)
+      data = { connected: accounts.length > 0, address: accounts[0] || '', accounts }
+    } else if (code === 'google.auth.disconnect') data = await disconnect(userId, p.account || null)
+    else if (code === 'google.api') data = await googleApi(userId, p.account || null, { method: p.method, url: p.url, body: p.body })
+    else throw new Error(`unhandled code ${code}`)
+    await deliver({ userId, sessionId, reqId, ok: true, data })
+  } catch (e) {
+    // AuthErr messages already carry their 'auth:'/'scope:' kind prefix.
+    const msg = String((e && e.message) || e)
+    if (!(e instanceof AuthErr)) console.error(`google ${code}:`, msg)
+    await deliver({ userId, sessionId, reqId, ok: false, error: msg })
+  }
+  return {}
+}
 
-serveHttp({
-  '/handle': async ({ userId, sessionId, reqId, code, payload }) => {
-    const p = payload || {}
-    try {
-      let data
-      if (code === 'google.config') data = { clientId: CLIENT_ID, scopes: SCOPES, configured }
-      else if (code === 'google.auth.exchange') data = await exchange(userId, p.code, p.redirect_uri || 'postmessage')
-      else if (code === 'google.auth.status') {
-        const accounts = (await getAccounts(userId)).map((r) => r.address)
-        data = { connected: accounts.length > 0, address: accounts[0] || '', accounts }
-      } else if (code === 'google.auth.disconnect') data = await disconnect(userId, p.account || null)
-      else if (code === 'google.api') data = await googleApi(userId, p.account || null, { method: p.method, url: p.url, body: p.body })
-      else throw new Error(`unhandled code ${code}`)
-      await deliver({ userId, sessionId, reqId, ok: true, data })
-    } catch (e) {
-      // AuthErr messages already carry their 'auth:'/'scope:' kind prefix.
-      const msg = String((e && e.message) || e)
-      if (!(e instanceof AuthErr)) console.error(`google ${code}:`, msg)
-      await deliver({ userId, sessionId, reqId, ok: false, error: msg })
-    }
-    return {}
-  },
-})
-
-console.log(`google service up${configured ? '' : ' (NOT configured — set GOOGLE_CLIENT_ID/SECRET)'}`)
+// Bootstrap only when run as the entrypoint (`node services/google.js`, per
+// docker-compose). applyDdl() opens a real connection and retries for two
+// minutes before process.exit(1), so at module top level it made this file
+// unimportable anywhere without a Postgres — which is why the guard-is-wired-in
+// arm of google-apiurl.check.mjs had to read source. Importing runs no I/O:
+// lib/db.js's pg.Pool is lazy and connects on first query.
+// realpathSync, not just resolve: Node resolves symlinks when it builds
+// import.meta.url, so on a symlinked WORKDIR a bare path.resolve() of argv[1]
+// would not match and this service would start nothing while exiting 0 —
+// a silent outage, the worst failure mode an entrypoint guard can have.
+const entrypoint = (() => {
+  try { return pathToFileURL(realpathSync(path.resolve(process.argv[1] || '.'))).href }
+  catch { return pathToFileURL(path.resolve(process.argv[1] || '.')).href }
+})()
+if (import.meta.url === entrypoint) {
+  await applyDdl(ddl)
+  serveHttp({ '/handle': handle })
+  console.log(`google service up${configured ? '' : ' (NOT configured — set GOOGLE_CLIENT_ID/SECRET)'}`)
+}
