@@ -67,6 +67,13 @@ export function startPortainerAuth({
     return { ...headers, cookie: [...kept, `${COOKIE}=${jwt}`].join('; ') }
   }
 
+  // Does this request carry a body? A body is a stream, and the first attempt
+  // consumes it; there is no second copy to replay from. Content-length or a
+  // transfer-encoding is the HTTP-correct test, rather than guessing by method.
+  const hasBody = (req) =>
+    Number(req.headers['content-length'] || 0) > 0
+    || req.headers['transfer-encoding'] != null
+
   const server = http.createServer(async (req, res) => {
     let jwt
     try {
@@ -85,9 +92,25 @@ export function startPortainerAuth({
       }, async (pr) => {
         // A 401 means the token died early (a Portainer restart, a password
         // change). Mint a fresh one and replay once before giving up.
+        // Only a bodyless request can be replayed. Re-piping a consumed body
+        // stream writes nothing and never ends it, so upstream sits waiting for
+        // bytes that never come and the request hangs until a socket timeout -
+        // which is every mutating Docker action (container create, exec, image
+        // load) at exactly the moment this branch exists to rescue. A request
+        // with a body still refreshes the token, so the NEXT one recovers, and
+        // this one surfaces Portainer's own 401 instead of hanging.
         if (pr.statusCode === 401 && useJwt && !retried) {
-          pr.resume()
-          try { return send(await sessionToken(true), true) } catch { /* fall through */ }
+          if (!hasBody(req)) {
+            pr.resume()
+            try { return send(await sessionToken(true), true) } catch { /* fall through */ }
+          } else {
+            // Clearing the token first is what makes recovery land on the very
+            // next request rather than whichever one happens to arrive after
+            // the refresh: with it null, sessionToken() waits on the refresh
+            // below instead of handing out the token we just saw die.
+            token = null
+            sessionToken(true).catch(() => {})
+          }
         }
         // Never let Portainer's own Set-Cookie reach the browser; the session is
         // ours to manage, and a leaked one would outlive the outer auth.
