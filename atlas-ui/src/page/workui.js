@@ -57,7 +57,8 @@ export function workWidgetHTML(w, cz) {
         ${cz ? '' : `<input class="pw-field wk-num wk-out" type="time" aria-label="Actual out time" title="Out time" value="${esc(proj || '')}">
         <input class="pw-field wk-num wk-hours-out" type="text" inputmode="numeric" placeholder="or h:mm" aria-label="Total time worked" title="…or total time worked, e.g. 6:30 (used instead of the out time)">
         ${s.tips ? `<input class="pw-field wk-num wk-tips-in" type="number" min="0" step="0.01" placeholder="tips" aria-label="Tips">` : ''}
-        <button type="button" class="gym-btn" data-wk-act="clock-out" data-id="${esc(sh.id)}">Log shift</button>`}
+        <button type="button" class="gym-btn" data-wk-act="clock-out" data-id="${esc(sh.id)}">Log shift</button>
+        <p class="wk-up-msg gym-sub" role="status" hidden></p>`}
       </div>`
     }
     if (!cz && editingShifts.has(sh.id)) {
@@ -68,7 +69,7 @@ export function workWidgetHTML(w, cz) {
         <input class="pw-field wk-num wk-edit-hours" type="text" inputmode="numeric" placeholder="or h:mm" value="${sh.hours != null ? esc(toHM(sh.hours)) : ''}" aria-label="Total time worked" title="…or total time worked, e.g. 6:30 (used instead of the out time)">
         ${s.tips ? `<input class="pw-field wk-num wk-edit-tips" type="number" min="0" step="0.01" placeholder="tips" value="${esc(sh.tips || '')}" aria-label="Tips">` : ''}
         <button type="button" class="gym-btn" data-wk-act="save-shift" data-id="${esc(sh.id)}">Save</button>
-        <button type="button" class="pw-item-remove" data-wk-act="cancel-edit" data-id="${esc(sh.id)}" title="Cancel edit">×</button>
+        <button type="button" class="pw-item-remove" data-wk-act="cancel-edit" data-id="${esc(sh.id)}" title="Cancel edit" aria-label="Cancel edit">×</button>
       </div>`
     }
     const end = shiftEnd(sh)
@@ -77,7 +78,7 @@ export function workWidgetHTML(w, cz) {
       <span class="wk-time">${sh.start && end ? `${fmtTime(sh.start)}–${fmtTime(end)}` : ''} ${h != null ? `· ${toHM(h)}` : ''}</span>
       <span class="wk-earned">${money(shiftEarned(sh))}${s.tips && sh.tips ? ` <span class="wk-proj">(${money(sh.tips)} tips)</span>` : ''}</span>
       ${cz ? '' : `<button type="button" class="gym-btn gym-btn--sm" data-wk-act="edit-shift" data-id="${esc(sh.id)}" title="Edit shift">Edit</button>
-      <button type="button" class="pw-item-remove" data-wk-act="del-shift" data-id="${esc(sh.id)}" title="Delete shift">×</button>`}
+      <button type="button" class="pw-item-remove" data-wk-act="del-shift" data-id="${esc(sh.id)}" title="Delete shift" aria-label="Delete shift">×</button>`}
     </div>`
   }
 
@@ -98,7 +99,7 @@ export function workWidgetHTML(w, cz) {
       <input class="pw-field" data-wk-ts="name" placeholder="Name" value="${esc(p.name)}" aria-label="Person name">
       <input class="pw-field wk-num" data-wk-ts="hours" type="text" inputmode="numeric" placeholder="h:mm" value="${esc(p.hours)}" aria-label="Hours worked" title="Hours worked — e.g. 6:30">
       <span class="wk-ts-share" data-ts-share></span>
-      <button type="button" class="pw-item-remove" data-wk-act="ts-del" data-wid="${esc(w.id)}" data-i="${i}" title="Remove person">×</button>
+      <button type="button" class="pw-item-remove" data-wk-act="ts-del" data-wid="${esc(w.id)}" data-i="${i}" title="Remove person" aria-label="Remove person">×</button>
     </div>`).join('')
     return head('Tip share') + `<div class="wk-ts" data-ts-wid="${esc(w.id)}">
       <div class="wk-ts-row wk-ts-row--pool" data-wid="${esc(w.id)}">
@@ -119,7 +120,7 @@ export function workWidgetHTML(w, cz) {
         <span class="wk-date">${shortDate(sh.date)}</span>
         <span class="wk-time">${fmtTime(sh.start)}–${fmtTime(sh.end)}${sh.endMode === 'auto' ? ' <span class="wk-proj" title="End predicted from your past shifts on this weekday">auto end</span>' : ''}${sh.gcalId ? '' : ' <span class="wk-proj">not on calendar</span>'}</span>
         ${cz ? '<span></span>' : `<button type="button" class="gym-btn gym-btn--sm" data-wk-act="log-upcoming" data-id="${esc(sh.id)}" title="${s.openEnded ? 'Clock in — this shift moves to your log; clock out later for the real end and tips' : 'Log this shift as worked with its scheduled times'}">Log</button>`}
-        ${cz ? '' : `<button type="button" class="pw-item-remove" data-wk-act="del-upcoming" data-id="${esc(sh.id)}" title="Remove shift">×</button>`}
+        ${cz ? '' : `<button type="button" class="pw-item-remove" data-wk-act="del-upcoming" data-id="${esc(sh.id)}" title="Remove shift" aria-label="Remove shift">×</button>`}
       </div>`).join('')
     const endTitle = s.openEnded
       ? 'End time — your estimate, or leave blank to predict it from your past shifts on that weekday'
@@ -148,9 +149,9 @@ export function workWidgetHTML(w, cz) {
     return head('Shift history') +
       `<div class="wk-rows wk-rows--log">${shown.map(row).join('')}</div>
       <div class="wk-page">
-        <button type="button" class="gym-btn gym-btn--sm" data-wk-act="pg" data-wid="${esc(w.id)}" data-d="-1" ${state.page ? '' : 'disabled'} title="Newer shifts">‹</button>
+        <button type="button" class="gym-btn gym-btn--sm" data-wk-act="pg" data-wid="${esc(w.id)}" data-d="-1" ${state.page ? '' : 'disabled'} title="Newer shifts" aria-label="Newer shifts">‹</button>
         <span class="gym-sub">${from + 1}–${from + shown.length} of ${all.length}</span>
-        <button type="button" class="gym-btn gym-btn--sm" data-wk-act="pg" data-wid="${esc(w.id)}" data-d="1" ${state.page < pages - 1 ? '' : 'disabled'} title="Older shifts">›</button>
+        <button type="button" class="gym-btn gym-btn--sm" data-wk-act="pg" data-wid="${esc(w.id)}" data-d="1" ${state.page < pages - 1 ? '' : 'disabled'} title="Older shifts" aria-label="Older shifts">›</button>
         ${cz ? '' : `<select class="pw-field pw-field--sm wk-per" data-wk-per data-wid="${esc(w.id)}" title="Shifts per page" aria-label="Shifts per page">
           ${HISTORY_PER_CHOICES.map((n) => `<option value="${n}"${n === per ? ' selected' : ''}>${n} / page</option>`).join('')}
         </select>`}
@@ -168,7 +169,8 @@ export function workWidgetHTML(w, cz) {
     <input class="pw-field wk-num wk-hoursin" type="text" inputmode="numeric" pattern="[0-9]{1,3}:[0-5][0-9]" placeholder="h:mm" title="Hours worked, e.g. 6:30" aria-label="Hours worked (h:mm)">
     ${s.tips ? `<input class="pw-field wk-num wk-tipsin" type="number" min="0" step="0.01" placeholder="tips" aria-label="Tips earned">` : ''}
     <button type="button" class="gym-btn" data-wk-act="add-shift">Add</button>
-  </div>`
+  </div>
+  <p class="wk-up-msg wk-add-msg gym-sub" role="status" hidden></p>`
   return head('Shifts') + form +
     (open.length || closed.length
       ? `<div class="wk-rows wk-rows--log">${open.map(row).join('')}${closed.map(row).join('')}</div>`
@@ -209,18 +211,25 @@ async function onWorkClick(e) {
   const a = act.dataset.wkAct
   if (a === 'add-shift') {
     const box = act.closest('.wk-add')
+    const msg = box.parentElement.querySelector('.wk-add-msg')
+    const say = (t) => { if (msg) { msg.textContent = t; msg.hidden = !t } }
     const start = box.querySelector('.wk-startin').value
     const end = box.querySelector('.wk-endin').value
     const hours = box.querySelector('.wk-hoursin').value
-    if (!start && !hours) return
-    if (start && !end && !s.openEnded) return // needs the open-ended setting
-    addShift(s, { date: box.querySelector('.wk-datein').value, start, end, hours, tips: box.querySelector('.wk-tipsin')?.value })
+    if (!start && !hours) return say('Enter a start time or total hours worked.')
+    // addShift itself rejects an open (no end/hours) shift when the open-ended
+    // setting is off, returning null — surface that instead of no-op'ing.
+    const sh = addShift(s, { date: box.querySelector('.wk-datein').value, start, end, hours, tips: box.querySelector('.wk-tipsin')?.value })
+    if (!sh) return say('Add an end time, or turn on open-ended shifts in Work settings, to log a shift with no out time.')
+    say('')
     rerenderApp?.()
   } else if (a === 'clock-out') {
     const row = act.closest('.wk-row')
+    const msg = row.querySelector('.wk-up-msg')
+    const say = (t) => { if (msg) { msg.textContent = t; msg.hidden = !t } }
     const end = row.querySelector('.wk-out').value
     const hours = row.querySelector('.wk-hours-out')?.value.trim()
-    if (!end && !hours) return
+    if (!end && !hours) return say('Enter an out time or total hours worked.')
     closeShift(s, act.dataset.id, { end, hours, tips: row.querySelector('.wk-tips-in')?.value })
     rerenderApp?.()
   } else if (a === 'del-shift') {
