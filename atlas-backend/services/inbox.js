@@ -8,6 +8,9 @@ import http from 'node:http'
 import { WebSocketServer } from 'ws'
 import { pool } from '../lib/db.js'
 import { limiter, ipOf } from '../lib/ratelimit.js'
+import path from 'node:path'
+import { realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 // Rate limits — the inbox is the app's only public request surface, so every
 // class of abuse is throttled here: socket churn, token guessing, credential
@@ -78,7 +81,10 @@ const server = http.createServer((req, res) => {
 // without letting a hostile frame buffer the default 100 MiB.
 const wss = new WebSocketServer({ server, maxPayload: 8 * 1024 * 1024 })
 
-wss.on('connection', (ws, req) => {
+// Exported so the handshake/routing/authorization rules can be exercised
+// against a fake socket, with no server and no Postgres — the same move Pass 9
+// made for auth.js and google.js.
+export function onConnection(ws, req) {
   const ip = ipOf(req)
   const live = liveConns.get(ip) || 0
   if (!allowConn(ip) || live >= MAX_CONNS_PER_IP) {
@@ -205,6 +211,19 @@ wss.on('connection', (ws, req) => {
           conn.token = body.data.token
           conn.userId = body.data.userId
           conn.email = body.data.email
+        } else if (body.ok && code === 'auth.logout') {
+          // The session row is gone; this socket has to stop being authenticated
+          // with it. Plugin routing below trusts conn.userId and never re-reads
+          // auth.sessions, so without this a logged-out socket kept full access
+          // to the account for its entire lifetime — logout revoked the token
+          // everywhere except the one place it was actually in use. The browser
+          // reloads and drops the socket after logout, but that is the client
+          // choosing to; a stolen token driving its own socket does not.
+          // conn.hello stays true: the socket is still a valid unauthenticated
+          // connection and may log in again, exactly as a first hello leaves it.
+          conn.userId = null
+          conn.email = null
+          conn.token = null
         }
         send({ reqId, ...body })
       } catch (e) {
@@ -228,20 +247,33 @@ wss.on('connection', (ws, req) => {
       send({ reqId, ok: false, error: `service unavailable: ${svc.replace('atlas-', '')}` })
     }
   })
-})
+}
 
-// Heartbeat: terminate connections that missed a ping round. Also keeps idle
-// sockets alive through Cloudflare's ~100s idle timeout (the outbox already
-// had this; the inbox needed it once the tunnel replaced the direct door).
-setInterval(() => {
-  for (const ws of wss.clients) {
-    if (!ws.isAlive) {
-      ws.terminate()
-      continue
+wss.on('connection', onConnection)
+
+// Bootstrap only when run as the entrypoint (`node services/inbox.js`, per
+// docker-compose). At module scope, server.listen(80) and the heartbeat timer
+// made this file unimportable: the listen fails or steals a port, and the
+// unref'd-nowhere interval keeps any importing process alive forever. Behind
+// the guard, importing this file starts nothing.
+const entrypoint = (() => {
+  try { return pathToFileURL(realpathSync(path.resolve(process.argv[1] || '.'))).href }
+  catch { return pathToFileURL(path.resolve(process.argv[1] || '.')).href }
+})()
+if (import.meta.url === entrypoint) {
+  // Heartbeat: terminate connections that missed a ping round. Also keeps idle
+  // sockets alive through Cloudflare's ~100s idle timeout (the outbox already
+  // had this; the inbox needed it once the tunnel replaced the direct door).
+  setInterval(() => {
+    for (const ws of wss.clients) {
+      if (!ws.isAlive) {
+        ws.terminate()
+        continue
+      }
+      ws.isAlive = false
+      ws.ping()
     }
-    ws.isAlive = false
-    ws.ping()
-  }
-}, 30000)
+  }, 30000)
 
-server.listen(80, () => console.log('inbox up on :80'))
+  server.listen(80, () => console.log('inbox up on :80'))
+}
