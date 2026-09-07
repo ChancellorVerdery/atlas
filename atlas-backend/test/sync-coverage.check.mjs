@@ -27,15 +27,46 @@ globalThis.localStorage = {
   key: (i) => [...store.keys()][i] ?? null,
 }
 
-// Only plugins whose client data module is dependency-free (no sync.js /
-// platform.js / DOM), so it can be imported straight into node.
+// Every mapper whose client data module lives in atlas-ui/src/page and imports
+// cleanly under node given the localStorage stub above. That is a wider set than
+// it looks: ladder/calendar/email pull in sync.js, platform.js and each other,
+// but none of those do DOM or network work at import time, so they load fine.
+// They were left out on a 'dependency-free only' rule that no longer holds, and
+// the cost was real — see the ladder entry below.
+//
+// NOT covered, and why (both are unfixable here, not oversights):
+//   finance, graph — retired plugins. Their client source is deliberately out of
+//     the repo (.gitignore: 'Retired-plugin archive ... never committed'); only
+//     the built plugins-dist/*.zip exists, and that is gitignored too, so there
+//     is nothing a clean checkout could import. Their mappers are still tracked
+//     and still tested by their own round-trip tests. This blind spot is exactly
+//     how finance.vendorRules stayed unmapped: no loader here to compare against.
 const PLUGINS = [
   { name: 'gym', module: 'gym.js', loader: 'loadGym' },
   { name: 'work', module: 'work.js', loader: 'loadWork' },
   { name: 'sleep', module: 'sleep.js', loader: 'loadSleep' },
   { name: 'canvas', module: 'canvas.js', loader: 'loadCanvas' },
   { name: 'course', module: 'course.js', loader: 'loadCourse' },
+  // Added later. On the first run under this check ladder failed with three
+  // dropped key paths — dwellFloorMin, roundTripFrac and gapOverrides, all
+  // user-editable from Ladder settings — which is what prompted widening it.
+  { name: 'ladder', module: 'ladder.js', loader: 'loadLadder' },
+  { name: 'calendar', module: 'calendar.js', loader: 'loadCal' },
+  { name: 'email', module: 'email.js', loader: 'loadEmail' },
 ]
+
+// Key paths a loader returns that are deliberately NOT synced, so their absence
+// from the round trip is correct rather than data loss. Keep this list tiny and
+// justified: every entry is a hole in the check.
+const NOT_SYNCED = {
+  // loadEmail returns `{ ...atlasHalf, ...loadGoogle(s) }`, a MERGE of two
+  // storage keys. The Google half (connection status + address + account list)
+  // is server-side truth cached locally so the synchronous isConnected() guards
+  // stay synchronous; saveEmail splits it back out to its own key before
+  // writing, precisely so a pull of the synced half can never carry it off.
+  // The mapper drops these on purpose — see its header comment.
+  email: ['connected', 'address', 'accounts', 'accounts[]'],
+}
 
 // The runner stringifies nothing itself — decompose does, for jsonb columns —
 // and pg hands those back parsed. Best-effort re-parse so recompose sees what
@@ -98,13 +129,15 @@ for (const p of PLUGINS) {
   const got = paths(back)
   // 'v' is a client-side schema marker some mappers re-add and some don't; it
   // carries no user data either way.
-  const missing = [...want].filter((k) => !got.has(k) && k !== 'v')
+  const exempt = new Set(NOT_SYNCED[p.name] || [])
+  const missing = [...want].filter((k) => !got.has(k) && k !== 'v' && !exempt.has(k))
   if (missing.length) {
     failures++
     console.log(`FAIL ${p.name}: ${missing.length} key path(s) do NOT survive a sync round trip`)
     for (const m of missing) console.log(`       ${m}`)
   } else {
-    console.log(`ok   ${p.name}: every key path the loader guarantees survives (${want.size} checked)`)
+    const ex = (NOT_SYNCED[p.name] || []).length
+    console.log(`ok   ${p.name}: every key path the loader guarantees survives (${want.size} checked${ex ? `, ${ex} exempt` : ''})`)
   }
 }
 
