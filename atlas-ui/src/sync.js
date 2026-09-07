@@ -44,6 +44,16 @@ const backoffs = { inbox: BACKOFF_MIN, outbox: BACKOFF_MIN }
 const pending = new Map()       // reqId → {resolve, reject, timer}
 const offlinePushes = new Map() // storage key → latest raw value, flushed on reconnect
 const debounces = new Map()     // storage key → {timer, raw} pending debounced push
+// Keys with a flushPushes() timer already scheduled. Both sockets' hello acks
+// call flushPushes() independently (inbox and outbox each ack on every
+// connect), so a single ordinary reconnect fires it twice in quick
+// succession; a flapping connection fires it many times. Without this guard
+// every queued key got a duplicate setTimeout per overlapping call, so the
+// same key could go out as two (or more) concurrent sync.request()s — wasted
+// inbox rate-limit budget for no reason, since flushPushes already re-reads
+// the queue at fire time and a second scheduled run for the same key can
+// never send anything the first run wouldn't have.
+const flushScheduled = new Set()
 const updateCbs = []
 const statusCbs = []
 let helloWaiters = []           // connect() resolvers awaiting the inbox hello ack
@@ -230,9 +240,16 @@ function flushPushes() {
   // Paced, not a burst. Each send re-reads the queue at fire time: a newer
   // value replacing the snapshot's mid-flush must win, and re-sending the
   // snapshot's raw would silently re-queue the OLD value over it.
+  // Skip a key that's already got a run scheduled: this fires once per hello
+  // ack, and inbox + outbox both ack on every connect, so an unguarded loop
+  // would double-schedule (or worse, on a flapping connection) every queued
+  // key. See flushScheduled above.
   let i = 0
   for (const key of [...offlinePushes.keys()]) {
+    if (flushScheduled.has(key)) continue
+    flushScheduled.add(key)
     setTimeout(() => {
+      flushScheduled.delete(key)
       const raw = offlinePushes.get(key)
       if (raw != null) sendPush(key, raw)
     }, FLUSH_SPACING * i++)
