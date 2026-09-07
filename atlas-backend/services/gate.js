@@ -13,6 +13,8 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { verifySignature, parseSignature, issueToken, tokenValid } from '../lib/sshsig.js'
 import { startPortainerAuth } from './portainer-auth.js'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const PORT = Number(process.env.GATE_PORT || 8099)
 const NAMESPACE = 'atlas-gate' // baked into the signature; ties it to this use
@@ -25,6 +27,14 @@ const KEY_HINT = process.env.GATE_KEY_HINT || '~/.ssh/homeserver'
 // A restart invalidates outstanding tokens unless a secret is supplied. That is
 // the safe default: better a re-sign than a token signed with a key nobody set.
 const SECRET = process.env.GATE_SECRET || crypto.randomBytes(32).toString('hex')
+
+// Everything interpolated into the page below is escaped. The one that matters
+// is the error text: the "wrong namespace" message quotes a field read straight
+// out of the pasted signature blob, which is attacker-chosen bytes and needs no
+// key to construct. Unescaped it put arbitrary script on a gated origin whose
+// visitor is holding the cookie for /docker, /db and /shell.
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
 // host -> where it goes. Anything not listed is refused outright, so a stray
 // DNS record can't turn the gate into an open proxy.
@@ -49,6 +59,14 @@ setInterval(() => {
   for (const [n, exp] of nonces) if (exp < now) nonces.delete(n)
 }, 60_000).unref()
 
+// A hard ceiling on outstanding challenges. The sweep above only reclaims
+// nonces that have already expired, and the TTL is an hour - so an
+// unauthenticated client that just asks for the page in a loop grows this map
+// for a full hour before anything is reclaimed, in the one process standing
+// between the internet and /shell. The cap turns that from "the gate dies" into
+// "the oldest challenge is discarded".
+const MAX_NONCES = Number(process.env.GATE_MAX_NONCES || 10_000)
+
 // An hour, not ten minutes: the flow is "read the page, switch to a terminal,
 // maybe go find the right machine", and a challenge going stale mid-task is
 // indistinguishable from the signature being rejected.
@@ -57,8 +75,16 @@ const NONCE_TTL_MS = 60 * 60_000
 const newNonce = () => {
   const n = crypto.randomBytes(18).toString('base64url')
   nonces.set(n, Date.now() + NONCE_TTL_MS)
+  // Every nonce carries the same TTL, so insertion order IS expiry order and
+  // the oldest key is always the one closest to being reclaimed anyway. Evicting
+  // it costs a flood victim nothing that the sweep would not have taken shortly.
+  while (nonces.size > MAX_NONCES) nonces.delete(nonces.keys().next().value)
   return n
 }
+
+// The namespace is unbounded in the wire format; quote a readable amount of it,
+// not a megabyte of someone's paste.
+const clamp = (v, n = 80) => (String(v).length > n ? `${String(v).slice(0, n)}…` : String(v))
 
 const cookieOf = (req) =>
   Object.fromEntries(String(req.headers.cookie || '').split(';').map((c) => {
@@ -92,7 +118,7 @@ const page = (nonce, err) => `<!doctype html><meta charset="utf-8">
 <div class="card">
   <h1>Sign in with your SSH key</h1>
   <p>Run this on a machine whose key can already reach the Atlas server, then paste what it prints. The token it gives your browser lasts 24 hours.</p>
-  <pre id="cmd">printf %s '${nonce}' | ssh-keygen -Y sign -f ${KEY_HINT} -n ${NAMESPACE} -</pre>
+  <pre id="cmd">printf %s '${esc(nonce)}' | ssh-keygen -Y sign -f ${esc(KEY_HINT)} -n ${esc(NAMESPACE)} -</pre>
   <p class="hint"><button type="button" id="copy">Copy command</button>
   Any key this server already trusts works — change the <code>-f</code> path if you use a different one.
   Nothing secret leaves your machine: this prints a signature, not your key.</p>
@@ -100,9 +126,9 @@ const page = (nonce, err) => `<!doctype html><meta charset="utf-8">
   Each challenge is good once — if you get an error, re-run the command with the
   <em>new</em> value shown above rather than pasting the previous signature again.</p>
   <form method="POST" action="/_gate/verify">
-    <input type="hidden" name="nonce" value="${nonce}">
+    <input type="hidden" name="nonce" value="${esc(nonce)}">
     <textarea name="sig" placeholder="-----BEGIN SSH SIGNATURE-----" spellcheck="false" autofocus></textarea>
-    <p class="err">${err || ''}</p>
+    <p class="err">${esc(err || '')}</p>
     <button type="submit">Unlock for 24 hours</button>
   </form>
 </div>
@@ -136,7 +162,7 @@ function proxy(req, res, up) {
   req.pipe(p)
 }
 
-const server = http.createServer((req, res) => {
+export function handleRequest(req, res) {
   const host = String(req.headers.host || '').split(':')[0]
   const up = UPSTREAM[host]
   if (!up) { res.writeHead(404, { 'content-type': 'text/plain' }).end('unknown host'); return }
@@ -162,7 +188,7 @@ const server = http.createServer((req, res) => {
         challenge(res, !parsed
           ? 'That does not look like an SSH signature. Paste the whole block, including the BEGIN and END lines.'
           : parsed.namespace !== NAMESPACE
-            ? `That signature was made for "${parsed.namespace}", not "${NAMESPACE}" — check the -n flag.`
+            ? `That signature was made for "${clamp(parsed.namespace)}", not "${NAMESPACE}" — check the -n flag.`
             : 'That signature is valid, but it was made by a key this server does not trust.')
         return
       }
@@ -179,30 +205,57 @@ const server = http.createServer((req, res) => {
 
   if (!tokenValid(cookieOf(req), SECRET)) { challenge(res); return }
   proxy(req, res, up)
-})
+}
 
 // Vite's HMR (and anything else) speaks WebSocket; the token is checked on the
 // upgrade too, or the socket would be a way straight past the gate.
-server.on('upgrade', (req, socket, head) => {
-  const host = String(req.headers.host || '').split(':')[0]
-  const up = UPSTREAM[host]
-  if (!up || !tokenValid(cookieOf(req), SECRET)) { socket.destroy(); return }
-  const upstream = net.connect(up.port, up.host, () => {
-    upstream.write(
-      `${req.method} ${req.url} HTTP/1.1\r\n` +
-      Object.entries(req.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n') +
-      '\r\n\r\n')
-    if (head?.length) upstream.write(head)
-    socket.pipe(upstream).pipe(socket)
-  })
-  upstream.on('error', () => socket.destroy())
-  socket.on('error', () => upstream.destroy())
-})
+export function handleUpgrade(req, socket, head) {
+  // Wrapped because an uncaught throw here kills the whole gate process: the
+  // 'upgrade' event has no error path of its own and there is no
+  // uncaughtException handler, so one bad socket would take down the thing
+  // standing between the internet and /shell. Pass 13 found this while running
+  // a negative control (NC5) - removing the `!up` guard made net.connect throw
+  // on undefined and killed the run before any arm could report. Not reachable
+  // today; the cost of the guarantee is these three lines. Dropping the socket
+  // is the same outcome every other rejection here takes.
+  try {
+    const host = String(req.headers.host || '').split(':')[0]
+    const up = UPSTREAM[host]
+    if (!up || !tokenValid(cookieOf(req), SECRET)) { socket.destroy(); return }
+    const upstream = net.connect(up.port, up.host, () => {
+      upstream.write(
+        `${req.method} ${req.url} HTTP/1.1\r\n` +
+        Object.entries(req.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n') +
+        '\r\n\r\n')
+      if (head?.length) upstream.write(head)
+      socket.pipe(upstream).pipe(socket)
+    })
+    upstream.on('error', () => socket.destroy())
+    socket.on('error', () => upstream.destroy())
+  } catch (e) {
+    console.error('upgrade:', e.message)
+    try { socket.destroy() } catch {}
+  }
+}
 
-server.listen(PORT, '127.0.0.1', () =>
-  console.log(`gate up on 127.0.0.1:${PORT} for ${Object.keys(UPSTREAM).join(', ')}` +
-    (process.env.GATE_SECRET ? '' : ' (no GATE_SECRET set — tokens die on restart)')))
+// The gate's own secret, so a test can mint a cookie the real `tokenValid`
+// accepts without reaching into module internals.
+export const gateSecret = () => SECRET
 
-// Same process, separate listener: caddy's :9001 block sends Portainer traffic
-// here so the Docker tab arrives already signed in.
-startPortainerAuth()
+// Importing this file must not bind a port or sign anything in to Portainer;
+// only running it as a program does. Same guard as auth/google/inbox/outbox/profile.
+const entrypoint = (() => {
+  try { return pathToFileURL(fs.realpathSync(path.resolve(process.argv[1] || '.'))).href }
+  catch { return pathToFileURL(path.resolve(process.argv[1] || '.')).href }
+})()
+if (import.meta.url === entrypoint) {
+  const server = http.createServer(handleRequest)
+  server.on('upgrade', handleUpgrade)
+  server.listen(PORT, '127.0.0.1', () =>
+    console.log(`gate up on 127.0.0.1:${PORT} for ${Object.keys(UPSTREAM).join(', ')}` +
+      (process.env.GATE_SECRET ? '' : ' (no GATE_SECRET set — tokens die on restart)')))
+
+  // Same process, separate listener: caddy's :9001 block sends Portainer traffic
+  // here so the Docker tab arrives already signed in.
+  startPortainerAuth()
+}
