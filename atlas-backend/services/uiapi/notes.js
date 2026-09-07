@@ -97,15 +97,25 @@ export async function notesSync(req, res) {
   if (p === '/changes' && req.method === 'GET') {
     await gc(userId)
     const since = Math.max(0, Number(u.searchParams.get('since') || 0) || 0)
+    // Read the cursor FIRST, then bound the row scan by it. These are two
+    // separate pool queries with no shared snapshot, so a write that commits
+    // between them lands on the wrong side of whichever runs last. Reading the
+    // rows first and the cursor second hands the device a rev it was never
+    // given the rows for, and `since = rev` on the next pull skips them for
+    // good -- a silent, permanent loss of exactly the change the revision log
+    // exists to deliver. This order cannot lose: nextRev() bumps the cursor
+    // INSIDE the writer's transaction, so any rev this read can see implies the
+    // matching file row is already committed and visible to the scan below.
+    const upto = await currentRev(userId)
     const r = await pool.query(
       `SELECT path, sha256, size, mtime, rev, (deleted_at IS NOT NULL) AS deleted
          FROM notes_sync.files
-        WHERE user_id = $1 AND rev > $2
+        WHERE user_id = $1 AND rev > $2 AND rev <= $3
         ORDER BY rev`,
-      [userId, since],
+      [userId, since, upto],
     )
     return json(res, 200, {
-      rev: await currentRev(userId),
+      rev: upto,
       files: r.rows.map((x) => ({
         path: x.path, sha256: x.sha256, size: Number(x.size), mtime: Number(x.mtime),
         rev: Number(x.rev), deleted: x.deleted,
