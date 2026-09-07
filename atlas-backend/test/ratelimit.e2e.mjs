@@ -1,12 +1,35 @@
 // Rate-limit e2e against the LIVE backend (run from any machine: node >= 22).
-// Exercises each limit class once. NOTE: consumes this IP's auth allowance
-// (10/10min) — real logins from this IP may be limited for up to 10 minutes.
+// Exercises each limit class once.
+//
+// OPT-IN. Under a bare `node --test` this file prints a skip line and exits 0,
+// so the suite count is the same on every run. Set ATLAS_E2E_LIVE=1 to actually
+// reach sync.myatlasapp.net:
+//
+//   ATLAS_E2E_LIVE=1 node test/ratelimit.e2e.mjs
+//
+// Why opt-in: this is the only file here that talks to production, and arm 6
+// deliberately burns this IP's auth allowance (10 per 10 min). Every prior
+// overnight pass ran the suite twice — before and after its change — and the
+// second run inherited the first run's spent allowance, so arm 2 failed for a
+// reason that had nothing to do with the change under test. A count that needs
+// a paragraph of explanation is not a count. See NIGHT-NOTES.md, pass 15/16.
+if (process.env.ATLAS_E2E_LIVE !== '1') {
+  console.log('skip - ratelimit.e2e: live-backend suite, set ATLAS_E2E_LIVE=1 to run')
+  process.exit(0)
+}
+
 const HOST = 'https://sync.myatlasapp.net'
 const WSS = 'wss://sync.myatlasapp.net'
-let pass = 0, fail = 0
+let pass = 0, fail = 0, skipped = 0
 const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'ok' : 'FAIL'} - ${name}${detail ? ` (${detail})` : ''}`)
   ok ? pass++ : fail++
+}
+// A skip is not a pass. An arm that cannot be measured says so and is counted
+// apart, so nobody reads "8 ok" off a run where two arms never executed.
+const skip = (name, why) => {
+  console.log(`skip - ${name} (${why})`)
+  skipped++
 }
 
 const openWS = (path) => new Promise((resolve, reject) => {
@@ -20,17 +43,23 @@ const nextMsg = (ws, ms = 10000) => new Promise((resolve, reject) => {
   ws.addEventListener('message', e => { clearTimeout(t); resolve(JSON.parse(e.data)) }, { once: true })
 })
 const rpc = async (ws, obj) => { const p = nextMsg(ws); ws.send(JSON.stringify(obj)); return p }
+const isLimited = (r) => /rate limited/i.test(r?.error || '')
 
 // 1. Internal /deliver must be unreachable through Caddy.
 const st = (await fetch(HOST + '/outbox/deliver', { method: 'POST', body: '{}' })).status
 check('outbox /deliver blocked externally', st === 404, `status ${st}`)
 
 // 2. Normal flow untouched: hello + a (failed) login round-trip.
+// This login doubles as the preflight for the 10/10min auth window: if it comes
+// back 'rate limited' the allowance was already spent before this process
+// started, and arms 2 and 6 are unmeasurable rather than broken.
 const ws1 = await openWS('/inbox')
 const h1 = await rpc(ws1, { type: 'hello', sessionId: 't1' })
 check('inbox hello ok', h1.type === 'hello' && h1.ok === true)
 const login = await rpc(ws1, { reqId: 'r1', code: 'auth.login', payload: { email: 'nobody@example.com', password: 'wrong' } })
-check('login round-trips normally', login.ok === false && /invalid email/i.test(login.error), login.error)
+const authFresh = !isLimited(login)
+if (authFresh) check('login round-trips normally', login.ok === false && /invalid email/i.test(login.error), login.error)
+else skip('login round-trips normally', "this IP's auth allowance (10/10min) was already spent — wait 10 min")
 
 // 3. Token-hello guessing throttled (30/min/IP): 31 bad-token hellos.
 let helloLimited = false
@@ -67,15 +96,22 @@ check('concurrent connections capped', refused >= 2, `${refused} refused of 12`)
 for (const ws of socks) ws?.close()
 
 // 6. Login hammering: attempts beyond 10/10min per IP are cut off.
-const ws3 = await openWS('/inbox')
-await rpc(ws3, { type: 'hello', sessionId: 't3' })
-let authLimited = false
-for (let i = 0; i < 11; i++) {
-  const r = await rpc(ws3, { reqId: 'a' + i, code: 'auth.login', payload: { email: 'nobody@example.com', password: 'wrong' + i } })
-  if (/rate limited/.test(r.error || '')) { authLimited = true; break }
+// Skipped rather than run when the window was already exhausted at arm 2: the
+// first attempt would come back 'rate limited' and the arm would pass without
+// having demonstrated anything about the limiter's threshold.
+if (!authFresh) {
+  skip('login attempts rate limited', 'allowance already spent at arm 2 — this arm would pass vacuously')
+} else {
+  const ws3 = await openWS('/inbox')
+  await rpc(ws3, { type: 'hello', sessionId: 't3' })
+  let authLimited = false
+  for (let i = 0; i < 11; i++) {
+    const r = await rpc(ws3, { reqId: 'a' + i, code: 'auth.login', payload: { email: 'nobody@example.com', password: 'wrong' + i } })
+    if (isLimited(r)) { authLimited = true; break }
+  }
+  check('login attempts rate limited', authLimited)
+  ws3.close()
 }
-check('login attempts rate limited', authLimited)
-ws3.close()
 
-console.log(`\n${pass} ok, ${fail} failed`)
+console.log(`\n${pass} ok, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}`)
 process.exit(fail ? 1 : 0)
