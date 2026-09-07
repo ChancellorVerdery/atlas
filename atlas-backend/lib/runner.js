@@ -80,9 +80,17 @@ export async function applyDdl(ddl) {
 export function serveHttp(routes, port = 80) {
   http
     .createServer((req, res) => {
-      let body = ''
-      req.on('data', c => (body += c))
+      // Buffer the raw chunks and decode ONCE at the end. `body += c` would
+      // decode each chunk independently, and a multi-byte UTF-8 character split
+      // across a TCP segment boundary then becomes two U+FFFD replacement
+      // characters — silently, with the JSON still valid, so it is stored and
+      // broadcast as mojibake rather than erroring. Plugin saves carry arbitrary
+      // user text (gym notes, vendor rules) and routinely exceed one read, so
+      // this is reachable. Reproduced with a body split inside an 'e-acute'.
+      const chunks = []
+      req.on('data', c => chunks.push(c))
       req.on('end', async () => {
+        const body = Buffer.concat(chunks).toString('utf8')
         try {
           const handler = routes[req.url]
           if (req.method !== 'POST' || !handler) {
