@@ -10,6 +10,9 @@
 // Same conventions as lib/runner.js runPlugin(): inbox-routed requests hit
 // POST /handle, every result (success or error) flows back through the outbox.
 
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { realpathSync } from 'node:fs'
 import { applyDdl, serveHttp, deliver } from '../lib/runner.js'
 import { pool, tx } from '../lib/db.js'
 
@@ -72,7 +75,7 @@ async function postSvc(svc, path, body) {
   return res.json()
 }
 
-async function pageGet(userId, storageKey) {
+export async function pageGet(userId, storageKey) {
   if (BOARD_KEYS.includes(storageKey)) {
     const r = await pool.query(
       'SELECT board FROM profile.page_boards WHERE user_id = $1 AND storage_key = $2',
@@ -89,7 +92,7 @@ async function pageGet(userId, storageKey) {
 
 // Returns the value as stored, so sync.update fans out exactly what other
 // sessions would read back.
-async function pageSave(userId, storageKey, value) {
+export async function pageSave(userId, storageKey, value) {
   if (BOARD_KEYS.includes(storageKey)) {
     if (!value || typeof value !== 'object') throw new Error('board value must be an object')
     await pool.query(
@@ -117,7 +120,7 @@ async function pageSave(userId, storageKey, value) {
 // One map of everything the user has server-side: boards, flags, and each
 // plugin's recomposed state. Unreachable plugins become null + a warning so a
 // partial backend never blocks a pull.
-async function pullAll(userId) {
+export async function pullAll(userId) {
   const states = {}
   const warnings = []
   const boards = await pool.query(
@@ -147,7 +150,7 @@ async function pullAll(userId) {
 // Replace-not-merge: the backup becomes the complete server-side truth.
 // data maps storageKey -> raw string (JSON blob from the app's backup format)
 // or already-parsed object; flags are plain strings.
-async function importAll(userId, data) {
+export async function importAll(userId, data) {
   if (!data || typeof data !== 'object') throw new Error('data must be an object')
   const warnings = []
   let imported = 0
@@ -216,40 +219,52 @@ async function importAll(userId, data) {
   return { imported, warnings }
 }
 
-await applyDdl(DDL)
-
-serveHttp({
-  '/handle': async ({ userId, sessionId, reqId, code, payload }) => {
-    try {
-      if (code === 'page.get') {
-        const { storageKey } = payload || {}
-        const value = await pageGet(userId, storageKey)
-        await deliver({ userId, sessionId, reqId, ok: true, data: { key: storageKey, value } })
-      } else if (code === 'page.save') {
-        const { storageKey, value } = payload || {}
-        const stored = await pageSave(userId, storageKey, value)
-        await deliver({ userId, sessionId, reqId, ok: true, data: { saved: storageKey } })
-        await deliver({
-          type: 'sync.update',
-          userId,
-          excludeSession: sessionId,
-          data: { key: storageKey, value: stored },
-        })
-      } else if (code === 'sync.pull.all') {
-        const data = await pullAll(userId)
-        await deliver({ userId, sessionId, reqId, ok: true, data })
-      } else if (code === 'sync.import') {
-        const data = await importAll(userId, payload && payload.data)
-        await deliver({ userId, sessionId, reqId, ok: true, data })
-      } else {
-        throw new Error('unhandled code')
-      }
-    } catch (e) {
-      console.error(`profile ${code}:`, e)
-      await deliver({ userId, sessionId, reqId, ok: false, error: String((e && e.message) || e) })
+// The one inbox-routed entry point, exported so the behaviour below can be
+// executed by a test rather than only read. Every result - success or error -
+// leaves through deliver(); the return value is only the inbox's 200.
+export async function handle({ userId, sessionId, reqId, code, payload }) {
+  try {
+    if (code === 'page.get') {
+      const { storageKey } = payload || {}
+      const value = await pageGet(userId, storageKey)
+      await deliver({ userId, sessionId, reqId, ok: true, data: { key: storageKey, value } })
+    } else if (code === 'page.save') {
+      const { storageKey, value } = payload || {}
+      const stored = await pageSave(userId, storageKey, value)
+      await deliver({ userId, sessionId, reqId, ok: true, data: { saved: storageKey } })
+      await deliver({
+        type: 'sync.update',
+        userId,
+        excludeSession: sessionId,
+        data: { key: storageKey, value: stored },
+      })
+    } else if (code === 'sync.pull.all') {
+      const data = await pullAll(userId)
+      await deliver({ userId, sessionId, reqId, ok: true, data })
+    } else if (code === 'sync.import') {
+      const data = await importAll(userId, payload && payload.data)
+      await deliver({ userId, sessionId, reqId, ok: true, data })
+    } else {
+      throw new Error('unhandled code')
     }
-    return {}
-  },
-})
+  } catch (e) {
+    console.error(`profile ${code}:`, e)
+    await deliver({ userId, sessionId, reqId, ok: false, error: String((e && e.message) || e) })
+  }
+  return {}
+}
 
-console.log('profile service up')
+// Bootstrap only when run as the entrypoint (`node services/profile.js`, per
+// docker-compose). At module scope, applyDdl() blocks for ~2 minutes against no
+// database and then process.exit(1)s, and serveHttp() binds port 80 - so
+// importing this file to test it was impossible. Same shape as inbox.js and
+// outbox.js (Pass 11).
+const entrypoint = (() => {
+  try { return pathToFileURL(realpathSync(path.resolve(process.argv[1] || '.'))).href }
+  catch { return pathToFileURL(path.resolve(process.argv[1] || '.')).href }
+})()
+if (import.meta.url === entrypoint) {
+  await applyDdl(DDL)
+  serveHttp({ '/handle': handle })
+  console.log('profile service up')
+}
