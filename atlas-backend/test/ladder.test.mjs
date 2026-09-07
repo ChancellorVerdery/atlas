@@ -7,7 +7,7 @@ import mapper from '../services/plugins/ladder.js'
 // Columns declared jsonb in the mapper's DDL. node-pg sends the stringified
 // value and returns it JSON.parse'd on SELECT; simulate exactly that.
 const JSONB = {
-  settings: ['buffer', 'cal_ids'],
+  settings: ['buffer', 'dwell_floor_min', 'round_trip_frac', 'gap_overrides', 'cal_ids'],
   meals: ['meal'],
   flex: ['minutes', 'weekday'],
   geo_cache: ['result'],
@@ -45,6 +45,9 @@ const defaults = {
   wake: '07:00',
   windowDays: 7,
   buffer: 5,
+  dwellFloorMin: 45,
+  roundTripFrac: 0.5,
+  gapOverrides: {},
   meals: [
     { id: 'lm-mdefault1', name: 'Breakfast', pref: '08:00', duration: 30, enabled: true },
     { id: 'lm-mdefault2', name: 'Lunch', pref: '12:30', duration: 45, enabled: true },
@@ -67,6 +70,9 @@ const rich = {
   wake: '06:15',
   windowDays: 31,
   buffer: 0,
+  dwellFloorMin: 0,
+  roundTripFrac: 1,
+  gapOverrides: {},
   meals: [
     // settings oninput can yield a non-integer duration (Math.max(5, 7.5))
     { id: 'lm-full', name: 'Brunch ☕', pref: '10:30', duration: 7.5, enabled: false },
@@ -77,7 +83,9 @@ const rich = {
     { id: 'lf-w', title: 'Deep work', minutes: 120, kind: 'week' },
     { id: 'lf-d', title: 'Errands 🛒', minutes: 45, kind: 'day', date: '2026-07-10' },
     { id: 'lf-r', title: 'Piano', minutes: 30, kind: 'recur', weekday: 0 },
-    { id: 'lf-s', title: 'Dentist', minutes: 90, kind: 'set', date: '2026-07-12', start: '09:30', end: '11:00' },
+    // addr is the free-typed drive-time address a kind:'set' event can carry
+    // (buildFlexFields, ladder.js) — previously dropped by decompose entirely.
+    { id: 'lf-s', title: 'Dentist', minutes: 90, kind: 'set', date: '2026-07-12', start: '09:30', end: '11:00', addr: '9201 University City Blvd, Charlotte' },
     // attached, tag anchor: NO anchorLabel key at all
     { id: 'lf-at', title: 'Shake', minutes: 15, kind: 'attached', side: 'after', place: 'none', anchorTag: 'gym' },
     // attached, series anchor: anchorLabel present but EMPTY — '' ≠ absent
@@ -124,6 +132,9 @@ const real = {
   wake: '07:30',
   windowDays: 5,
   buffer: 10,
+  dwellFloorMin: 60,
+  roundTripFrac: 0.35,
+  gapOverrides: { 'cal-ev-9': 'home', 'shift-3': 'straight' },
   meals: [
     { id: 'lm-b', name: 'Breakfast', pref: '08:00', duration: 30, enabled: true },
     { id: 'lm-l', name: 'Lunch', pref: '12:30', duration: 45, enabled: false },
@@ -205,6 +216,19 @@ roundTrip({
   ],
 }, 'flex minutes/weekday fidelity')
 
+// Regression: flex.addr (kind:'set' free-typed drive-time address,
+// buildFlexFields at ladder.js) was entirely absent from decompose/recompose
+// — every set event's address was silently dropped on a cloud round-trip,
+// breaking drive-time chaining for it. Present addr round-trips; absent addr
+// (every other kind never sets it) stays absent, not null/''.
+roundTrip({
+  ...defaults,
+  flex: [
+    { id: 'lf-addr', title: 'Dentist', minutes: 60, kind: 'set', date: '2026-07-12', start: '09:30', end: '10:30', addr: '123 Main St' },
+    { id: 'lf-noaddr', title: 'Deep work', minutes: 60, kind: 'week' },
+  ],
+}, 'flex.addr present and absent')
+
 // drives: an imported blob bypasses the loader's ceil-to-5 rounding; decompose
 // re-applies it (7.2 → 10). Previously: 22P02 inserting 7.2 into integer.
 normTrip(
@@ -252,5 +276,42 @@ normTrip(
 
 // buffer string fidelity still holds alongside the normalization pass.
 roundTrip({ ...defaults, buffer: '10' }, 'buffer numeric string verbatim')
+
+// Regression: dwellFloorMin / roundTripFrac / gapOverrides (the chooseGapTravel
+// thresholds edited in Ladder settings, and the per-block forced travel choice
+// set by setGapOverride) were entirely absent from decompose/recompose — every
+// one of them silently reverted to the built-in default on a cloud round-trip.
+// Same class as gym's plan.overrides.
+roundTrip({
+  ...defaults,
+  dwellFloorMin: 90,
+  roundTripFrac: 0.25,
+  gapOverrides: { 'cal-abc': 'wait', 'lf-1': 'office', 'shift-2': 'straight', 'x': 'home' },
+}, 'gap-travel thresholds and per-block overrides round-trip')
+
+// ...and the loader's string tolerance applies to both thresholds exactly as it
+// does to buffer: typing into the number inputs can store '45' / '0.5'.
+roundTrip({ ...defaults, dwellFloorMin: '45', roundTripFrac: '0.5' }, 'threshold numeric strings verbatim')
+
+// Out-of-range / junk thresholds fall back to the loader's defaults rather than
+// persisting a value chooseGapTravel would read as NaN.
+normTrip({ ...defaults, dwellFloorMin: -1, roundTripFrac: 0 }, defaults, 'negative dwell / zero frac → defaults')
+normTrip({ ...defaults, roundTripFrac: 1.5 }, defaults, 'frac above 1 → default')
+normTrip({ ...defaults, dwellFloorMin: 'nope' }, defaults, 'junk threshold → default')
+// ...but an ARRAY is not junk to the loader: isObj is `typeof o === 'object'`
+// in both loadLadder and this mapper, so [] is kept verbatim rather than
+// replaced with {}. The mapper's job is to mirror the loader, not to be
+// stricter than it.
+roundTrip({ ...defaults, gapOverrides: [] }, 'array gapOverrides kept verbatim, as the loader keeps it')
+
+// '__proto__' as a gapOverrides key (block ids are not free text, but the blob
+// is attacker-shaped on import) must stay an own property.
+{
+  const evil = JSON.parse(JSON.stringify({ ...defaults }).replace('"gapOverrides":{}', '"gapOverrides":{"__proto__":"home"}'))
+  const back = mapper.recompose(simulatePg(mapper.decompose(evil)))
+  if (Object.getPrototypeOf(back.gapOverrides) !== Object.prototype) throw new Error('gapOverrides prototype replaced')
+  const own = Object.getOwnPropertyDescriptor(back.gapOverrides, '__proto__')
+  deepStrictEqual(own && own.value, 'home', 'gapOverrides __proto__ entry kept as own key')
+}
 
 console.log('OK ladder')

@@ -18,6 +18,12 @@
 //   loader's own rule (integer 1..31 or reset to 7) BEFORE the insert — a
 //   decimal typed into the Planning-window field becomes 7, exactly what the
 //   client's next loadLadder would do.
+// - settings.dwell_floor_min / round_trip_frac are jsonb for the same reason as
+//   buffer: both loader rules are `Number.isFinite(Number(x))` plus a RANGE test
+//   on the RAW value, so '45' and '0.5' pass and stay strings. gap_overrides is
+//   jsonb because it is a free-keyed map (arriving block id -> forced choice)
+//   and, like every isObj() check in this file and in loadLadder, it accepts an
+//   ARRAY as an object — [] is kept verbatim, not coerced to {}.
 // - settings.cal_ids is jsonb: loadLadder passes ANY object through untouched
 //   (missing or extra keys survive), so three fixed columns would invent keys.
 // - meals/aliases are ONE jsonb column per row: the loader keeps rows verbatim
@@ -42,7 +48,9 @@
 //   The app never stores null in a flex field, so SQL NULL ⇔ absent key.
 //   minutes and weekday are jsonb: the loader keeps numeric strings ('45')
 //   and fractional weekdays (1.5) verbatim, which numeric/integer columns
-//   would retype or reject.
+//   would retype or reject. addr is the free-typed drive-time address a
+//   kind:'set' flex event can carry (buildFlexFields, ladder.js) — absent for
+//   every other kind.
 // - flex.date / pushed.day are text, not date: the loader never validates
 //   them, and a date column would normalize (or reject) odd-but-kept strings.
 // - recompose rebuilds geo/drives/pushed with Object.fromEntries so a
@@ -62,9 +70,21 @@ CREATE TABLE IF NOT EXISTS ladder.settings (
   window_days integer NOT NULL DEFAULT 7,
   buffer      jsonb NOT NULL DEFAULT '5',
   cal_ids     jsonb NOT NULL DEFAULT '{"gym":"","drives":"","ladder":""}',
+  -- chooseGapTravel thresholds + per-block forced choices. jsonb for the same
+  -- reason as buffer: the loader keeps a numeric STRING ('45', '0.5') verbatim,
+  -- which numeric/double columns would silently retype.
+  dwell_floor_min jsonb NOT NULL DEFAULT '45',
+  round_trip_frac jsonb NOT NULL DEFAULT '0.5',
+  gap_overrides   jsonb NOT NULL DEFAULT '{}',
   ord         integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id)
 );
+-- ladder.settings predates these three columns, and CREATE TABLE IF NOT EXISTS
+-- is a no-op on an existing table, so they need their own idempotent ALTERs or
+-- they never appear and every save fails on checkInsertTargets.
+ALTER TABLE ladder.settings ADD COLUMN IF NOT EXISTS dwell_floor_min jsonb NOT NULL DEFAULT '45';
+ALTER TABLE ladder.settings ADD COLUMN IF NOT EXISTS round_trip_frac jsonb NOT NULL DEFAULT '0.5';
+ALTER TABLE ladder.settings ADD COLUMN IF NOT EXISTS gap_overrides   jsonb NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS ladder.meals (
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -88,9 +108,14 @@ CREATE TABLE IF NOT EXISTS ladder.flex (
   anchor_series text,
   anchor_id     text,
   anchor_label  text,
+  addr          text,            -- kind:'set' free-typed drive-time address; NULL = absent (every other kind)
   ord           integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, id)
 );
+-- CREATE TABLE IF NOT EXISTS above is a no-op on a table that already exists,
+-- so a column added to an existing schema needs its own idempotent ALTER or
+-- it silently never appears and every save fails on checkInsertTargets.
+ALTER TABLE ladder.flex ADD COLUMN IF NOT EXISTS addr text;
 
 CREATE TABLE IF NOT EXISTS ladder.geo_cache (
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -157,6 +182,15 @@ function normalizeLadder(raw) {
     drives: Object.fromEntries(Object.keys(drivesIn).map(k =>
       [k, Number.isFinite(drivesIn[k]) ? Math.ceil(drivesIn[k] / 5) * 5 : drivesIn[k]])),
     aliases: (Array.isArray(s.aliases) ? s.aliases : []).filter(a => isObj(a) && a.id),
+    // Mirrors loadLadder exactly, string-tolerance included: the loader rejects
+    // on !Number.isFinite(Number(x)) plus a RANGE test on the raw value, so
+    // '45' / '0.5' pass and stay strings.
+    dwellFloorMin: Number.isFinite(Number(s.dwellFloorMin)) && !(s.dwellFloorMin < 0) ? s.dwellFloorMin : 45,
+    roundTripFrac:
+      Number.isFinite(Number(s.roundTripFrac)) && !(s.roundTripFrac <= 0) && !(s.roundTripFrac > 1)
+        ? s.roundTripFrac
+        : 0.5,
+    gapOverrides: isObj(s.gapOverrides) ? s.gapOverrides : {},
     calIds: isObj(s.calIds) ? s.calIds : { gym: '', drives: '', ladder: '' },
     pushed: isObj(s.pushed) ? s.pushed : {},
   }
@@ -186,6 +220,9 @@ const mapper = {
         wake: s.wake,
         window_days: s.windowDays,
         buffer: JSON.stringify(s.buffer),
+        dwell_floor_min: JSON.stringify(s.dwellFloorMin),
+        round_trip_frac: JSON.stringify(s.roundTripFrac),
+        gap_overrides: JSON.stringify(s.gapOverrides),
         cal_ids: JSON.stringify(s.calIds),
       }],
       meals: s.meals.map(m => ({ meal: JSON.stringify(m) })),
@@ -204,6 +241,7 @@ const mapper = {
         anchor_series: opt(f.anchorSeries),
         anchor_id: opt(f.anchorId),
         anchor_label: opt(f.anchorLabel),
+        addr: opt(f.addr),
       })),
       geo_cache: Object.keys(s.geo).map(k => ({
         address: k,
@@ -228,6 +266,9 @@ const mapper = {
       wake: st.wake,
       windowDays: st.window_days,
       buffer: st.buffer, // jsonb: number or numeric string, verbatim
+      dwellFloorMin: st.dwell_floor_min, // jsonb: number or numeric string, verbatim
+      roundTripFrac: st.round_trip_frac, // jsonb: number or numeric string, verbatim
+      gapOverrides: st.gap_overrides,    // jsonb object, verbatim
       meals: rows.meals.map(r => r.meal),     // verbatim objects
       flex: rows.flex.map(r => {
         const f = { id: r.id, title: r.title, minutes: r.minutes }
@@ -242,6 +283,7 @@ const mapper = {
         put(f, 'anchorSeries', r.anchor_series)
         put(f, 'anchorId', r.anchor_id)
         put(f, 'anchorLabel', r.anchor_label)
+        put(f, 'addr', r.addr)
         return f
       }),
       // fromEntries: a '__proto__' key (free-text addresses!) stays an own
