@@ -19,6 +19,7 @@ export function loadCanvas() {
   if (!Array.isArray(s.hiddenCourses)) s.hiddenCourses = [] // courseIds excluded from every widget
   if (!s.labels || typeof s.labels !== 'object') s.labels = {} // courseId → {nick, code} (user-set, Atlas-local)
   if (!s.scales || typeof s.scales !== 'object') s.scales = {} // courseId → "A 90, B 80" custom cutoffs
+  if (!s.scaleModes || typeof s.scaleModes !== 'object') s.scaleModes = {} // courseId → 'plusminus' | 'letters'
   return s
 }
 
@@ -136,6 +137,18 @@ export function parseScale(text) {
 export const cutsToLetter = (pct, cuts) => cuts.find(([cut]) => pct >= cut)?.[1] ?? 'F'
 export const courseScale = (s, courseId) => parseScale(s.scales?.[courseId])
 
+// Which letter LADDER a course is graded on — whether A- and B+ exist at all.
+// Distinct from `scales` above: cutoffs say where the boundaries sit, this says
+// whether the grade that comes out carries a +/- and therefore whether it is
+// worth 4.0 or 3.7. Departments differ on this inside one transcript (a class
+// graded straight A/B/C/D/F next to one that isn't), and the setting used to be
+// global, so the whole GPA had to be computed on whichever ladder was wrong for
+// the other half of the courses. An unset course inherits the global scale.
+export const courseScaleMode = (s, courseId) => {
+  const m = s.scaleModes?.[courseId]
+  return m === 'letters' || m === 'plusminus' ? m : s.scale
+}
+
 export const courseCredits = (s, courseId) => {
   const n = Number(s.credits[courseId])
   return Number.isFinite(n) && n > 0 ? n : 3 // ponytail: 3-credit default until the user sets real hours
@@ -147,8 +160,16 @@ export const courseCredits = (s, courseId) => {
 export function courseLetter(c, s = loadCanvas()) {
   const { pct, letter } = courseScore(c)
   const cuts = courseScale(s, c.id)
-  if (pct != null) return cuts ? cutsToLetter(pct, cuts) : pctToLetter(pct, s.scale)
-  if (letter) return s.scale === 'letters' && !cuts ? letter[0] : letter
+  const mode = courseScaleMode(s, c.id)
+  // The ladder is applied LAST, so the two per-course settings compose: custom
+  // cutoffs decide which band a percentage lands in, the ladder decides whether
+  // that band keeps its +/-. Without this a course with both set would report
+  // an A- on a ladder that has no A-.
+  if (pct != null) {
+    const l = cuts ? cutsToLetter(pct, cuts) : pctToLetter(pct, mode)
+    return mode === 'letters' && l ? l[0] : l
+  }
+  if (letter) return mode === 'letters' && !cuts ? letter[0] : letter
   return null
 }
 

@@ -1,7 +1,7 @@
 // Grade-scale self-check for the Canvas plugin (node tests/canvas.check.mjs).
 // Pure-function imports only — nothing here touches localStorage.
 import assert from 'node:assert/strict'
-import { parseScale, cutsToLetter, courseLetter, pctToLetter, letterPoints, semesterGPA, courseNick, courseCodeOf, courseLabel } from '../src/page/canvas.js'
+import { parseScale, cutsToLetter, courseLetter, pctToLetter, letterPoints, semesterGPA, courseScaleMode, courseNick, courseCodeOf, courseLabel } from '../src/page/canvas.js'
 
 // ---- parseScale -------------------------------------------------------------
 const ten = parseScale('A 90, B 80, C 70, D 60')
@@ -52,6 +52,42 @@ assert.equal(gpa.credits, 6)
 // course 1 = A (4.0) under its own scale, course 2 = A- (3.7) under the global one
 assert.equal(gpa.gpa.toFixed(2), ((4 + 3.7) / 2).toFixed(2))
 assert.equal(letterPoints('A'), 4)
+
+// ---- per-course letter LADDER (scaleModes) ----------------------------------
+// Separate axis from `scales`: cutoffs decide which band a percentage lands in,
+// the ladder decides whether that band keeps its +/- and therefore whether it
+// is worth 4.0 or 3.7. A class graded straight A-F can now sit next to classes
+// graded on the ± ladder without one of them being scored on the wrong one.
+const modeStore = (scaleModes = {}, scale = 'plusminus', scales = {}) =>
+  ({ scale, scales, scaleModes, credits: {}, semesters: [] })
+
+// unset inherits the global ladder, in both directions
+assert.equal(courseScaleMode(modeStore(), 1), 'plusminus')
+assert.equal(courseScaleMode(modeStore({}, 'letters'), 1), 'letters')
+assert.equal(courseScaleMode(modeStore({ 1: 'letters' }), 1), 'letters')
+assert.equal(courseScaleMode(modeStore({ 1: 'letters' }), 2), 'plusminus') // per course
+assert.equal(courseScaleMode(modeStore({ 1: 'sideways' }), 1), 'plusminus') // junk inherits
+// a store written before this setting existed has no scaleModes at all
+assert.equal(courseScaleMode({ scale: 'letters' }, 1), 'letters')
+
+// 90% is an A- globally; the class graded A-F reports a plain A
+assert.equal(courseLetter(course(1, 90), modeStore()), 'A-')
+assert.equal(courseLetter(course(1, 90), modeStore({ 1: 'letters' })), 'A')
+assert.equal(courseLetter(course(2, 90), modeStore({ 1: 'letters' })), 'A-') // untouched
+// and the reverse: global letters-only, one class graded on the ± ladder
+assert.equal(courseLetter(course(1, 90), modeStore({}, 'letters')), 'A')
+assert.equal(courseLetter(course(1, 90), modeStore({ 1: 'plusminus' }, 'letters')), 'A-')
+
+// the two settings COMPOSE: custom cutoffs pick the band, the ladder strips the
+// +/- off it — otherwise a class could report an A- on a ladder with no A-.
+assert.equal(courseLetter(course(1, 91), modeStore({}, 'plusminus', { 1: 'A 93, A- 90, B+ 87' })), 'A-')
+assert.equal(courseLetter(course(1, 91), modeStore({ 1: 'letters' }, 'plusminus', { 1: 'A 93, A- 90, B+ 87' })), 'A')
+
+// the GPA follows: same 90% in both classes, 4.0 vs 3.7 because of the ladder
+const ladder = modeStore({ 1: 'letters' })
+ladder.credits = { 1: 3, 2: 3 }
+const lg = semesterGPA([course(1, 90), course(2, 90)], ladder)
+assert.equal(lg.gpa.toFixed(2), ((4 + 3.7) / 2).toFixed(2))
 
 // ---- course labels ----------------------------------------------------------
 // Fixtures are the REAL nine courses off instructure.charlotte.edu (fields as

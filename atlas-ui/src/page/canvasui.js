@@ -212,7 +212,7 @@ function gradebookHTML(wid) {
   }).join('')
   return `<div class="cv-pills">${pills}</div>
     <div class="cv-course-line"><span class="cv-cname" title="${esc(course.original_name || course.name)}">${esc(courseCode(course))}</span>
-      <span class="cv-cgrade">${pct != null ? pct.toFixed(1) + '%' : '—'}${letter ? ` · ${esc(letter)}` : ''}</span></div>
+      <span class="cv-cgrade">${pct != null ? pct.toFixed(2) + '%' : '—'}${letter ? ` · ${esc(letter)}` : ''}</span></div>
     ${groupsHTML || note('No assignment groups.')}`
 }
 
@@ -319,7 +319,7 @@ function coursesHTML() {
     const tone = p == null ? '' : p >= 3.7 ? ' cv-tone-a' : p >= 2.7 ? ' cv-tone-b' : p >= 1.7 ? ' cv-tone-c' : ' cv-tone-d'
     return `<div class="cv-card" style="--cvc:${courseColor(c)}">
       <span class="cv-card__code">${esc(courseCode(c))}</span>
-      <span class="cv-card__pct">${pct != null ? pct.toFixed(1) + '%' : '—'}</span>
+      <span class="cv-card__pct">${pct != null ? pct.toFixed(2) + '%' : '—'}</span>
       <span class="cv-card__letter${tone}">${letter || '·'}</span>
     </div>`
   }).join('')}</div>`
@@ -519,6 +519,7 @@ export function renderCanvasSettings(container) {
     <p class="gym-head">Courses</p>
     <p class="gym-sub">Untick a course to hide it from every widget (grades, GPA, upcoming, announcements…). Canvas doesn't publish credit hours — set them here (unset courses count as 3).</p>
     <p class="gym-sub">Scale: leave blank to use the letter scale above, or type one class's own cutoffs — <code>A 90, B 80, C 70, D 60</code>. Pluses and minuses work too (<code>A 93, A- 90, B+ 87</code>); anything below the lowest cutoff is an F.</p>
+    <p class="gym-sub">The dropdown beside it sets which letter scale that one class's grade points come from — for a class graded straight A-F while the rest use +/- (or the other way round). Left on "default" it follows the letter scale above.</p>
     <div id="cv-credits">${canvasConnected(s) ? note('Loading courses…') : note('Connect first to list your courses.')}</div>
     <p class="gym-head">Previous semesters</p>
     <p class="gym-sub">Enter each semester's overall GPA directly, or list its classes and the GPA is computed for you.</p>
@@ -542,6 +543,11 @@ export function renderCanvasSettings(container) {
           <input class="pw-field cv-labelin" data-cv-nick="${c.id}" value="${esc(labels[c.id]?.nick ?? '')}" placeholder="${esc(c.name)}" aria-label="Nickname for ${esc(c.name)}">
           <input class="pw-field cv-labelin" data-cv-code="${c.id}" value="${esc(labels[c.id]?.code ?? '')}" placeholder="${esc(c.course_code || 'code')}" aria-label="Short code for ${esc(c.name)}">
           <input class="pw-field cv-labelin cv-scalein" data-cv-scale="${c.id}" value="${esc(s2.scales[c.id] ?? '')}" placeholder="default — e.g. A 90, B 80, C 70" aria-label="Grade scale for ${esc(c.name)}">
+          <select class="pw-field cv-modein" data-cv-scalemode="${c.id}" aria-label="Letter scale for ${esc(c.name)}" title="Which letter scale this class's grade points come from">
+            <option value=""${s2.scaleModes[c.id] ? '' : ' selected'}>scale: default</option>
+            <option value="plusminus"${s2.scaleModes[c.id] === 'plusminus' ? ' selected' : ''}>± (A- = 3.7)</option>
+            <option value="letters"${s2.scaleModes[c.id] === 'letters' ? ' selected' : ''}>A-F only (A = 4)</option>
+          </select>
           <input class="pw-field cv-num" type="number" min="0" step="0.5" data-cv-credit="${c.id}" value="${esc(s2.credits[c.id] ?? '')}" placeholder="3" aria-label="Credit hours for ${esc(c.name)}">
         </div>`).join('') || note('No active courses found.')
     }).catch((err) => { el.innerHTML = note(esc(err.message)) })
@@ -655,6 +661,17 @@ export function renderCanvasSettings(container) {
     if (e.target.id === 'cv-scale') {
       const s2 = loadCanvas()
       s2.scale = e.target.value
+      saveCanvas(s2)
+      return
+    }
+    const mode = e.target.closest('[data-cv-scalemode]')
+    if (mode) {
+      const s2 = loadCanvas()
+      const id = mode.dataset.cvScalemode
+      // '' means inherit, stored as an ABSENT key rather than an empty string,
+      // so courseScaleMode's fallback stays the only place the default lives.
+      if (mode.value) s2.scaleModes[id] = mode.value
+      else delete s2.scaleModes[id]
       saveCanvas(s2)
     }
   }
