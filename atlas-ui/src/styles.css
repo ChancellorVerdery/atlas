@@ -2425,12 +2425,18 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 /* Labels are typeset with mathlive, so they are HTML in a <foreignObject>
    rather than <text>: the box is generous and CSS does the alignment, because
    the rendered width of a formula isn't knowable when the SVG is built. */
+/* Dimmed with COLOUR, never `opacity`. An opacity < 1 gives the HTML inside a
+   <foreignObject> its own compositing layer, and that is the documented WebKit
+   condition (bug 23113) for foreignObject content losing the SVG's internal
+   viewBox-to-render scale — i.e. tick labels drifting off their ticks after the
+   Mac app's Cmd+/Cmd- page zoom. rgba(--ink-rgb) looks identical and composites
+   flat. Keep it that way. */
 .ng-svg .ng-fo { display: flex; align-items: center; height: 100%; font-size: 11px;
-  line-height: 1; color: currentColor; opacity: .75; white-space: nowrap; overflow: visible; }
+  line-height: 1; color: rgba(var(--ink-rgb), 0.75); white-space: nowrap; overflow: visible; }
 .ng-svg .ng-fo--c { justify-content: center; }
 .ng-svg .ng-fo--r { justify-content: flex-end; }
 .ng-svg .ng-fo--l { justify-content: flex-start; }
-.ng-svg .ng-fo--title { justify-content: center; font-size: 13px; font-weight: 600; opacity: 1; }
+.ng-svg .ng-fo--title { justify-content: center; font-size: 13px; font-weight: 600; color: var(--ink); }
 .ng-svg .ng-fo .ML__latex { font-size: inherit; }
 /* Markdown tables in notes — the converter now emits real ones. */
 .nt-md table { border-collapse: collapse; margin: 12px 0; font-size: 14px; display: block; overflow-x: auto; max-width: 100%; }

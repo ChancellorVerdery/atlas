@@ -368,6 +368,32 @@ function renderMarkdown(text, dir) {
 
 // Fill the graph mounts left by renderMarkdown. Async and per-mount: one
 // unplottable spec must not cost the note its other graphs.
+// A notes graph is drawn ONCE, into a fixed-viewBox SVG whose axis labels are
+// HTML inside a <foreignObject> rather than <text>. Nothing ever re-lays it out
+// afterwards, so a change to the page's geometry leaves those labels sitting
+// where the OLD geometry put them — the "zooming breaks the axis labels" shape.
+// Two things change it without any re-render of ours:
+//   - the Mac app's View menu zoom. It is applied natively (WKWebView.pageZoom)
+//     and the page has no way to observe it at all, which is why WebView.swift
+//     now dispatches 'atlas:pagezoom' after setting it.
+//   - an ordinary window resize.
+// Redrawing is cheap and idempotent: the spec is still on the mount's dataset,
+// so this rebuilds from source rather than trying to patch the live SVG. That
+// fresh DOM insertion is also the standard way to make WebKit redo
+// foreignObject layout from clean.
+let regraphTimer = null
+function regraphOpenNote() {
+  clearTimeout(regraphTimer)
+  regraphTimer = setTimeout(() => {
+    const view = document.getElementById('nt-view')
+    if (view && pg.open) hydrateGraphs(view)
+  }, 150)
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('atlas:pagezoom', regraphOpenNote)
+  window.addEventListener('resize', regraphOpenNote)
+}
+
 async function hydrateGraphs(root) {
   for (const el of root.querySelectorAll('.ng-mount')) {
     let spec

@@ -29,6 +29,20 @@ final class ActiveWebView {
         let clamped = min(Self.maxZoom, max(Self.minZoom, zoom))
         webView?.pageZoom = clamped
         UserDefaults.standard.set(Double(clamped), forKey: Self.zoomDefaultsKey)
+        notifyPage(clamped)
+    }
+
+    // pageZoom is applied entirely on the native side: the page is never told,
+    // and it cannot ask. Anything the web layer draws ONCE against the geometry
+    // it measured at load — notes graphs, whose axis labels are HTML inside a
+    // <foreignObject> — therefore keeps whatever layout the old zoom produced.
+    // Handing the page an event is the whole fix on this side; notesui.js
+    // listens for it and redraws the open note's graphs.
+    private func notifyPage(_ zoom: CGFloat) {
+        webView?.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('atlas:pagezoom', { detail: { zoom: \(zoom) } }))",
+            completionHandler: nil
+        )
     }
 
     // Called once, from makeWebView, when the page's own WKWebView exists.
