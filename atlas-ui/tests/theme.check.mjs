@@ -14,7 +14,7 @@ globalThis.localStorage = {
 }
 
 const {
-  PRESETS, DEFAULT_PRESET, DEFAULT_MODE, CUSTOM, CUSTOM_KEYS, customSeed,
+  PRESETS, DEFAULT_PRESET, DEFAULT_MODE, AUTO_MODE, effectiveMode, CUSTOM, CUSTOM_KEYS, customSeed,
   parseHex, toHex, triplet, shade,
   parseColor, hexToHsl, hslToHex, tintShade,
   loadTheme, saveTheme, resolve, themeVars, logoSVG, logoDataURL,
@@ -63,6 +63,14 @@ for (const [id, p] of Object.entries(PRESETS)) {
 }
 assert.ok(PRESETS[DEFAULT_PRESET])
 
+// A fresh profile follows the device, and 'auto' is a pointer rather than a
+// palette: everything downstream must still see a real dark|light.
+assert.equal(DEFAULT_MODE, AUTO_MODE)
+assert.ok(['dark', 'light'].includes(effectiveMode(AUTO_MODE)))
+assert.equal(effectiveMode('light'), 'light')
+assert.equal(effectiveMode('dark'), 'dark')
+assert.equal(effectiveMode('sepia'), effectiveMode(DEFAULT_MODE)) // unknown falls back
+
 // --- the stored scheme is normalised, never trusted -------------------------
 store.clear()
 assert.equal(loadTheme().preset, DEFAULT_PRESET)
@@ -78,7 +86,7 @@ for (const [k] of CUSTOM_KEYS) assert.match(loadTheme().custom[k], /^#[0-9a-f]{6
 // --- a custom scheme owns its colours; presets are untouched ----------------
 saveTheme({ preset: 'cobalt' })
 assert.equal(resolve().accent, PRESETS.cobalt.accent)
-assert.equal(resolve().mode, DEFAULT_MODE)
+assert.equal(resolve().mode, effectiveMode(DEFAULT_MODE))
 
 // picking Custom starts from what's on screen, not from some default palette
 const seeded = customSeed(loadTheme())

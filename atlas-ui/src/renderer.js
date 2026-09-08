@@ -927,8 +927,19 @@ window.addEventListener('atlas:hydrated', () => { restoreFormal(); seedStarters(
 // One-time: houses entered under the original shared-store design move onto
 // the widgets themselves (one house per widget). Data-less House widgets on
 // the formal board adopt the legacy houses in order; leftovers get their own
-// rows. Stripping `houses` from the store makes this self-disabling.
-try {
+// rows.
+//
+// Flag-guarded, exactly like the work one-time appends above — and NOT, as it
+// was, self-disabling on `houses` having been stripped. That strip is a second
+// independent setItem, and it only really disables this block if it lands
+// server-side too. When it didn't, the server kept handing `houses` back on
+// every pull and this ran again on every single launch, re-inserting a
+// `w-fmmig*` House widget the user had deliberately deleted. That is the
+// "deleting a widget in Formal doesn't persist" bug: the delete saved fine,
+// and then this put a fresh copy back. The strip below stays (it keeps the
+// store tidy); the flag is what makes the migration actually one-time.
+const FORMAL_HOUSES_MIGRATED = 'atlas.formal.housesMigrated'
+if (!localStorage.getItem(FORMAL_HOUSES_MIGRATED)) try {
   const fmStore = JSON.parse(localStorage.getItem('atlas.formal.v1'))
   if (fmStore?.houses?.length) {
     const board = JSON.parse(localStorage.getItem('atlas.page.formal.v1'))
@@ -944,7 +955,10 @@ try {
     delete fmStore.houses
     localStorage.setItem('atlas.formal.v1', JSON.stringify(fmStore))
   }
-} catch { /* corrupted legacy store — nothing to migrate */ }
+  // Set even when there was nothing to migrate: a corrupt or house-less store
+  // is still a finished migration, and retrying it forever is the whole bug.
+  localStorage.setItem(FORMAL_HOUSES_MIGRATED, '1')
+} catch { localStorage.setItem(FORMAL_HOUSES_MIGRATED, '1') /* corrupted legacy store — nothing to migrate */ }
 bindPlugins(render, seedStarters) // Settings → Plugins toggles + zip install
 // The one-time import seeds (gym / course / equations, added 2026-08-10 to
 // carry data over from the pre-monorepo Atlas) are GONE, and deliberately.

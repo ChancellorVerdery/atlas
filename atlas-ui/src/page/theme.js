@@ -22,7 +22,10 @@ const MODES = {
   dark: { ink: '#e9e7df', inkDim: '#9aa0ad', inkFaint: '#5c616e', rgb: '202, 214, 242' },
   light: { ink: '#161a21', inkDim: '#535a68', inkFaint: '#858c9b', rgb: '22, 26, 33' },
 }
-export const DEFAULT_MODE = 'dark'
+// 'auto' by default: a fresh profile should look like the rest of the user's
+// device rather than picking a side. Everything downstream still resolves this
+// to a real dark|light through effectiveMode(), so nothing else changes.
+export const DEFAULT_MODE = 'auto'
 
 // 'auto' isn't a palette — it's a pointer at the OS setting (iOS/macOS
 // appearance), resolved to a real MODES key on every read so everything
@@ -31,7 +34,14 @@ export const AUTO_MODE = 'auto'
 const systemMode = () =>
   (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'
 export const isModeChoice = (m) => m === AUTO_MODE || !!MODES[m]
-export const effectiveMode = (m) => (m === AUTO_MODE ? systemMode() : (MODES[m] ? m : DEFAULT_MODE))
+// Always a real MODES key, never the 'auto' pointer — that is this function's
+// whole contract. The fallback has to resolve too: DEFAULT_MODE is itself
+// 'auto' now, so returning it raw would hand 'auto' to callers that only
+// understand dark|light (colorScheme, the MODES lookup, the logo).
+export const effectiveMode = (m) => {
+  const choice = isModeChoice(m) ? m : DEFAULT_MODE
+  return choice === AUTO_MODE ? systemMode() : choice
+}
 
 // Each scheme brings its own surfaces for BOTH modes — a light mode doesn't
 // have to be white any more than a dark one has to be black, and a tinted
