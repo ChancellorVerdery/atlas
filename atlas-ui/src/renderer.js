@@ -22,6 +22,7 @@ import { renderCoursePage, renderCourseMap, renderCourseSettings } from './page/
 import { renderNotesPage, startNotesSyncLoop } from './page/notesui.js'
 import { renderStudyPage } from './page/studyui.js'
 import { renderFlashcardsPage } from './page/flashcardsui.js'
+import { renderPrintSheet } from './page/eqprintui.js'
 import { loadEmail, isConnected, connectGmail, disconnectGmail, refreshGoogleStatus, primeGoogleConfig } from './page/email.js'
 import { PRESETS, CUSTOM, loadTheme, saveTheme, applyTheme, resolve, logoDataURL, effectiveMode } from './page/theme.js'
 import { openThemeModal } from './page/themeui.js'
@@ -160,6 +161,25 @@ document.addEventListener('focusout', (e) => {
   }
 }
 
+// ---- print sheet corner control (Equations only) --------------------------
+// Sits LEFT of Math keys (Chancellor, 2026-09-08: "next to math keys (on the
+// left)"). Built here like the keyboard toggle; render() shows it only on the
+// equations board itself, on desktop — the workbench is a three-pane layout.
+{
+  const actions = document.querySelector('.topbar__actions')
+  if (actions) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.id = 'eqprint-toggle'
+    btn.className = 'action-btn'
+    btn.dataset.act = 'toggle-eqprint'
+    btn.title = 'Print an equation sheet'
+    btn.style.display = 'none'
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9V4h10v5"/><rect x="3.5" y="9" width="17" height="8" rx="2"/><path d="M7 14h10v6H7z"/></svg><span>Print sheet</span>`
+    actions.insertBefore(btn, document.getElementById('mathkbd-toggle') || actions.firstChild)
+  }
+}
+
 // Mobile navigator drawer: a hamburger in the topbar slides the sidebar in
 // (body.nav-open, styled by CSS this pass doesn't own); a scrim behind it, or
 // any navigation, closes it. Built here rather than in the shared index.html.
@@ -199,6 +219,19 @@ function setCustomizing(on) {
     exitCustomize()
     setKbEnabled(false)
   }
+  render()
+}
+
+// ---- print sheet mode (Equations only) ------------------------------------
+// A page-level mode like customizing: while on, the content area shows the
+// print workbench (src/page/eqprintui.js) instead of the board, until Done,
+// the topbar toggle, or navigating anywhere else.
+let printing = false
+function setPrinting(on) {
+  if (printing === on) return
+  if (on && customizing) setCustomizing(false) // one mode at a time (this re-renders the board first)
+  printing = on
+  document.getElementById('eqprint-toggle')?.classList.toggle('is-active', on)
   render()
 }
 
@@ -587,6 +620,7 @@ function render() {
   const r = route()
   // Leaving the page being customized exits customize, which re-renders.
   if (customizing && (r.name === 'settings' || r.sub || r.def.id !== currentPageId)) { setCustomizing(false); return }
+  if (printing && (r.name !== 'page' || r.sub || r.def.id !== 'equations')) { setPrinting(false); return }
   closeModal() // a modal must not outlive the page it was opened over
   document.documentElement.dataset.page = r.name === 'settings' ? 'settings' : r.sub ? `${r.def.id}-${r.sub}` : r.def.id
   renderNav(r)
@@ -617,14 +651,15 @@ function render() {
     observeCharts(content)
   } else {
     currentPageId = r.def.id
-    setHead(r.def.label, r.def.crumb)
+    setHead(r.def.label, printing ? `${r.def.crumb} / Print sheet` : r.def.crumb)
     // Mobile keeps its own per-page board, seeded once (see starterFor): the
     // dashboard clones the user's current desktop layout, every other plugin
     // gets its app-default starter — then it diverges and CSS stacks it.
     const page = isMobile() ? loadPageMobile(r.def.storageKey, () => starterFor(r.def)) : loadPage(r.def.storageKey)
     // Empty state also when every widget on the board belongs to a disabled
     // plugin — otherwise the page renders as unexplained blank space.
-    if ((!page.rows.length || pageHasHiddenAll(page)) && !customizing) content.innerHTML = emptyDash(r.def)
+    if (printing) renderPrintSheet(content, { page, onDone: () => setPrinting(false) })
+    else if ((!page.rows.length || pageHasHiddenAll(page)) && !customizing) content.innerHTML = emptyDash(r.def)
     else {
       const anchor = captureScrollAnchor(content)
       // The key must name the board actually on screen: `page` above came from
@@ -637,16 +672,19 @@ function render() {
     }
   }
   const cbtn = document.getElementById('customize')
-  if (cbtn) cbtn.style.display = r.name === 'page' && r.def.full ? 'none' : ''
+  if (cbtn) cbtn.style.display = (r.name === 'page' && r.def.full) || printing ? 'none' : ''
   // The math keyboard toggle only exists on the pages that mount math-fields;
   // leaving one hides both the toggle and the keyboard itself.
   const mkbtn = document.getElementById('mathkbd-toggle')
   if (mkbtn) {
     // Mobile never gets the virtual math keyboard (native Apple keyboard only).
-    const allowed = MATHKBD_PAGES.has(r.def?.id) && !isMobile()
+    const allowed = MATHKBD_PAGES.has(r.def?.id) && !isMobile() && !printing // the workbench mounts no math-fields
     mkbtn.style.display = allowed ? '' : 'none'
     if (!allowed) window.mathVirtualKeyboard.hide()
   }
+  // Print sheet: only the equations board itself, only on desktop.
+  const pbtn = document.getElementById('eqprint-toggle')
+  if (pbtn) pbtn.style.display = r.name === 'page' && !r.sub && r.def?.id === 'equations' && !isMobile() ? '' : 'none'
 }
 
 document.body.addEventListener('click', (e) => {
@@ -662,6 +700,7 @@ document.body.addEventListener('click', (e) => {
     if (act.dataset.act === 'logout') { window.atlasLogout?.(); return }
     if (act.dataset.act === 'customize') { setCustomizing(!customizing); return }
     if (act.dataset.act === 'toggle-mathkbd') { setKbEnabled(!kbEnabled); return }
+    if (act.dataset.act === 'toggle-eqprint') { setPrinting(!printing); return }
     if (act.dataset.act === 'gmail-connect') {
       act.disabled = true
       connectGmail()
