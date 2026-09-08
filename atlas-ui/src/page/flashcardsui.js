@@ -128,17 +128,17 @@ function render() {
 // ---- chrome: course tabs + tool pills ---------------------------------------
 
 const tabBtnHTML = (t, active) =>
-  `<button type="button" class="st-tab${active ? ' is-active' : ''}" data-st="tab" data-id="${esc(t.id)}"${active ? ' title="Double-click to rename"' : ''}><span class="st-tab__name">${esc(t.name)}</span>${active ? `<span class="st-tab__x" data-st="tab-del" data-id="${esc(t.id)}" aria-label="Delete course">×</span>` : ''}</button>`
+  `<button type="button" class="page-tab st-tab${active ? ' is-active' : ''}" data-st="tab" data-id="${esc(t.id)}"${active ? ' title="Double-click to rename"' : ''}><span class="st-tab__name">${esc(t.name)}</span>${active ? `<span class="st-tab__x" data-st="tab-del" data-id="${esc(t.id)}" aria-label="Delete course">×</span>` : ''}</button>`
 
 function tabsBar(s) {
-  return `<div class="st-tabs">
+  return `<div class="page-tabs st-tabs">
     ${s.tabs.map((t) => {
       const active = t.id === s.active
       return active && ui.rename != null
-        ? `<span class="st-tab is-active st-tab--edit"><input id="fc-rename" class="st-tab__in" value="${esc(ui.rename)}" data-stf="rename" spellcheck="false"></span>`
+        ? `<span class="page-tab st-tab is-active st-tab--edit"><input id="fc-rename" class="st-tab__in" value="${esc(ui.rename)}" data-stf="rename" spellcheck="false"></span>`
         : tabBtnHTML(t, active)
     }).join('')}
-    <button type="button" class="st-tab st-tab--add" data-st="tab-add" aria-label="Add course">+</button>
+    <button type="button" class="page-tab st-tab st-tab--add" data-st="tab-add" aria-label="Add course">+</button>
   </div>`
 }
 

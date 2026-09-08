@@ -228,7 +228,13 @@ html[data-page="settings"] .topbar__actions { display: none; }
 html[data-page="gym-settings"] .topbar__actions { display: none; }
 
 /* Plugin-scoped tab bar under the page title (e.g. Gym: Board | Settings). */
-.page-tabs { display: flex; gap: 6px; margin-top: 10px; }
+/* One tab strip for the whole app. Bridge copies this rule set verbatim, and
+   its session tabs are the look being matched — so the strip behaviour it added
+   on top lives here now rather than only there: wrap to a second row, then cap
+   and scroll INSIDE the strip instead of pushing the page down. */
+.page-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; row-gap: 6px; margin-top: 10px;
+  max-height: 68px; overflow-y: auto; overscroll-behavior: contain; }
+.page-tabs::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .page-tabs:empty { display: none; }
 /* inline-flex (not inline): an inline <a> ignores min-height and box sizing, so
    tabs rendered at slightly different heights. Every tab is now the same box —
@@ -237,11 +243,19 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 7px;
   padding: 5px 13px;
   border: 1px solid var(--line-2);
   border-radius: 999px;
+  background: none;
   color: var(--ink-dim);
   text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  /* `font` first: it resets size and weight, so it has to precede them. Both
+     are here because this class now dresses <button> course tabs as well as
+     <a> page tabs, and a button does not inherit the page font on its own. */
+  font: inherit;
   font-size: 12px;
   font-weight: 500;
   line-height: 1.2;
@@ -2589,13 +2603,16 @@ html[data-page="course-explore"] .cp { height: 100%; min-height: 0; }
 .st-view { min-height: 0; display: flex; flex-direction: column; gap: 12px; }
 
 /* course tabs */
-.st-tabs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
-.st-tab { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-2); border-radius: 999px; background: none; color: var(--ink-dim); font: inherit; font-size: 13px; padding: 5px 14px; cursor: pointer; white-space: nowrap; }
-.st-tab:hover { color: var(--ink); border-color: var(--brass); }
-.st-tab.is-active { color: var(--brass); border-color: var(--brass); background: rgba(var(--brass-rgb), 0.08); }
+/* Course tabs (Study, Flashcards) ARE .page-tab now — same box, same radius,
+   same hover wash, same brass active state — so everything the box owns has
+   gone. What is left is the divider under the strip and the three affordances
+   .page-tab has no opinion about: add, delete, rename-in-place. Re-stating
+   colour/border/background here is exactly how a reuse decays back into a
+   lookalike, which is what these rules were. */
+.st-tabs { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
 .st-tab--add { padding: 5px 11px; color: var(--ink-faint); }
 .st-tab--edit { padding: 0; }
-.st-tab__in { background: none; border: none; color: var(--brass); font: inherit; font-size: 13px; padding: 5px 14px; width: 14ch; outline: none; }
+.st-tab__in { background: none; border: none; color: var(--brass); font: inherit; font-size: 12px; padding: 5px 13px; width: 14ch; outline: none; }
 /* Its own padded hit box so a tap lands on the close, not the parent tab
    (the JS layer adds stopPropagation). Negative margin keeps the visual size
    close to before while the hit area grows. */
