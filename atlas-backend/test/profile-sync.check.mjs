@@ -35,25 +35,58 @@ const reset = () => { boards = new Map(); flags = new Map() }
 const k = (u, s) => `${u}|${s}`
 reset()
 
+// Rows are { v, rev } now, not bare values: pageSave is a compare-and-swap on
+// `rev`, and a model that dropped it would let every CAS arm below pass without
+// the swap ever being conditional on anything.
+const cell = (store, u, key) => store.get(k(u, key))
+const val = (store, u, key) => store.get(k(u, key))?.v
+// Seed a row the way the store holds one. Arms that pre-load state must go
+// through this, or they write a bare value the CAS model cannot read back.
+const seedRow = (store, u, key, v, rev = 1) => store.set(k(u, key), { v, rev })
+
 const runSql = async (q, params = []) => {
   const s = String(q).replace(/\s+/g, ' ').trim()
   if (s === 'BEGIN' || s === 'COMMIT' || s === 'ROLLBACK') return { rows: [] }
-  if (s.startsWith('SELECT board FROM profile.page_boards WHERE user_id = $1 AND storage_key'))
-    return { rows: boards.has(k(params[0], params[1])) ? [{ board: boards.get(k(params[0], params[1])) }] : [] }
-  if (s.startsWith('SELECT value FROM profile.user_flags WHERE user_id = $1 AND flag'))
-    return { rows: flags.has(k(params[0], params[1])) ? [{ value: flags.get(k(params[0], params[1])) }] : [] }
-  if (s.startsWith('SELECT storage_key, board FROM profile.page_boards WHERE user_id'))
+  if (s.startsWith('SELECT board, rev FROM profile.page_boards WHERE user_id = $1 AND storage_key')) {
+    const c = cell(boards, params[0], params[1])
+    return { rows: c ? [{ board: c.v, rev: c.rev }] : [] }
+  }
+  if (s.startsWith('SELECT value, rev FROM profile.user_flags WHERE user_id = $1 AND flag')) {
+    const c = cell(flags, params[0], params[1])
+    return { rows: c ? [{ value: c.v, rev: c.rev }] : [] }
+  }
+  if (s.startsWith('SELECT storage_key, board, rev FROM profile.page_boards WHERE user_id'))
     return { rows: [...boards].filter(([key]) => key.startsWith(params[0] + '|'))
-      .map(([key, board]) => ({ storage_key: key.split('|')[1], board })) }
-  if (s.startsWith('SELECT flag, value FROM profile.user_flags WHERE user_id'))
+      .map(([key, c]) => ({ storage_key: key.split('|')[1], board: c.v, rev: c.rev })) }
+  if (s.startsWith('SELECT flag, value, rev FROM profile.user_flags WHERE user_id'))
     return { rows: [...flags].filter(([key]) => key.startsWith(params[0] + '|'))
-      .map(([key, value]) => ({ flag: key.split('|')[1], value })) }
+      .map(([key, c]) => ({ flag: key.split('|')[1], value: c.v, rev: c.rev })) }
+
+  // The upsert, modelled with its ON CONFLICT arm's WHERE honoured only when it
+  // is actually present — the same reasoning as the DELETEs below. A model that
+  // always wrote would make "a stale write is refused" pass vacuously.
+  for (const [table, store, parse, col] of [
+    ['profile.page_boards', () => boards, JSON.parse, 'board'],
+    ['profile.user_flags', () => flags, (x) => x, 'value'],
+  ]) {
+    if (!s.startsWith('INSERT INTO ' + table)) continue
+    const key = k(params[0], params[1])
+    const val = parse(params[2])
+    const existing = store().get(key)
+    if (!existing) { store().set(key, { v: val, rev: 1 }); return { rows: [{ [col]: val, rev: 1 }] } }
+    const cas = /WHERE profile\.\w+\.rev = \$4/.test(s)
+    if (cas && existing.rev !== params[3]) return { rows: [] } // refused: moved on
+    const next = { v: val, rev: existing.rev + 1 }
+    store().set(key, next)
+    return { rows: [{ [col]: val, rev: next.rev }] }
+  }
+  // The import path re-inserts without a rev; those rows start at 0, which is
+  // what a client that has never seen this key sends as its baseRev.
   if (s.startsWith('INSERT INTO profile.page_boards')) {
-    // jsonb: the service hands pg a string, Postgres hands back a parsed value.
-    boards.set(k(params[0], params[1]), JSON.parse(params[2])); return { rows: [] }
+    boards.set(k(params[0], params[1]), { v: JSON.parse(params[2]), rev: 0 }); return { rows: [] }
   }
   if (s.startsWith('INSERT INTO profile.user_flags')) {
-    flags.set(k(params[0], params[1]), params[2]); return { rows: [] }
+    flags.set(k(params[0], params[1]), { v: params[2], rev: 0 }); return { rows: [] }
   }
   // Both DELETEs are matched WITHOUT their WHERE clause on purpose. Modelling
   // them as 'DELETE ... WHERE user_id' made an unscoped delete land in the
@@ -124,7 +157,7 @@ await check('an unset key reads back null rather than erroring', async () => {
 await check('a flag is stored as an opaque string', async () => {
   reset()
   await req('page.save', { storageKey: 'atlas.theme', value: 'dark' })
-  strictEqual(flags.get(k(A, 'atlas.theme')), 'dark')
+  strictEqual(val(flags, A, 'atlas.theme'), 'dark')
   strictEqual(result(await req('page.get', { storageKey: 'atlas.theme' })).data.value, 'dark')
 })
 
@@ -133,7 +166,7 @@ await check('a flag is stored as an opaque string', async () => {
 await check('a structured flag value is JSON, never [object Object]', async () => {
   reset()
   await req('page.save', { storageKey: 'atlas.tabs', value: { order: ['gym', 'work'] } })
-  const stored = flags.get(k(A, 'atlas.tabs'))
+  const stored = val(flags, A, 'atlas.tabs')
   ok(!String(stored).includes('[object Object]'), `flag persisted as ${stored}`)
   deepStrictEqual(JSON.parse(stored), { order: ['gym', 'work'] })
 })
@@ -144,9 +177,102 @@ await check('a structured flag value is JSON, never [object Object]', async () =
 await check('sync.update fans out the stored value, not the submitted one', async () => {
   reset()
   const ds = await req('page.save', { storageKey: 'atlas.tabs', value: { order: ['gym'] } })
-  strictEqual(update(ds).data.value, flags.get(k(A, 'atlas.tabs')))
+  strictEqual(update(ds).data.value, val(flags, A, 'atlas.tabs'))
   strictEqual(update(ds).excludeSession, 's1')
   strictEqual(update(ds).userId, A)
+})
+
+// ---- compare-and-swap on the per-key revision -------------------------------
+// The bug these arms exist for: page.save used to be an unconditional upsert,
+// so the LAST ARRIVAL won regardless of how old it was. sync.js persists its
+// push queue across launches, so a device that went offline mid-edit could
+// reconnect days later, flush, overwrite state that had moved on, and then have
+// the fanout push that stale copy to every other device — deleting work in
+// front of the user. baseRev is what makes an old arrival lose.
+
+await check('a first save starts the key at revision 1', async () => {
+  reset()
+  const ds = await req('page.save', { storageKey: 'atlas.theme', value: 'dark', baseRev: 0 })
+  strictEqual(result(ds).data.rev, 1)
+  strictEqual(result(ds).data.stale, false)
+  strictEqual(val(flags, A, 'atlas.theme'), 'dark')
+})
+
+await check('successive saves from an up-to-date device keep landing', async () => {
+  reset()
+  const a = await req('page.save', { storageKey: 'atlas.theme', value: 'dark', baseRev: 0 })
+  const b = await req('page.save', { storageKey: 'atlas.theme', value: 'light', baseRev: result(a).data.rev })
+  strictEqual(result(b).data.stale, false)
+  strictEqual(result(b).data.rev, 2)
+  strictEqual(val(flags, A, 'atlas.theme'), 'light')
+})
+
+await check('a save based on a superseded revision is REFUSED', async () => {
+  reset()
+  // the device reads revision 1, then someone else writes twice
+  await req('page.save', { storageKey: 'atlas.theme', value: 'dark', baseRev: 0 })   // rev 1
+  await req('page.save', { storageKey: 'atlas.theme', value: 'light', baseRev: 1 })  // rev 2
+  // the stale device finally flushes the copy it queued back at revision 1
+  const ds = await req('page.save', { storageKey: 'atlas.theme', value: 'slate', baseRev: 1 })
+  strictEqual(result(ds).ok, true)          // not an error — a refusal
+  strictEqual(result(ds).data.stale, true)
+  strictEqual(result(ds).data.rev, 2)       // still the store's own revision
+  strictEqual(result(ds).data.value, 'light') // handed back so the client can adopt it
+  strictEqual(val(flags, A, 'atlas.theme'), 'light') // and the store did NOT move
+})
+
+await check('a refused save fans nothing out', async () => {
+  reset()
+  await req('page.save', { storageKey: 'atlas.theme', value: 'dark', baseRev: 0 })
+  await req('page.save', { storageKey: 'atlas.theme', value: 'light', baseRev: 1 })
+  const ds = await req('page.save', { storageKey: 'atlas.theme', value: 'slate', baseRev: 1 })
+  strictEqual(update(ds), undefined) // nothing changed, so there is no news
+})
+
+await check('boards get the same treatment, not just flags', async () => {
+  reset()
+  const key = 'atlas.page.equations.v1'
+  await req('page.save', { storageKey: key, value: { rows: ['a'] }, baseRev: 0 })
+  await req('page.save', { storageKey: key, value: { rows: ['a', 'b'] }, baseRev: 1 })
+  const ds = await req('page.save', { storageKey: key, value: { rows: [] }, baseRev: 1 })
+  strictEqual(result(ds).data.stale, true)
+  deepStrictEqual(val(boards, A, key), { rows: ['a', 'b'] }) // the new sheet survives
+  deepStrictEqual(result(ds).data.value, { rows: ['a', 'b'] })
+})
+
+await check('after adopting the store\'s revision the same device can save again', async () => {
+  reset()
+  await req('page.save', { storageKey: 'atlas.theme', value: 'dark', baseRev: 0 })
+  await req('page.save', { storageKey: 'atlas.theme', value: 'light', baseRev: 1 })
+  const refused = await req('page.save', { storageKey: 'atlas.theme', value: 'slate', baseRev: 1 })
+  // the client adopts result.rev, then the user changes it again for real
+  const ds = await req('page.save', { storageKey: 'atlas.theme', value: 'brass', baseRev: result(refused).data.rev })
+  strictEqual(result(ds).data.stale, false)
+  strictEqual(val(flags, A, 'atlas.theme'), 'brass')
+  ok(update(ds), 'an accepted save still fans out')
+})
+
+// Backward compatibility: a device running a build older than this sends no
+// baseRev at all. It must keep syncing — it can still clobber, but only until
+// it updates, rather than being unable to save anything ever again.
+await check('a client that sends no baseRev still saves unconditionally', async () => {
+  reset()
+  await req('page.save', { storageKey: 'atlas.theme', value: 'dark', baseRev: 0 })
+  await req('page.save', { storageKey: 'atlas.theme', value: 'light', baseRev: 1 })
+  const ds = await req('page.save', { storageKey: 'atlas.theme', value: 'legacy' })
+  strictEqual(result(ds).data.stale, false)
+  strictEqual(val(flags, A, 'atlas.theme'), 'legacy')
+  strictEqual(result(ds).data.rev, 3) // and it still advances the revision
+})
+
+await check('pull.all carries the revision of every key it returns', async () => {
+  reset()
+  await req('page.save', { storageKey: 'atlas.page.gym.v1', value: { widgets: [] }, baseRev: 0 })
+  await req('page.save', { storageKey: 'atlas.theme', value: 'dark', baseRev: 0 })
+  await req('page.save', { storageKey: 'atlas.theme', value: 'light', baseRev: 1 })
+  const got = result(await req('sync.pull.all', {}))
+  strictEqual(got.data.revs['atlas.page.gym.v1'], 1)
+  strictEqual(got.data.revs['atlas.theme'], 2)
 })
 
 await check('a non-object board is refused and fans nothing out', async () => {
@@ -167,8 +293,8 @@ await check('a non-atlas key is refused', async () => {
 
 await check('pull.all returns boards, flags and every plugin state in one map', async () => {
   reset(); resetSvc()
-  boards.set(k(A, 'atlas.page.v1'), { widgets: [] })
-  flags.set(k(A, 'atlas.theme'), 'dark')
+  seedRow(boards, A, 'atlas.page.v1', { widgets: [] })
+  seedRow(flags, A, 'atlas.theme', 'dark')
   plugin.set('atlas-gym|' + A, { workouts: [1] })
   const { data } = result(await req('sync.pull.all', {}))
   deepStrictEqual(data.warnings, [])
@@ -203,13 +329,13 @@ await check('import clears plugins absent from the backup', async () => {
 
 await check('import clears boards and flags absent from the backup', async () => {
   reset(); resetSvc()
-  boards.set(k(A, 'atlas.page.v1'), { old: true })
-  flags.set(k(A, 'atlas.theme'), 'dark')
+  seedRow(boards, A, 'atlas.page.v1', { old: true })
+  seedRow(flags, A, 'atlas.theme', 'dark')
   await req('sync.import', { data: { 'atlas.page.gym.v1': { widgets: [] }, 'atlas.tabOrder': 'a,b' } })
   strictEqual(boards.has(k(A, 'atlas.page.v1')), false)
   strictEqual(flags.has(k(A, 'atlas.theme')), false)
-  deepStrictEqual(boards.get(k(A, 'atlas.page.gym.v1')), { widgets: [] })
-  strictEqual(flags.get(k(A, 'atlas.tabOrder')), 'a,b')
+  deepStrictEqual(val(boards, A, 'atlas.page.gym.v1'), { widgets: [] })
+  strictEqual(val(flags, A, 'atlas.tabOrder'), 'a,b')
 })
 
 // A present-but-corrupt key must still clear the stale server state, or a
@@ -236,7 +362,7 @@ await check('a backup cannot smuggle credentials or the backend URL into storage
   strictEqual(flags.has(k(A, 'atlas.auth.v1')), false)
   strictEqual(flags.has(k(A, 'atlas.backend')), false)
   strictEqual(flags.has(k(A, 'atlas.devMode')), false)
-  strictEqual(flags.get(k(A, 'atlas.theme')), 'dark')   // the rest still restores
+  strictEqual(val(flags, A, 'atlas.theme'), 'dark')   // the rest still restores
 })
 
 await check('import ignores non-atlas keys entirely', async () => {
@@ -249,12 +375,12 @@ await check('import ignores non-atlas keys entirely', async () => {
 // The worst thing this service could get wrong: every write is user-scoped.
 await check('one user\'s import never touches another user\'s rows', async () => {
   reset(); resetSvc()
-  boards.set(k(B, 'atlas.page.v1'), { mine: true })
-  flags.set(k(B, 'atlas.theme'), 'dark')
+  seedRow(boards, B, 'atlas.page.v1', { mine: true })
+  seedRow(flags, B, 'atlas.theme', 'dark')
   plugin.set('atlas-gym|' + B, { workouts: [9] })
   await req('sync.import', { data: { 'atlas.theme': 'light' } }, { userId: A })
-  deepStrictEqual(boards.get(k(B, 'atlas.page.v1')), { mine: true })
-  strictEqual(flags.get(k(B, 'atlas.theme')), 'dark')
+  deepStrictEqual(val(boards, B, 'atlas.page.v1'), { mine: true })
+  strictEqual(val(flags, B, 'atlas.theme'), 'dark')
   deepStrictEqual(plugin.get('atlas-gym|' + B), { workouts: [9] })
   ok(calls.every(c => c.userId === A), 'a plugin call ran against the wrong user')
 })

@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS profile.user_flags (
   value   text NOT NULL,
   PRIMARY KEY (user_id, flag)
 );
+
+-- Per-key revision, for the compare-and-swap in pageSave. CREATE TABLE IF NOT
+-- EXISTS is a no-op on a table that already exists, so a column added to the
+-- bodies above would never reach a deployed database — it needs its own
+-- idempotent ALTER (see test/ddl-columns.check.mjs, which enforces exactly
+-- this). Defaulting to 0 makes every row that predates this look like
+-- revision 0, which is what a client that has never seen a rev will send.
+ALTER TABLE profile.page_boards ADD COLUMN IF NOT EXISTS rev integer NOT NULL DEFAULT 0;
+ALTER TABLE profile.user_flags  ADD COLUMN IF NOT EXISTS rev integer NOT NULL DEFAULT 0;
 `
 
 // Page-board layout keys — jsonb documents, everything else is a flag.
@@ -76,31 +85,76 @@ async function postSvc(svc, path, body) {
 }
 
 export async function pageGet(userId, storageKey) {
-  if (BOARD_KEYS.includes(storageKey)) {
-    const r = await pool.query(
-      'SELECT board FROM profile.page_boards WHERE user_id = $1 AND storage_key = $2',
-      [userId, storageKey],
-    )
-    return r.rows.length ? r.rows[0].board : null
-  }
-  const r = await pool.query(
-    'SELECT value FROM profile.user_flags WHERE user_id = $1 AND flag = $2',
-    [userId, storageKey],
-  )
-  return r.rows.length ? r.rows[0].value : null
+  const { value } = await pageGetRev(userId, storageKey)
+  return value
 }
 
-// Returns the value as stored, so sync.update fans out exactly what other
-// sessions would read back.
-export async function pageSave(userId, storageKey, value) {
+// The same read, with the revision the caller needs for a compare-and-swap.
+export async function pageGetRev(userId, storageKey) {
+  if (BOARD_KEYS.includes(storageKey)) {
+    const r = await pool.query(
+      'SELECT board, rev FROM profile.page_boards WHERE user_id = $1 AND storage_key = $2',
+      [userId, storageKey],
+    )
+    return r.rows.length ? { value: r.rows[0].board, rev: r.rows[0].rev } : { value: null, rev: 0 }
+  }
+  const r = await pool.query(
+    'SELECT value, rev FROM profile.user_flags WHERE user_id = $1 AND flag = $2',
+    [userId, storageKey],
+  )
+  return r.rows.length ? { value: r.rows[0].value, rev: r.rows[0].rev } : { value: null, rev: 0 }
+}
+
+// Compare-and-swap on a per-key revision.
+//
+// This used to be a bare upsert: whatever arrived last won, unconditionally.
+// With no ordering on the wire that is not "last write wins", it is "last
+// ARRIVAL wins" — and an arrival can be arbitrarily old. A device that queued a
+// board while offline (sync.js persists that queue across launches) reconnects
+// days later, flushes, and overwrites state that has moved on since; the
+// fan-out below then pushes that stale copy to every other device, deleting
+// work in front of the user. That is the resurrection bug this repo has chased
+// through several passes, and the ceiling its comments named as needing a
+// versioned page.save. This is it.
+//
+// `baseRev` is the revision the client believed it was editing. The write lands
+// only if that is still the stored revision; otherwise the store has moved on,
+// the write is refused, and the CURRENT value comes back so the client can
+// adopt it instead of asserting its own.
+//
+// baseRev absent (a client older than this) keeps the old unconditional
+// behaviour, so a device that has not updated yet still syncs rather than
+// silently failing every save. It can still clobber — but only until it
+// updates, instead of forever.
+//
+// Returns { value, rev, stale } — value is always what is now stored, so
+// sync.update fans out exactly what other sessions would read back.
+export async function pageSave(userId, storageKey, value, baseRev) {
+  const cas = Number.isInteger(baseRev)
   if (BOARD_KEYS.includes(storageKey)) {
     if (!value || typeof value !== 'object') throw new Error('board value must be an object')
-    await pool.query(
-      `INSERT INTO profile.page_boards (user_id, storage_key, board) VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, storage_key) DO UPDATE SET board = EXCLUDED.board`,
-      [userId, storageKey, JSON.stringify(value)],
-    )
-    return value
+    const json = JSON.stringify(value)
+    const r = cas
+      ? await pool.query(
+        `INSERT INTO profile.page_boards (user_id, storage_key, board, rev) VALUES ($1, $2, $3, 1)
+         ON CONFLICT (user_id, storage_key) DO UPDATE SET board = EXCLUDED.board, rev = profile.page_boards.rev + 1
+         WHERE profile.page_boards.rev = $4
+         RETURNING board, rev`,
+        [userId, storageKey, json, baseRev],
+      )
+      : await pool.query(
+        `INSERT INTO profile.page_boards (user_id, storage_key, board, rev) VALUES ($1, $2, $3, 1)
+         ON CONFLICT (user_id, storage_key) DO UPDATE SET board = EXCLUDED.board, rev = profile.page_boards.rev + 1
+         RETURNING board, rev`,
+        [userId, storageKey, json],
+      )
+    // No row back means the ON CONFLICT arm's WHERE refused it: someone else
+    // has written since baseRev. Read what is actually there and say so.
+    if (!r.rows.length) {
+      const cur = await pageGetRev(userId, storageKey)
+      return { value: cur.value, rev: cur.rev, stale: true }
+    }
+    return { value: r.rows[0].board, rev: r.rows[0].rev, stale: false }
   }
   if (!storageKey || !storageKey.startsWith('atlas.'))
     throw new Error(`refusing to store non-atlas key ${storageKey}`)
@@ -109,12 +163,25 @@ export async function pageSave(userId, storageKey, value) {
   // client: String({}) would persist '[object Object]' and destroy the data
   // on every device at the next pull.
   const str = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)
-  await pool.query(
-    `INSERT INTO profile.user_flags (user_id, flag, value) VALUES ($1, $2, $3)
-     ON CONFLICT (user_id, flag) DO UPDATE SET value = EXCLUDED.value`,
-    [userId, storageKey, str],
-  )
-  return str
+  const r = cas
+    ? await pool.query(
+      `INSERT INTO profile.user_flags (user_id, flag, value, rev) VALUES ($1, $2, $3, 1)
+       ON CONFLICT (user_id, flag) DO UPDATE SET value = EXCLUDED.value, rev = profile.user_flags.rev + 1
+       WHERE profile.user_flags.rev = $4
+       RETURNING value, rev`,
+      [userId, storageKey, str, baseRev],
+    )
+    : await pool.query(
+      `INSERT INTO profile.user_flags (user_id, flag, value, rev) VALUES ($1, $2, $3, 1)
+       ON CONFLICT (user_id, flag) DO UPDATE SET value = EXCLUDED.value, rev = profile.user_flags.rev + 1
+       RETURNING value, rev`,
+      [userId, storageKey, str],
+    )
+  if (!r.rows.length) {
+    const cur = await pageGetRev(userId, storageKey)
+    return { value: cur.value, rev: cur.rev, stale: true }
+  }
+  return { value: r.rows[0].value, rev: r.rows[0].rev, stale: false }
 }
 
 // One map of everything the user has server-side: boards, flags, and each
@@ -122,17 +189,22 @@ export async function pageSave(userId, storageKey, value) {
 // partial backend never blocks a pull.
 export async function pullAll(userId) {
   const states = {}
+  const revs = {}
   const warnings = []
   const boards = await pool.query(
-    'SELECT storage_key, board FROM profile.page_boards WHERE user_id = $1',
+    'SELECT storage_key, board, rev FROM profile.page_boards WHERE user_id = $1',
     [userId],
   )
-  for (const row of boards.rows) states[row.storage_key] = row.board
+  for (const row of boards.rows) { states[row.storage_key] = row.board; revs[row.storage_key] = row.rev }
   const flags = await pool.query(
-    'SELECT flag, value FROM profile.user_flags WHERE user_id = $1',
+    'SELECT flag, value, rev FROM profile.user_flags WHERE user_id = $1',
     [userId],
   )
-  for (const row of flags.rows) states[row.flag] = row.value
+  // Flags are read second and overwrite, so a key present in BOTH tables
+  // resolves to the flag. That matters for atlas.page.formal.v1, which is not
+  // in BOARD_KEYS and so lives in user_flags: moving a key INTO BOARD_KEYS
+  // later must migrate and delete the flag row, or the stale one wins here.
+  for (const row of flags.rows) { states[row.flag] = row.value; revs[row.flag] = row.rev }
   await Promise.all(
     Object.entries(PLUGINS).map(async ([key, svc]) => {
       try {
@@ -144,7 +216,7 @@ export async function pullAll(userId) {
       }
     }),
   )
-  return { states, warnings }
+  return { states, revs, warnings }
 }
 
 // Replace-not-merge: the backup becomes the complete server-side truth.
@@ -229,14 +301,23 @@ export async function handle({ userId, sessionId, reqId, code, payload }) {
       const value = await pageGet(userId, storageKey)
       await deliver({ userId, sessionId, reqId, ok: true, data: { key: storageKey, value } })
     } else if (code === 'page.save') {
-      const { storageKey, value } = payload || {}
-      const stored = await pageSave(userId, storageKey, value)
-      await deliver({ userId, sessionId, reqId, ok: true, data: { saved: storageKey } })
+      const { storageKey, value, baseRev } = payload || {}
+      const stored = await pageSave(userId, storageKey, value, baseRev)
+      // `stale` tells the client its write did NOT land and that `value` is
+      // the store's own, newer copy — which it should adopt rather than retry.
+      await deliver({
+        userId, sessionId, reqId, ok: true,
+        data: { saved: storageKey, rev: stored.rev, stale: stored.stale, value: stored.stale ? stored.value : undefined },
+      })
+      // Nothing changed on a refused write, so there is nothing to fan out —
+      // broadcasting would push the unchanged value at every other device for
+      // no reason, and each of them would take it as news.
+      if (stored.stale) return {}
       await deliver({
         type: 'sync.update',
         userId,
         excludeSession: sessionId,
-        data: { key: storageKey, value: stored },
+        data: { key: storageKey, value: stored.value, rev: stored.rev },
       })
     } else if (code === 'sync.pull.all') {
       const data = await pullAll(userId)

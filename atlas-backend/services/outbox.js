@@ -45,7 +45,16 @@ export function deliver(msg) {
 
   if (msg.type === 'sync.update') {
     // Fan out to every socket of the user except the one that caused it.
-    const out = { type: 'sync.update', key: msg.data && msg.data.key, value: msg.data && msg.data.value }
+    // Rebuilt field by field rather than spread, so keep this in step with
+    // profile.js's fanout: `rev` is what lets a receiving device know which
+    // revision the value it is being handed came from, and a device that does
+    // not learn it will base its next push on a stale one and be refused.
+    const out = {
+      type: 'sync.update',
+      key: msg.data && msg.data.key,
+      value: msg.data && msg.data.value,
+      rev: msg.data && msg.data.rev,
+    }
     for (const ws of conns)
       if (!msg.excludeSession || ws.sessionId !== msg.excludeSession) send(ws, out)
     return

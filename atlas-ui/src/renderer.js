@@ -991,7 +991,16 @@ window.addEventListener('atlas:sync-update', (e) => {
 // Warm-cache boot paints from the local copy, then the server's state lands a
 // moment later — re-render once so anything changed on another device appears
 // without a manual reload.
-window.addEventListener('atlas:hydrated', render)
+//
+// Never over an edit in progress, though. This re-render rebuilds the content
+// area from scratch, so firing it while the user is dragging widgets around in
+// Customize, or typing into an equation, threw that work away in front of them.
+// main.js's resume path already declines to hydrate while editing; this is the
+// same guard on the other end, for the hydrate that a warm boot starts before
+// the user has touched anything and that may land after they have. Skipping the
+// paint is safe: the data is already in localStorage either way, and the next
+// ordinary render (navigating, leaving Customize) shows it.
+window.addEventListener('atlas:hydrated', () => { if (!window.atlasIsEditing?.()) render() })
 // Ready the Google auth URL early so a Connect tap can open the system browser
 // on the same tick (an await between tap and window.open is dropped by iOS).
 window.addEventListener('atlas:hydrated', () => { primeGoogleConfig() })

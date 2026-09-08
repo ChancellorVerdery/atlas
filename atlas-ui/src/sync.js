@@ -115,6 +115,10 @@ function route(ev, which) {
     return
   }
   if (msg.type === 'sync.update') {
+    // Record BEFORE the listeners run: they write the value into localStorage,
+    // and the write hook's push must base itself on the revision that value
+    // actually came from, not the one this device had a moment ago.
+    noteRev(msg.key, msg.rev)
     for (const cb of updateCbs) { try { cb(msg.key, msg.value) } catch { /* listener error is not ours */ } }
     return
   }
@@ -171,7 +175,7 @@ function encodePush(key, raw) {
   if (/^atlas\.page(\.\w+)?\.v1$/.test(key)) {
     try { value = JSON.parse(raw) } catch { return null }
   }
-  return { code: 'page.save', payload: { storageKey: key, value } }
+  return { code: 'page.save', payload: { storageKey: key, value, baseRev: revs.get(key) ?? 0 } }
 }
 
 // The queue OUTLIVES the process. It used to be a bare in-memory Map, which
@@ -185,6 +189,40 @@ function encodePush(key, raw) {
 // so persisting the queue can never enqueue itself, and the backup/export
 // filters skip it too (same trick as atlasLastUser / atlasNotesSync).
 const PENDING_KEY = 'atlasPendingPushes'
+
+// Per-key revision, the client half of profile.js's compare-and-swap. Every
+// push carries the revision this device believed it was editing; the server
+// takes the write only if that is still the stored one. Without it, sync was
+// "last ARRIVAL wins", and an arrival can be arbitrarily old — a queue that sat
+// on a phone for a week still overwrote everything, then fanned the stale copy
+// out to every device. That is the shape behind "the page refreshed and my new
+// equation sheet was gone" and "appearance changes don't save".
+//
+// Not an 'atlas.' key, same as PENDING_KEY: pushKey ignores anything without
+// that prefix, so the bookkeeping can never sync itself, and the backup/export
+// filters skip it.
+const REV_KEY = 'atlasRevs'
+const revs = new Map()
+
+function loadRevs() {
+  try {
+    const o = JSON.parse(localStorage.getItem(REV_KEY))
+    if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) if (Number.isInteger(v)) revs.set(k, v)
+  } catch { /* corrupt — start from 0, which is what a first-ever push sends */ }
+}
+function persistRevs() {
+  try { localStorage.setItem(REV_KEY, JSON.stringify(Object.fromEntries(revs))) }
+  catch { /* quota or private mode: the in-memory map still works this session */ }
+}
+// Only ever moves forward. A late reply carrying an older rev must not walk the
+// map backwards, or the next push would base itself on a revision that has been
+// superseded and get refused forever.
+function noteRev(key, rev) {
+  if (!Number.isInteger(rev) || rev <= (revs.get(key) ?? -1)) return
+  revs.set(key, rev)
+  persistRevs()
+}
+if (typeof localStorage !== 'undefined') loadRevs()
 
 function loadPending() {
   try {
@@ -226,7 +264,19 @@ function sendPush(key, raw) {
   const ws = sockets.inbox
   if (currentStatus !== 'online' || !ws || ws.readyState !== WebSocket.OPEN) return
   sync.request(enc.code, enc.payload)
-    .then(() => unqueuePush(key, raw))
+    .then((data) => {
+      unqueuePush(key, raw)
+      noteRev(key, data?.rev)
+      // Refused: the store moved on since the revision this device was editing,
+      // so what we just tried to send is the OLD copy. Adopt the server's
+      // instead of retrying — retrying is precisely how a week-old queue used
+      // to win. The value is handed to the same listeners a live broadcast
+      // goes to, so the page updates rather than silently disagreeing with the
+      // store it will read on the next render.
+      if (data?.stale && data.value !== undefined) {
+        for (const cb of updateCbs) { try { cb(key, data.value) } catch { /* listener error is not ours */ } }
+      }
+    })
     .catch(() => scheduleFlush()) // stays queued — retry on the timer, not the next reconnect
 }
 
@@ -366,12 +416,20 @@ export const sync = {
     })
   },
 
-  pullAll() { return sync.request('sync.pull.all').then(d => d.states) },
+  pullAll() {
+    return sync.request('sync.pull.all').then(d => {
+      // Absent on a server older than the compare-and-swap: leave the map alone
+      // and every push keeps sending baseRev 0, which that server ignores.
+      if (d?.revs) for (const [k, v] of Object.entries(d.revs)) noteRev(k, v)
+      return d.states
+    })
+  },
   importAll(dataMap) { return sync.request('sync.import', { data: dataMap }) },
 
   onUpdate(cb) { updateCbs.push(cb) },
   onStatus(cb) { statusCbs.push(cb) },
   pendingKeys,
   hasPendingWrite,
+  revFor: (key) => revs.get(key) ?? 0,
   get status() { return currentStatus },
 }

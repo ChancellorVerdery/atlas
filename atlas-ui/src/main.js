@@ -427,14 +427,32 @@ async function hydrateInBackground(auth) {
 const RESUME_MIN_MS = 60e3
 let lastResume = Date.now()
 
+// Is the user in the middle of something a re-render would destroy? Hydrating
+// dispatches 'atlas:hydrated', renderer.js re-renders on it, and a re-render
+// rebuilds the content area from scratch — taking an open modal, an active
+// Customize session, or the field currently being typed into with it.
+//
+// This started as the modal check alone, which is why "hit Customize, add an
+// equation sheet, wait" ended with the work gone: Customize is a page-level
+// mode, not a modal, so nothing here saw it.
+const EDITABLE = /^(INPUT|TEXTAREA|SELECT|MATH-FIELD)$/
+const isEditing = () => {
+  if (document.querySelector('#app-modal .modal')) return true
+  if (document.body.classList.contains('customizing')) return true
+  const el = document.activeElement
+  return !!el && (EDITABLE.test(el.tagName) || el.isContentEditable)
+}
+window.atlasIsEditing = isEditing // renderer.js guards its own re-render with it
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || !auth?.token) return
   // App switching fires this constantly and warmEmail/warmCalendar have no
   // freshness guard, so without an interval this is a refetch storm.
   if (Date.now() - lastResume < RESUME_MIN_MS) return
-  // hydrating re-renders, and a re-render discards an open modal — with it, a
-  // half-written email. Refreshing can wait until the user is done.
-  if (document.querySelector('#app-modal .modal')) return
+  // Refreshing can wait until the user is done. Not rescheduled: the next
+  // visibilitychange after they finish picks it up, and RESUME_MIN_MS has long
+  // since elapsed by then.
+  if (isEditing()) return
   lastResume = Date.now()
   hydrateInBackground(auth)
 })
