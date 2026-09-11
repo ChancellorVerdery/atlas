@@ -2723,3 +2723,29 @@ Nothing was committed. `git status` shows `services/uiapi/notes.js` modified and
 - All tests passing, ready for Chancellor's review before landing on main
 - Thuban will run `DROP SCHEMA finance, graph CASCADE` once code is merged
 
+
+## Pass 20 — 2026-09-11 (hotfix), agent: Thuban
+
+**Symptom (Chancellor):** nothing persists — widgets added/deleted come back, theme reverts "shortly after".
+
+**Cause:** `main.js` installed the sync write hook with `localStorage.setItem = fn`. Storage has a WebIDL
+named-property setter, so on WebKit that is an *item write*: the Mac app's localStorage held a string item
+literally named `setItem` whose value was the hook's source text, and `setItem()` kept dispatching to the
+real prototype method. The hook never installed → no `page.save` ever left the app (every `profile.*`
+row on the server sat at `rev = 0`; the client's `atlasRevs` were all 0; no pending-push queue) → and
+`writtenSinceBoot` stayed empty, so every `hydrateInBackground` (boot, and `visibilitychange` ≥60s apart)
+pulled the server's stale copy over the user's edits. That is the "changes back when I switch apps".
+Chromium shadows the method instead (verified in headless Chrome), so this worked under Electron and broke
+the day the app moved into the Swift WKWebView shell. iOS is the same engine — same bug there.
+
+**Ruled out first, by running it:** backend `page.save` CAS path is correct end to end (test account,
+real inbox/outbox sockets, three saves landed with revs 1/1/2); sessions valid; sockets stable (same
+peers for 10+ min, 30s pings); Caddy/tunnel healthy; pass 19's diff touched one line of UI CSS.
+
+**Fix:** `src/storage-hook.js` wraps `Storage.prototype.setItem` (guarded to `this === localStorage`,
+idempotent, sweeps the junk `setItem` item). `tests/storage-hook.check.mjs` runs against a spec-faithful
+fake Storage: the old assignment is asserted NOT to hook (the bug, reproduced), the wrap is asserted to.
+UI suite 30/30. Deployed via `deploy-assets.sh`; the app picks it up through `Updater.kick()` on next
+activation or relaunch.
+
+**Lead, not fixed:** `removeItem`/`clear` are still unhooked ("deletions do not sync yet" ponytail).

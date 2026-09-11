@@ -9,6 +9,7 @@ import { clearGoogleCache } from './page/email.js'
 import './auth.css'
 import { applyTheme, loadTheme, logoDataURL, pushAppIcon } from './page/theme.js'
 import { initPlatform } from './platform.js'
+import { installStorageHook } from './storage-hook.js'
 
 // Before anything paints: the scheme is cached locally, so the first frame is
 // already the user's colours rather than the default ones swapped out a beat
@@ -64,13 +65,17 @@ const applyStates = (states, skip) => {
   }
 }
 
+// Idempotent: the hydrate paths below each call it, and a second wrap would
+// push every write twice.
+let hooked = false
 const installHook = () => {
+  if (hooked) return
+  hooked = true
   // ponytail: removeItem/clear not hooked — deletions do not sync yet.
-  localStorage.setItem = (k, v) => {
+  installStorageHook(localStorage, (k, v) => {
     writtenSinceBoot.add(k)
-    origSetItem(k, v)
     sync.pushKey(k, v)
-  }
+  })
 }
 
 // connect() retries forever when the server is down; race a deadline so an
