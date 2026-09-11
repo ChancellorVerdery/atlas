@@ -2712,7 +2712,14 @@ Nothing was committed. `git status` shows `services/uiapi/notes.js` modified and
    as `application/octet-stream` consistently for security — this was the original intent
    noted thirteen passes ago.
 
+### Test results
+- **Backend: 29/29** ✓ (was 27/29; canvas.scaleModes fix got us there)
+- **UI: 30/30** ✓ (unchanged; all tests pass)
+- Deleted finance and graph test files (no longer needed for retired plugins)
+- Updated sync-array-coverage to skip missing retired plugin files gracefully
+
 ### Work committed to pass-19-refactor branch
-- All five items above, each in a separate commit
-- Ready for Chancellor's review before landing on main
+- 7 total commits (5 main items + test cleanup + NIGHT-NOTES)
+- All tests passing, ready for Chancellor's review before landing on main
+- Thuban will run `DROP SCHEMA finance, graph CASCADE` once code is merged
 
