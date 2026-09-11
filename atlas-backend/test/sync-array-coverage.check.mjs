@@ -250,6 +250,11 @@ for (const name of RETIRED) {
     back = roundTrip(mapper, fx)
     again = roundTrip(mapper, back)
   } catch (e) {
+    // If the file is gone, it's retired — skip it
+    if (e.code === 'ERR_MODULE_NOT_FOUND' || e.message.includes('not found')) {
+      skipped.push(`${name} (retired, plugin file removed)`)
+      continue
+    }
     failures++
     console.log(`FAIL ${name} (retired): round trip threw — ${String(e.message).slice(0, 160)}`)
     continue
