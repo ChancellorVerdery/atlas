@@ -6,7 +6,7 @@
 
 import {
   loadCanvas, saveCanvas, canvasConnected, fetchCanvasData, whoAmI, courseLabel,
-  courseScore, courseLetter, letterPoints, courseCredits, semesterGPA, overallGPA, semesterValue, parseScale,
+  courseScore, courseLetter, letterPoints, courseCredits, semesterGPA, overallGPA, semesterValue, parseScale, courseEffects, fmtEffect,
   dueDate, isSubmitted, isOverdue, overdueKey, dismissOverdue, clearDismissed,
 } from './canvas.js'
 import { cachedValue, cacheAge, writeCache } from './datacache.js'
@@ -184,6 +184,7 @@ function gradebookHTML(wid) {
   const { pct } = courseScore(course)
   const letter = courseLetter(course, loadCanvas()) // Atlas's scale, so this line can't disagree with the Courses card
   const groups = (data.groups[course.id] || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0))
+  const effects = courseEffects(course, groups)
   const pills = courses.map((c) => `
     <button type="button" class="cv-pill${c.id === course.id ? ' is-active' : ''}" data-wid="${esc(wid)}" data-cv-course="${c.id}" style="--cvc:${courseColor(c)}">${esc(courseCode(c))}</button>`).join('')
   const groupsHTML = groups.map((g) => {
@@ -197,9 +198,12 @@ function gradebookHTML(wid) {
       if (a.submission?.excused) right = `<span class="cv-score cv-dim">EX</span>`
       else if (a.submission?.score != null) {
         const apct = a.points_possible > 0 ? (a.submission.score / a.points_possible) * 100 : null
-        const diff = apct != null && avg != null && graded.length > 1 ? apct - avg : null
-        const trend = diff != null && Math.abs(diff) >= 1
-          ? `<span class="cv-trend ${diff > 0 ? 'cv-up' : 'cv-down'}" title="vs. category average">${diff > 0 ? '▲' : '▼'}${Math.abs(diff).toFixed(0)}%</span>` : ''
+        // ▲/▼ = how far this assignment moved the overall course grade; a dropped
+        // one moved it nowhere, and says so instead of showing nothing.
+        const eff = effects.get(a.id)
+        const trend = eff === null ? `<span class="cv-trend cv-dim" title="Dropped by the group's rule">dropped</span>`
+          : eff && Number(fmtEffect(eff)) > 0
+            ? `<span class="cv-trend ${eff > 0 ? 'cv-up' : 'cv-down'}" title="Course grade ${eff > 0 ? 'up' : 'down'} ${fmtEffect(eff)} because of this">${eff > 0 ? '▲' : '▼'}${fmtEffect(eff)}</span>` : ''
         right = `${trend}<span class="cv-score">${fmtN(a.submission.score)}/${fmtN(a.points_possible)}</span>${apct != null ? `<span class="cv-pct">${apct.toFixed(0)}%</span>` : ''}`
       } else right = `<span class="cv-score cv-dim">—/${fmtN(a.points_possible)}</span>`
       return `<button type="button" class="cv-arow cv-arow--btn" data-cv-assign="${course.id}:${a.id}"><span class="cv-aname" title="${esc(a.name)}">${esc(a.name)}</span>${right}</button>`

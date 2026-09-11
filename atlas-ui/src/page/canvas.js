@@ -214,6 +214,93 @@ export function overallGPA(courses, s = loadCanvas()) {
   return cr ? { gpa: pts / cr, credits: cr } : null
 }
 
+// ---- local grade model ---------------------------------------------------------
+// Canvas hands over `computed_current_score` but no way to ask "what would it be
+// without assignment X" — which is what the gradebook's ▲/▼ shows. So this
+// re-derives Canvas's current score from the assignment groups: graded, non-
+// excused submissions only, group weights when the course applies them, and each
+// group's drop rules. Where the two disagree Canvas is right and the arrows are
+// hidden rather than shown wrong (see courseEffects).
+
+const countsNow = (a) => a.submission?.score != null && !a.submission.excused && !a.omit_from_final_grade && a.grading_type !== 'not_graded'
+
+// Canvas's drop_lowest/drop_highest keep the subset that maximises (or minimises)
+// Σscore/Σpossible — NOT the N lowest percentages, which is wrong once point
+// values differ. The optimal ratio q* is the root of F(q) = Σ(score − q·possible)
+// over the best subset, which is decreasing in q; bisect for it, then the kept
+// set is the top-`keep` by (score − q*·possible). Same shape as Canvas's
+// GradeCalculator#drop_pointed. `fixed` (never_drop, zero-point) always stays.
+function keepBest(items, fixed, keep, lowest) {
+  if (items.length <= keep) return items
+  const sign = lowest ? -1 : 1 // dropping the highest = keeping the worst ratio
+  const rank = (q) => items.slice().sort((a, b) => sign * ((b.score - q * b.possible) - (a.score - q * a.possible))).slice(0, keep)
+  const F = (q) => [...fixed, ...rank(q)].reduce((t, s) => t + s.score - q * s.possible, 0)
+  let lo = Math.min(0, ...items.map((s) => s.score / s.possible)), hi = Math.max(1, ...items.map((s) => s.score / s.possible)) + 1
+  for (let i = 0; i < 50 && hi - lo > 1e-9; i++) {
+    const mid = (lo + hi) / 2
+    if (F(mid) > 0) lo = mid; else hi = mid
+  }
+  return rank((lo + hi) / 2)
+}
+
+// The assignments that count toward a group's current score after its drop rules.
+export function keptAssignments(g, skip = null) {
+  const graded = (g.assignments || []).filter((a) => countsNow(a) && a.id !== skip)
+  const rules = g.rules || {}
+  const never = new Set(rules.never_drop || [])
+  const item = (a) => ({ a, score: a.submission.score, possible: a.points_possible })
+  const fixed = graded.filter((a) => never.has(a.id) || !(a.points_possible > 0)).map(item)
+  let pool = graded.filter((a) => !never.has(a.id) && a.points_possible > 0).map(item)
+  let dropLow = rules.drop_lowest || 0, dropHigh = rules.drop_highest || 0
+  if ((dropLow || dropHigh) && pool.length) {
+    if (dropLow >= pool.length) dropLow = pool.length - 1 // Canvas keeps at least one
+    if (dropLow + dropHigh >= pool.length) dropHigh = 0
+    pool = keepBest(pool, fixed, pool.length - dropLow, false)
+    pool = keepBest(pool, fixed, pool.length - dropHigh, true)
+  }
+  return [...fixed, ...pool].map((s) => s.a)
+}
+
+// Canvas's current score for a course, or null when nothing is graded yet.
+// `skip` recomputes as if that assignment did not exist.
+export function localScore(c, groups, skip = null) {
+  const sums = groups.map((g) => {
+    const kept = keptAssignments(g, skip)
+    return { score: kept.reduce((t, a) => t + a.submission.score, 0), possible: kept.reduce((t, a) => t + a.points_possible, 0), weight: g.group_weight || 0 }
+  })
+  if (c.apply_assignment_group_weights) {
+    const live = sums.filter((s) => s.possible > 0)
+    const full = live.reduce((t, s) => t + s.weight, 0)
+    if (!full) return null
+    // weights summing past 100 let the grade exceed 100, as in Canvas
+    return (live.reduce((t, s) => t + (s.score / s.possible) * s.weight, 0) / Math.min(full, 100)) * 100
+  }
+  const score = sums.reduce((t, s) => t + s.score, 0), possible = sums.reduce((t, s) => t + s.possible, 0)
+  return possible > 0 ? (score / possible) * 100 : null
+}
+
+// assignmentId → how many points this assignment moved the course grade, for
+// every assignment that currently counts; dropped ones map to null. Empty when
+// the model can't be trusted: nothing graded, or it disagrees with Canvas's own
+// number (a rule we don't model), in which case the UI shows no arrows.
+export function courseEffects(c, groups) {
+  const base = localScore(c, groups)
+  const canvas = courseScore(c).pct
+  if (base == null || (canvas != null && Math.abs(base - canvas) > 0.5)) return new Map()
+  const out = new Map()
+  for (const g of groups) {
+    const kept = new Set(keptAssignments(g).map((a) => a.id))
+    for (const a of (g.assignments || []).filter(countsNow)) {
+      out.set(a.id, kept.has(a.id) ? base - (localScore(c, groups, a.id) ?? 0) : null)
+    }
+  }
+  return out
+}
+
+// ≥10 points reads fine to one decimal; under that the second decimal is the
+// whole story ("0.35" vs "0.4").
+export const fmtEffect = (d) => Math.abs(d).toFixed(Math.abs(d) >= 10 ? 1 : 2)
+
 // ---- assignment helpers ----------------------------------------------------------
 
 export const dueDate = (a) => (a.due_at ? new Date(a.due_at) : null)
