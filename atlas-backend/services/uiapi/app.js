@@ -36,7 +36,7 @@ export function appAssets(req, res) {
       return
     }
     res.writeHead(200, {
-      'content-type': 'application/octet-stream',
+      'content-type': rel.endsWith('.json') ? 'application/json' : 'application/octet-stream',
       'content-length': buf.length,
     })
     res.end(buf)
