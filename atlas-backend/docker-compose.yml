@@ -71,9 +71,6 @@ services:
   atlas-course:
     <<: *svc
     command: node services/plugins/course.js
-  atlas-finance:
-    <<: *svc
-    command: node services/plugins/finance.js
   atlas-calendar:
     <<: *svc
     command: node services/plugins/calendar.js
@@ -83,9 +80,6 @@ services:
   atlas-email:
     <<: *svc
     command: node services/plugins/email.js
-  atlas-graph:
-    <<: *svc
-    command: node services/plugins/graph.js
   atlas-ladder:
     <<: *svc
     command: node services/plugins/ladder.js
