@@ -50,6 +50,7 @@ const defaults = {
   hiddenCourses: [],
   labels: {},
   scales: {},
+  scaleModes: {},
 }
 roundTrip(defaults, 'defaults')
 
@@ -102,6 +103,11 @@ const rich = {
     '505': 'A 93, A- 90',
     '606': 'unparseable but stored verbatim',    // scale-only course → its own row
   },
+  scaleModes: {
+    '101': 'letters',                           // per-course ladder override
+    '202': 'plusminus',
+    '999': 'letters',                           // hidden course still carries its scale mode
+  },
 }
 roundTrip(rich, 'rich')
 
@@ -129,6 +135,7 @@ const realistic = {
   hiddenCourses: ['38217'],
   labels: { '38214': { nick: 'Ochem' }, '38215': { nick: 'Lin Alg', code: 'MATH-2164' } },
   scales: { '38214': 'A 90, B 80, C 70, D 60' },
+  scaleModes: { '38214': 'letters' },
 }
 roundTrip(realistic, 'realistic')
 
@@ -148,7 +155,7 @@ deepStrictEqual(merged.credits['202'], '')
   const back = mapper.recompose(simulatePg(mapper.decompose({ dismissed: ['1:2'] })))
   deepStrictEqual(back, {
     host: '', token: '', scale: 'plusminus',
-    credits: {}, semesters: [], dismissed: ['1:2'], hiddenCourses: [], labels: {}, scales: {},
+    credits: {}, semesters: [], dismissed: ['1:2'], hiddenCourses: [], labels: {}, scales: {}, scaleModes: {},
   }, 'legacy blob gets loader defaults')
 }
 { // host-only blob; legacy scale value outside the CHECK coerces like loadCanvas
@@ -194,6 +201,20 @@ deepStrictEqual(merged.credits['202'], '')
   deepStrictEqual(back.labels, { '77': { nick: 'Statics', code: 'MEGR-2141' } }, 'nickname survives the round trip')
   deepStrictEqual(back.scales, { '77': 'A 90, B 80' }, 'custom grade scale survives the round trip')
 }
+{ // scaleModes survive the round trip just like scales
+  const S = {
+    ...defaults,
+    scaleModes: { '77': 'letters', '88': 'plusminus' },
+  }
+  const back = mapper.recompose(simulatePg(mapper.decompose(S)))
+  deepStrictEqual(back.scaleModes, { '77': 'letters', '88': 'plusminus' }, 'scaleModes survive the round trip')
+}
+{ // a course with ONLY a scale mode still needs a row
+  const rows = mapper.decompose({ ...defaults, scaleModes: { '88': 'letters' } })
+  deepStrictEqual(rows.course_prefs.map(r => r.course_id), ['88'])
+  deepStrictEqual(rows.course_prefs[0].scale_mode, 'letters')
+  deepStrictEqual(mapper.recompose(simulatePg(rows)).scaleModes, { '88': 'letters' })
+}
 { // a course with ONLY a label still needs a row — nothing else would create one
   const rows = mapper.decompose({ ...defaults, labels: { '88': { nick: 'Orphan' } } })
   deepStrictEqual(rows.course_prefs.map(r => r.course_id), ['88'])
@@ -204,7 +225,7 @@ deepStrictEqual(merged.credits['202'], '')
 { // every row spells out all value columns, so SELECT * and simulatePg agree
   const rows = mapper.decompose({ ...defaults, hiddenCourses: ['1'], credits: { '2': '3' } })
   for (const r of rows.course_prefs) {
-    deepStrictEqual(Object.keys(r).sort(), ['code', 'course_id', 'credits', 'hidden', 'nick', 'scale_cuts'])
+    deepStrictEqual(Object.keys(r).sort(), ['code', 'course_id', 'credits', 'hidden', 'nick', 'scale_cuts', 'scale_mode'])
   }
 }
 { // a course whose label lost both fields must not come back as an empty object
