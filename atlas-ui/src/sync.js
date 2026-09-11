@@ -254,6 +254,17 @@ const unqueuePush = (key, raw) => {
   if (offlinePushes.get(key) === raw) { offlinePushes.delete(key); persistPending() }
 }
 
+// Keys with a push on the wire right now. One per key at a time: the
+// compare-and-swap bases each push on the revision the LAST ack taught us, so a
+// second push sent before that ack lands carries a revision the first is about
+// to supersede — and is refused for it. A refusal means "drop the value, adopt
+// the store's", i.e. the user's second edit reverts in front of them. Customize
+// live-saves every drop, resize and keystroke, and a round trip through
+// cloudflared is not reliably under the 400ms debounce, so without this that
+// was an ordinary afternoon, not an edge case. The newest value waits in the
+// queue and goes out on the ack, on the revision the ack just delivered.
+const inFlight = new Set()
+
 function sendPush(key, raw) {
   const enc = encodePush(key, raw)
   if (!enc) return // unparseable data store — don't sync garbage
@@ -263,8 +274,11 @@ function sendPush(key, raw) {
   queuePush(key, raw)
   const ws = sockets.inbox
   if (currentStatus !== 'online' || !ws || ws.readyState !== WebSocket.OPEN) return
+  if (inFlight.has(key)) return // the ack handler sends whatever is newest then
+  inFlight.add(key)
   sync.request(enc.code, enc.payload)
     .then((data) => {
+      inFlight.delete(key)
       unqueuePush(key, raw)
       noteRev(key, data?.rev)
       // Refused: the store moved on since the revision this device was editing,
@@ -272,12 +286,18 @@ function sendPush(key, raw) {
       // instead of retrying — retrying is precisely how a week-old queue used
       // to win. The value is handed to the same listeners a live broadcast
       // goes to, so the page updates rather than silently disagreeing with the
-      // store it will read on the next render.
+      // store it will read on the next render. (main.js declines the write if
+      // a newer local edit is queued; that edit then goes out below, on the
+      // revision we just adopted.)
       if (data?.stale && data.value !== undefined) {
         for (const cb of updateCbs) { try { cb(key, data.value) } catch { /* listener error is not ours */ } }
       }
+      // An edit that arrived while this one was on the wire is still queued —
+      // send it now, based on the revision we have just learned.
+      const next = offlinePushes.get(key)
+      if (next != null && next !== raw) sendPush(key, next)
     })
-    .catch(() => scheduleFlush()) // stays queued — retry on the timer, not the next reconnect
+    .catch(() => { inFlight.delete(key); scheduleFlush() }) // stays queued — retry on the timer, not the next reconnect
 }
 
 let flushTimer = null
