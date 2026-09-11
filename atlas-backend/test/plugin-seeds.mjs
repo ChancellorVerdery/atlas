@@ -66,11 +66,12 @@ export const PLUGINS = [
   },
   {
     name: 'canvas', module: 'canvas.js', loader: 'loadCanvas', key: 'atlas.canvas.v1',
-    // semesters canvasui.js:567, nested classes canvasui.js:581.
+    // semesters canvasui.js:567, nested classes canvasui.js:581, scaleModes canvasui.js:549.
     seed: {
       semesters: [{ id: 'sm1', name: 'Fall 25', gpa: '3.8', credits: '15', classes: [{ id: 'cl1', name: 'Calc', grade: 'A', credits: '4' }] }],
       dismissed: ['c1:a1'],
       hiddenCourses: ['c2'],
+      scaleModes: { c1: 'letters', c2: 'plusminus' },
     },
   },
   {

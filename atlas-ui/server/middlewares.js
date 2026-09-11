@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url'
 import { remote } from './remote.js'
 import { callLLM } from './llm.js'
 
-
 // Graph plugin backend: the browser can't touch the filesystem, open Finder,
 // or run graphify — this middleware does all three from the dev-server
 // process. Endpoints under /graph-api: pick (native folder dialog), graph
@@ -130,7 +129,6 @@ function graphApi() {
   }
   return handler
 }
-
 
 // ---- shared by the AI-backed middlewares (Notes, Study) --------------------
 
@@ -1129,7 +1127,6 @@ If earlier TUTOR lines in the transcript look like reports, do NOT imitate them 
   return handler
 }
 
-
 // Claude subscription-OAuth token broker. The browser can't POST to
 // Anthropic's token endpoint (CORS), and the exchange must carry the PKCE
 // code_verifier, so the code-exchange + refresh run here. NEVER logs tokens.
@@ -1186,7 +1183,6 @@ function aiOauthApi() {
     }
   }
 }
-
 
 // ---- public surface ---------------------------------------------------------
 // The Atlas backend that isn't the sync server: local proxies and tooling that

@@ -27,22 +27,43 @@ export const allowedHost = (h) => {
   return HOST_OK.some((re) => re.test(host)) || EXTRA_HOSTS.has(host)
 }
 
+// Fetch with manual redirect handling and re-validation of redirect targets
+async function fetchWithValidatedRedirects(url, options, depth = 0) {
+  if (depth > 5) throw new Error('too many redirects')
+  const r = await fetch(url, { ...options, redirect: 'manual' })
+  if ([301, 302, 303, 307, 308].includes(r.status)) {
+    const location = r.headers.get('location')
+    if (!location) throw new Error('redirect with no Location header')
+    const locUrl = new URL(location, url)
+    if (!allowedHost(locUrl.hostname)) throw new Error('redirect target not allowed')
+    return fetchWithValidatedRedirects(locUrl.toString(), options, depth + 1)
+  }
+  return r
+}
+
 export async function canvasProxy(req, res) {
   const m = (req.url || '').match(/^\/([a-zA-Z0-9.-]+)(\/.*)$/)
   if (!m || req.method !== 'GET') { res.statusCode = 400; res.end('bad canvas-proxy request'); return }
   if (!allowedHost(m[1])) { res.statusCode = 403; res.end('canvas-proxy: host not allowed'); return }
   try {
-    const r = await fetch(`https://${m[1]}${m[2]}`, {
+    const r = await fetchWithValidatedRedirects(`https://${m[1]}${m[2]}`, {
       headers: req.headers.authorization ? { Authorization: req.headers.authorization } : {},
-      redirect: 'follow',
     })
     res.statusCode = r.status
     res.setHeader('Content-Type', r.headers.get('content-type') || 'application/json')
     const link = r.headers.get('link')
-    if (link) res.setHeader('X-Canvas-Link', link) // pagination survives the hop
+    if (link) res.setHeader('X-Canvas-Link', link)
     res.end(Buffer.from(await r.arrayBuffer()))
   } catch (err) {
-    res.statusCode = 502
-    res.end(JSON.stringify({ errors: [{ message: `proxy: ${err.message}` }] }))
+    if (err.message === 'redirect target not allowed') {
+      res.statusCode = 403
+      res.end('canvas-proxy: redirect target not allowed')
+    } else if (err.message.includes('redirect')) {
+      res.statusCode = 502
+      res.end(JSON.stringify({ errors: [{ message: `proxy: ${err.message}` }] }))
+    } else {
+      res.statusCode = 502
+      res.end(JSON.stringify({ errors: [{ message: `proxy: ${err.message}` }] }))
+    }
   }
 }

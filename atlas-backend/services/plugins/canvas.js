@@ -12,7 +12,8 @@
 //   labels: {}    courseId → {nick?, code?} (trimmed strings; the UI deletes the
 //                 whole entry once both are empty, but keeps a '' beside a
 //                 non-empty sibling — so '' and absent are different),
-//   scales: {}    courseId → 'A 90, B 80' custom cutoffs (deleted when blank).
+//   scales: {}    courseId → 'A 90, B 80' custom cutoffs (deleted when blank),
+//   scaleModes: {} courseId → 'plusminus' | 'letters' per-course ladder (deleted when blank).
 //
 // Fidelity notes baked into the schema:
 // - dismissed entries are kept as ONE raw text column. The app builds keys as
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS canvas.course_prefs (
 ALTER TABLE canvas.course_prefs ADD COLUMN IF NOT EXISTS nick       text;
 ALTER TABLE canvas.course_prefs ADD COLUMN IF NOT EXISTS code       text;
 ALTER TABLE canvas.course_prefs ADD COLUMN IF NOT EXISTS scale_cuts text;
+ALTER TABLE canvas.course_prefs ADD COLUMN IF NOT EXISTS scale_mode text;
 
 CREATE TABLE IF NOT EXISTS canvas.dismissed (
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -135,6 +137,7 @@ const mapper = {
     const hiddenCourses = Array.isArray(state.hiddenCourses) ? state.hiddenCourses : []
     const labels = state.labels && typeof state.labels === 'object' ? state.labels : {}
     const scales = state.scales && typeof state.scales === 'object' ? state.scales : {}
+    const scaleModes = state.scaleModes && typeof state.scaleModes === 'object' ? state.scaleModes : {}
 
     // hiddenCourses first (their ord must reproduce the array), then whatever
     // credits / labels / scales add; a course in several gets ONE merged row.
@@ -147,7 +150,7 @@ const mapper = {
       const key = String(cid)
       let row = byCourse.get(key)
       if (!row) {
-        row = { course_id: key, credits: null, hidden: false, nick: null, code: null, scale_cuts: null }
+        row = { course_id: key, credits: null, hidden: false, nick: null, code: null, scale_cuts: null, scale_mode: null }
         prefs.push(row)
         byCourse.set(key, row)
       }
@@ -162,6 +165,9 @@ const mapper = {
       if (l.code !== undefined) row.code = l.code
     }
     for (const [cid, cuts] of Object.entries(scales)) rowFor(cid).scale_cuts = cuts
+    for (const [cid, mode] of Object.entries(scaleModes)) {
+      if (mode === 'plusminus' || mode === 'letters') rowFor(cid).scale_mode = mode
+    }
 
     const semesters = []
     const classes = []
@@ -216,6 +222,7 @@ const mapper = {
       hiddenCourses: [],
       labels: {},
       scales: {},
+      scaleModes: {},
     }
     for (const r of rows.course_prefs || []) {
       if (r.credits !== null) s.credits[r.course_id] = r.credits
@@ -229,6 +236,7 @@ const mapper = {
         s.labels[r.course_id] = l
       }
       if (r.scale_cuts !== null) s.scales[r.course_id] = r.scale_cuts
+      if (r.scale_mode !== null) s.scaleModes[r.course_id] = r.scale_mode
     }
     const classesBySem = new Map()
     for (const r of rows.semesters || []) {

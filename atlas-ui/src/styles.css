@@ -500,7 +500,6 @@ html[data-page="gym-settings"] .topbar__actions { display: none; }
 .switch.is-on { background: linear-gradient(180deg, rgba(var(--brass-rgb), 0.35), rgba(var(--brass-rgb), 0.18)); border-color: rgba(var(--brass-rgb), 0.5); }
 .switch.is-on .switch__dot { left: 20px; background: var(--brass); box-shadow: 0 0 10px rgba(var(--brass-rgb), 0.6); }
 
-
 /* ---- page (rows → cols → lines → widgets) -------------------------------- */
 
 .page-root { display: flex; flex-direction: column; gap: 18px; }
